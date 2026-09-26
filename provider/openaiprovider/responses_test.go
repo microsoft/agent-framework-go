@@ -3425,6 +3425,38 @@ func TestResponsesMCPServerToolAddressRouting(t *testing.T) {
 	}
 }
 
+// An MCPServer ApprovalMode is forwarded as the Responses require_approval
+// setting; unset leaves it off (provider default).
+func TestResponsesMCPServerApprovalMode(t *testing.T) {
+	const output = `{"id":"resp","object":"response","created_at":1,"status":"completed","model":"gpt-4o-mini","output":[]}`
+	tests := []struct {
+		name     string
+		mode     hostedtool.MCPApprovalMode
+		wantTool string
+	}{
+		{"never", hostedtool.MCPApprovalNever, `{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp","require_approval":"never"}`},
+		{"always", hostedtool.MCPApprovalAlways, `{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp","require_approval":"always"}`},
+		{"unset", "", `{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := `{"model":"gpt-4o-mini","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],"tools":[` + tt.wantTool + `]}`
+			server := newTestResponsesServer(t, input, output)
+			defer server.Close()
+			_, err := newTestResponsesClient(server, "gpt-4o-mini").RunText(t.Context(), "hello",
+				agent.WithTool(&hostedtool.MCPServer{
+					ServerName:    "drive",
+					ServerAddress: "https://example.com/mcp",
+					ApprovalMode:  tt.mode,
+				}),
+			).Collect()
+			if err != nil {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 func TestResponsesCodeInterpreterTool_NonStreaming(t *testing.T) {
 	const input = `
             {

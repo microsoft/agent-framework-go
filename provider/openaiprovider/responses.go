@@ -445,6 +445,11 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			if tl.Authorization != "" {
 				variant.Authorization = openai.String(tl.Authorization)
 			}
+			// Honor the caller's approval mode. When unset, the Responses API
+			// defaults require_approval to "always".
+			if tl.ApprovalMode != "" {
+				variant.RequireApproval.OfMcpToolApprovalSetting = openai.String(string(tl.ApprovalMode))
+			}
 			params.Tools = append(params.Tools, responses.ToolUnionParam{
 				OfMcp: &variant,
 			})

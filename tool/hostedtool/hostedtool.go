@@ -84,7 +84,22 @@ type MCPServer struct {
 	AllowedTools []string
 	// Headers contains optional HTTP headers to send when connecting to the MCP server.
 	Headers map[string]string
+	// ApprovalMode controls whether calls to this MCP server require approval.
+	// The zero value leaves the provider default (which, for the OpenAI Responses
+	// API, requires approval for every call). Mirrors the .NET
+	// HostedMcpServerTool.ApprovalMode.
+	ApprovalMode MCPApprovalMode
 }
+
+// MCPApprovalMode controls whether hosted MCP tool calls require human approval.
+type MCPApprovalMode string
+
+const (
+	// MCPApprovalAlways requires approval for every hosted MCP tool call.
+	MCPApprovalAlways MCPApprovalMode = "always"
+	// MCPApprovalNever auto-approves hosted MCP tool calls.
+	MCPApprovalNever MCPApprovalMode = "never"
+)
 
 func (t *MCPServer) Name() string {
 	return "mcp"
