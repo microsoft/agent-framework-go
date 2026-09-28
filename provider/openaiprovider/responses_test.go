@@ -7014,8 +7014,8 @@ func TestResponsesBackgroundResponses_FirstCall(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 
-	if len(resp.Messages) != 1 {
-		t.Errorf("expected 1 message (for continuation token), got %d", len(resp.Messages))
+	if len(resp.Messages) != 0 {
+		t.Errorf("expected no messages for continuation-only response, got %d", len(resp.Messages))
 	}
 
 	if resp.ContinuationToken == "" {
@@ -7101,8 +7101,8 @@ func testResponsesBackgroundPolling(t *testing.T, status string) {
 			t.Error("expected ContinuationToken to be set for queued/in_progress status")
 		}
 
-		if len(resp.Messages) != 1 {
-			t.Errorf("expected 1 message for %s status, got %d", status, len(resp.Messages))
+		if len(resp.Messages) != 0 {
+			t.Errorf("expected no messages for %s status, got %d", status, len(resp.Messages))
 		}
 
 	case "completed":
@@ -7926,5 +7926,44 @@ func TestResponsesFunctionCallUsesToolCallsFinishReason_NonStreaming(t *testing.
 	}
 	if resp.FinishReason != "tool_calls" {
 		t.Fatalf("FinishReason = %q, want tool_calls", resp.FinishReason)
+	}
+}
+
+func TestResponsesBackgroundResponses_StreamingLifecycleOnlyDoesNotCreateMessage(t *testing.T) {
+	const input = `{"model":"gpt-4o-2024-08-06","background":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],"stream":true}`
+	const output = `event: response.created
+
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_lifecycle","object":"response","created_at":1758724519,"status":"queued","background":true,"model":"gpt-4o-2024-08-06","output":[]}}
+
+event: response.queued
+
+data: {"type":"response.queued","sequence_number":1,"response":{"id":"resp_lifecycle","object":"response","created_at":1758724519,"status":"queued","background":true,"model":"gpt-4o-2024-08-06","output":[]}}
+
+event: response.in_progress
+
+data: {"type":"response.in_progress","sequence_number":2,"response":{"id":"resp_lifecycle","object":"response","created_at":1758724519,"status":"in_progress","background":true,"model":"gpt-4o-2024-08-06","output":[]}}
+
+`
+	server := newTestResponsesServerStreaming(t, input, output)
+	defer server.Close()
+	a := newTestResponsesClient(server, "gpt-4o-2024-08-06")
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := a.RunText(
+		t.Context(), "hello", agent.Stream(true),
+		agent.AllowBackgroundResponses(true),
+		agent.WithSession(session),
+	).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Messages) != 0 {
+		t.Fatalf("len(Messages) = %d, want 0", len(resp.Messages))
+	}
+	if resp.RawRepresentation == nil {
+		t.Fatal("RawRepresentation is nil")
 	}
 }
