@@ -1441,11 +1441,13 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		return u
 	}
 
-	// Handle different event types using AsAny()
+	// Lifecycle metadata belongs to the response, not the active message.
+	// Omit its MessageID without resetting the state used by content updates.
 	var u *agent.ResponseUpdate
 	switch event := update.AsAny().(type) {
 	case responses.ResponseCreatedEvent:
 		u = createUpdate(message.RoleAssistant, nil)
+		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
@@ -1455,6 +1457,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 
 	case responses.ResponseQueuedEvent:
 		u = createUpdate(message.RoleAssistant, nil)
+		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
@@ -1464,6 +1467,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 
 	case responses.ResponseInProgressEvent:
 		u = createUpdate(message.RoleAssistant, nil)
+		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
@@ -1490,6 +1494,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 
 	case responses.ResponseCompletedEvent:
 		u = createUpdate(message.RoleAssistant, nil)
+		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
 		u.FinishReason = responsesFinishReason(&event.Response)
@@ -1504,6 +1509,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 
 	case responses.ResponseIncompleteEvent:
 		u = createUpdate(message.RoleAssistant, nil)
+		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
 		u.FinishReason = responsesFinishReason(&event.Response)
@@ -1514,6 +1520,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 
 	case responses.ResponseFailedEvent:
 		u = createUpdate(message.RoleAssistant, nil)
+		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)

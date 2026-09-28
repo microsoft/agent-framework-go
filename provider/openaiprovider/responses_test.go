@@ -7980,6 +7980,150 @@ func TestResponses_NonStreaming_PreservesResponsePropertyScope(t *testing.T) {
 	}
 }
 
+func TestResponses_Streaming_PreservesResponsePropertyScope(t *testing.T) {
+	for _, tc := range []struct {
+		status       string
+		properties   string
+		finishReason string
+	}{
+		{status: "completed", properties: `,"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}`, finishReason: "stop"},
+		{status: "incomplete", properties: `,"incomplete_details":{"reason":"max_output_tokens"}`, finishReason: "length"},
+		{status: "failed", properties: `,"error":{"code":"server_error","message":"Failed after producing text"}`},
+	} {
+		for _, request := range []struct {
+			name               string
+			previousProperties string
+			resume             bool
+		}{
+			{name: "late metadata"},
+			{name: "updated metadata", previousProperties: `,"user":"early-user","safety_identifier":"early-safety"`},
+			{name: "resumed stream", resume: true},
+		} {
+			t.Run(tc.status+"/"+request.name, func(t *testing.T) {
+				const input = `{
+					"model":"gpt-4o-mini", "stream":true, "background":true,
+					"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+				}`
+				var output strings.Builder
+				if !request.resume {
+					output.WriteString(`event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_metadata","object":"response","created_at":1741891428,"status":"in_progress","model":"gpt-4o-mini","store":true,"output":[]` + request.previousProperties + `}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"type":"message","id":"msg_metadata","role":"assistant","status":"in_progress","content":[]}}
+
+`)
+				}
+				output.WriteString(`event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":2,"item_id":"msg_metadata","output_index":0,"content_index":0,"delta":"Done","logprobs":[]}
+
+event: response.` + tc.status + `
+data: {"type":"response.` + tc.status + `","sequence_number":3,"response":{"id":"resp_metadata","object":"response","created_at":1741891428,"status":"` + tc.status + `","model":"gpt-4o-mini","store":true,"user":"final-user","safety_identifier":"final-safety","output":[{"type":"message","id":"msg_metadata","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Done","annotations":[]}]}]` + tc.properties + `}}
+
+`)
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if request.resume {
+						if r.Method != http.MethodGet || r.URL.Path != "/responses/resp_metadata" || r.URL.Query().Get("starting_after") != "1" {
+							t.Errorf("unexpected resumption request: %s %s", r.Method, r.URL)
+						}
+					} else {
+						if r.Method != http.MethodPost {
+							t.Errorf("request method = %s, want POST", r.Method)
+						}
+						body, err := io.ReadAll(r.Body)
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						responsesBodyEqual(t, string(body), input)
+					}
+					w.Header().Set("Content-Type", "text/event-stream")
+					if _, err := io.WriteString(w, output.String()); err != nil {
+						t.Error(err)
+					}
+				}))
+				defer server.Close()
+
+				a := newTestResponsesClient(server, "gpt-4o-mini")
+				session := &agent.Session{}
+				opts := []agent.Option{agent.Stream(true), agent.AllowBackgroundResponses(true), agent.WithSession(session)}
+				messages := []*message.Message{message.NewText("hello")}
+				if request.resume {
+					opts = append(opts, agent.WithContinuationToken(agenttest.NewContinuationToken(t, `{"response_id":"resp_metadata","sequence_number":1}`)))
+					messages = nil
+				}
+				var response agent.Response
+				var terminal *agent.ResponseUpdate
+				for update, err := range a.Run(t.Context(), messages, opts...) {
+					if err != nil {
+						t.Fatal(err)
+					}
+					response.Update(update)
+					if raw, ok := update.RawRepresentation.(responses.ResponseStreamEventUnion); ok && raw.Type == "response."+tc.status {
+						terminal = update
+					}
+				}
+				response.Coalesce()
+				if terminal == nil {
+					t.Fatal("terminal response event was not emitted")
+				}
+				if terminal.MessageID != "" {
+					t.Errorf("terminal metadata update inherited message ID %q", terminal.MessageID)
+				}
+				if response.AdditionalProperties["EndUserId"] != "final-user" || response.AdditionalProperties["SafetyIdentifier"] != "final-safety" {
+					t.Errorf("response properties = %v, want final response metadata", response.AdditionalProperties)
+				}
+				if len(response.Messages) != 1 || response.Messages[0].ID != "msg_metadata" || response.String() != "Done" {
+					t.Fatalf("response messages lost their ID or text: %+v", response.Messages)
+				}
+				for _, key := range []string{"EndUserId", "SafetyIdentifier", "Error"} {
+					if _, ok := response.Messages[0].AdditionalProperties[key]; ok {
+						t.Errorf("response property %s leaked into message metadata", key)
+					}
+				}
+				if response.ID != "resp_metadata" || response.ConversationID == nil || *response.ConversationID != "resp_metadata" || session.ServiceID() != "resp_metadata" {
+					t.Error("response or session lost its conversation ID")
+				}
+				if response.FinishReason != tc.finishReason || !terminal.CreatedAt.Equal(time.Unix(1741891428, 0)) {
+					t.Errorf("finish reason=%q created at=%v, want %q and the provider timestamp", response.FinishReason, terminal.CreatedAt, tc.finishReason)
+				}
+				switch tc.status {
+				case "completed":
+					if usage := response.Usage(); usage.InputTokenCount != 2 || usage.OutputTokenCount != 3 || usage.TotalTokenCount != 5 {
+						t.Errorf("usage = %+v, want the completed response's token counts", usage)
+					}
+				case "incomplete":
+					token := agenttest.DecodeContinuationToken(t, response.ContinuationToken)
+					var inner continuationToken
+					if err := json.Unmarshal([]byte(token.InnerToken), &inner); err != nil {
+						t.Fatal(err)
+					}
+					if inner.ResponseID != "resp_metadata" || inner.SequenceNumber != 3 {
+						t.Errorf("continuation token = %+v, want the incomplete response position", inner)
+					}
+				case "failed":
+					failure, ok := response.AdditionalProperties["Error"].(responses.ResponseError)
+					if !ok || failure.Code != "server_error" || failure.Message != "Failed after producing text" {
+						t.Errorf("response error metadata = %+v, want the provider's failure", response.AdditionalProperties["Error"])
+					}
+					var errorContent *message.ErrorContent
+					for content := range response.Contents() {
+						if failure, ok := content.(*message.ErrorContent); ok {
+							errorContent = failure
+						}
+					}
+					if errorContent == nil || errorContent.ErrorCode != "server_error" || errorContent.Message != "Failed after producing text" {
+						t.Errorf("error content = %+v, want the provider's failure", errorContent)
+					}
+				}
+				if tc.status != "incomplete" && response.ContinuationToken != "" {
+					t.Error("terminal response did not clear its continuation token")
+				}
+			})
+		}
+	}
+}
+
 // TestResponsesStreamingFailedResponseSurfacesError verifies that a streamed
 // response.failed event surfaces its error as ErrorContent rather than an
 // empty update.
