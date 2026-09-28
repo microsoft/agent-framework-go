@@ -523,6 +523,34 @@ func TestToolApproval_AlwaysApproveToolWithArgumentsResponse(t *testing.T) {
 	}
 }
 
+func TestToolApproval_AlwaysApproveToolResponseRequiresInnerResponse(t *testing.T) {
+	nextCalled := false
+	next := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		nextCalled = true
+		return func(func(*agent.ResponseUpdate, error) bool) {}
+	}
+
+	var gotErr error
+	for _, err := range toolapproval.New(toolapproval.Config{}).Run(next, context.Background(), []*message.Message{{
+		Role: message.RoleUser,
+		Contents: []message.Content{&message.AlwaysApproveToolApprovalResponseContent{
+			AlwaysApproveTool: true,
+		}},
+	}}) {
+		if err != nil {
+			gotErr = err
+			break
+		}
+	}
+
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "must include an inner response") {
+		t.Fatalf("expected missing inner response error, got %v", gotErr)
+	}
+	if nextCalled {
+		t.Fatal("expected malformed approval response to fail before invoking the inner agent")
+	}
+}
+
 func TestToolApproval_AlwaysApproveToolWithArgumentsMatchesByValue(t *testing.T) {
 	runner := &agenttest.Runner{
 		Responses: agenttest.NewResponseBuilder().
@@ -1055,63 +1083,15 @@ func TestToolApproval_NonApprovalRequiredQueuedRequestDrained(t *testing.T) {
 	}
 }
 
-func TestToolApproval_DisableNonApprovalRequiredToolBypassing_SurfacesQueuedNonApprovalRequest(t *testing.T) {
-	deployFCC := &message.FunctionCallContent{CallID: "c-deploy", Name: "deploy"}
-	listFCC := &message.FunctionCallContent{CallID: "c-list", Name: "list"}
-
-	runner := &agenttest.Runner{
-		Responses: agenttest.NewResponseBuilder().
-			Add(&agent.ResponseUpdate{
-				Role: message.RoleAssistant,
-				Contents: []message.Content{
-					&message.ToolApprovalRequestContent{RequestID: "r-deploy", ToolCall: deployFCC},
-					&message.ToolApprovalRequestContent{RequestID: "r-list", ToolCall: listFCC},
-				},
-			}).
-			Build(),
-	}
-
-	mw := toolapproval.New(toolapproval.Config{
-		DisableNonApprovalRequiredToolBypassing: true,
+func TestAllToolsAutoApprovalRule(t *testing.T) {
+	approved, err := toolapproval.AllToolsAutoApprovalRule(t.Context(), &toolapproval.ToolAutoApprovalRuleContext{
+		FunctionCall: &message.FunctionCallContent{Name: "deploy"},
 	})
-	session := agenttest.CreateSession()
-
-	turn1 := collectUpdates(t, mw, runner.Run,
-		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
-		agent.WithSession(session),
-	)
-
-	var deployReq *message.ToolApprovalRequestContent
-	for _, u := range turn1 {
-		for _, c := range u.Contents {
-			if r, ok := c.(*message.ToolApprovalRequestContent); ok && r.RequestID == "r-deploy" {
-				deployReq = r
-			}
-		}
+	if err != nil {
+		t.Fatalf("expected no error, got %v", err)
 	}
-	if deployReq == nil {
-		t.Fatal("expected deploy approval request in turn 1")
-	}
-
-	turn2 := collectUpdates(t, mw, runner.Run,
-		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{deployReq.CreateResponse(true, "")}}},
-		agent.WithSession(session),
-		agent.WithTool(newNoopTool("list")),
-	)
-
-	var approvalReqs []*message.ToolApprovalRequestContent
-	for _, u := range turn2 {
-		for _, c := range u.Contents {
-			if req, ok := c.(*message.ToolApprovalRequestContent); ok {
-				approvalReqs = append(approvalReqs, req)
-			}
-			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
-				t.Fatal("expected queued non-approval-required request to be surfaced before inner agent resumed")
-			}
-		}
-	}
-	if len(approvalReqs) != 1 || approvalReqs[0].RequestID != "r-list" {
-		t.Fatalf("expected queued list approval request to be surfaced, got %#v", approvalReqs)
+	if !approved {
+		t.Fatal("expected all-tools rule to approve the tool call")
 	}
 }
 
@@ -2047,56 +2027,5 @@ func TestToolApproval_DuplicateResponseHonoredOnce(t *testing.T) {
 	}
 	if responses[0].Reason != "first" || !responses[0].Approved {
 		t.Fatalf("expected first approval response to win, got approved=%v reason=%q", responses[0].Approved, responses[0].Reason)
-	}
-}
-
-func TestToolApproval_DisableApprovalResponseBinding_ForwardsResponseUnchanged(t *testing.T) {
-	var innerCallMessages []*message.Message
-	runner := &agenttest.Runner{
-		Responses: agenttest.NewResponseBuilder().
-			Add(&agent.ResponseUpdate{
-				Role: message.RoleAssistant,
-				Contents: []message.Content{
-					&message.ToolApprovalRequestContent{
-						RequestID: "r1",
-						ToolCall: &message.FunctionCallContent{
-							CallID:    "c1",
-							Name:      "deploy",
-							Arguments: `{"env":"prod"}`,
-						},
-					},
-				},
-			}).
-			NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
-				innerCallMessages = messages
-			}).
-			AddText("done").
-			Build(),
-	}
-
-	session := agenttest.CreateSession()
-	mw := toolapproval.New(toolapproval.Config{DisableApprovalResponseBinding: true})
-	req := firstApprovalRequest(t, collectUpdates(t, mw, runner.Run, []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}},
-	}, agent.WithSession(session)))
-
-	forged := req.ToolCall.(*message.FunctionCallContent)
-	forged.Name = "delete"
-	forged.Arguments = `{"env":"dev"}`
-
-	collectUpdates(t, mw, runner.Run, []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{req.CreateResponse(true, "approved")}},
-	}, agent.WithSession(session))
-
-	responses := approvalResponsesFromMessages(innerCallMessages)
-	if len(responses) != 1 {
-		t.Fatalf("expected 1 forwarded approval response, got %d", len(responses))
-	}
-	fc, ok := responses[0].ToolCall.(*message.FunctionCallContent)
-	if !ok {
-		t.Fatalf("expected function-call tool binding, got %#v", responses[0].ToolCall)
-	}
-	if fc.Name != "delete" || fc.Arguments != `{"env":"dev"}` {
-		t.Fatalf("expected disabled binding to preserve forwarded tool call, got %q %q", fc.Name, fc.Arguments)
 	}
 }

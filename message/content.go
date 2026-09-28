@@ -814,12 +814,6 @@ func (t *ToolApprovalRequestContent) AlwaysApproveToolWithArgumentsResponse() *A
 	}
 }
 
-// Deprecated: Use AlwaysApproveToolWithArgumentsResponse instead.
-// AlwaysApproveToolWithArgsResponse is an alias for AlwaysApproveToolWithArgumentsResponse.
-func (t *ToolApprovalRequestContent) AlwaysApproveToolWithArgsResponse() *AlwaysApproveToolApprovalResponseContent {
-	return t.AlwaysApproveToolWithArgumentsResponse()
-}
-
 type serializedToolApprovalResponseContent struct {
 	ContentHeader
 

@@ -2641,9 +2641,9 @@
         },
         "properties": {
           "AllToolsAutoApprovalRule": {
-            "go_symbols": ["agent/harness/toolapproval.AutoApprovalRule", "agent/harness/toolapproval.Config.AutoApprovalRules"],
-            "status": "adapted",
-            "note": "Supply an AutoApprovalRule returning (true, nil); Go has no predefined approve-all callback."
+            "go_symbols": ["agent/harness/toolapproval.AllToolsAutoApprovalRule"],
+            "status": "mapped",
+            "note": "Predefined callback that approves every tool call; Go additionally returns a nil error."
           }
         },
         "constructors": {
