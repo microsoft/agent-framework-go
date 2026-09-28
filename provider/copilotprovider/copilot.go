@@ -105,8 +105,9 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 		}
 		defer func() { _ = copilotSession.Disconnect() }()
 
-		if frameworkSession != nil && frameworkSession.ServiceID() == "" {
-			frameworkSession.SetServiceID(copilotSession.SessionID)
+		var conversationID *string
+		if copilotSession.SessionID != "" {
+			conversationID = &copilotSession.SessionID
 		}
 
 		messageOptions, cleanupAttachments, err := buildMessageOptions(messages)
@@ -129,6 +130,7 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 			}
 			update, done, eventErr := p.responseUpdateForSessionEvent(event, isStreaming)
 			if update != nil {
+				update.ConversationID = conversationID
 				if !yield(update, nil) {
 					return
 				}
@@ -242,9 +244,13 @@ func (p *provider) openSession(
 	eventHandler copilot.SessionEventHandler,
 	options []agent.Option,
 ) (*copilot.Session, error) {
-	if frameworkSession != nil && frameworkSession.ServiceID() != "" {
+	id, ok := agent.GetOption(options, agent.WithServiceID)
+	if !ok {
+		id = frameworkSession.ServiceID()
+	}
+	if id != "" {
 		cfg := p.resumeSessionConfig(streaming, eventHandler, options)
-		return p.client.ResumeSession(ctx, frameworkSession.ServiceID(), &cfg)
+		return p.client.ResumeSession(ctx, id, &cfg)
 	}
 	cfg := p.sessionConfig(streaming, eventHandler, options)
 	return p.client.CreateSession(ctx, &cfg)

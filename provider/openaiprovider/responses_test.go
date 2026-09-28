@@ -6435,6 +6435,250 @@ func TestResponsesConversationId_AsResponseId_NonStreaming(t *testing.T) {
 	}
 }
 
+func TestResponsesRawConversationObjectReturnsConversationID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Conversation struct {
+				ID string `json:"id"`
+			} `json:"conversation"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+		}
+		if request.Conversation.ID != "conv_raw" {
+			t.Errorf("request conversation ID = %q, want conv_raw", request.Conversation.ID)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp_new","object":"response","status":"completed","output":[]}`)
+	}))
+	defer server.Close()
+	a := openaiprovider.NewResponsesAgent(openai.NewClient(option.WithBaseURL(server.URL)), openaiprovider.AgentConfig{Model: "test-model"})
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := a.RunText(t.Context(), "hello", agent.WithSession(session),
+		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Conversation: responses.ResponseNewParamsConversationUnion{
+			OfConversationObject: &responses.ResponseConversationParam{ID: "conv_raw"},
+		}})).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.ConversationID == nil || *response.ConversationID != "conv_raw" || session.ServiceID() != "conv_raw" {
+		t.Fatalf("response conversation ID = %v, session ID = %q; want conv_raw", response.ConversationID, session.ServiceID())
+	}
+}
+
+func TestResponsesToolCallsUseReturnedConversationID(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		initialID     string
+		disableStore  bool
+		requestStore  *bool
+		responseStore *bool
+		wantStored    bool
+		wantError     bool
+	}{
+		{name: "stored by default", wantStored: true},
+		{name: "stored conversation", initialID: "conv_old", wantStored: true},
+		{name: "provider declines storage", responseStore: new(false)},
+		{name: "per-run stateless", requestStore: new(false)},
+		{name: "configured stateless", disableStore: true},
+		{name: "stored override", initialID: "resp_old", disableStore: true, requestStore: new(true), wantStored: true},
+		{name: "stale response ID and per-run stateless", initialID: "resp_old", requestStore: new(false), wantError: true},
+		{name: "stale response ID and provider declines storage", initialID: "resp_old", responseStore: new(false), wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			requests := make(chan []byte, 2)
+			storeField := ""
+			if tc.responseStore != nil {
+				if *tc.responseStore {
+					storeField = `,"store":true`
+				} else {
+					storeField = `,"store":false`
+				}
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				requests <- body
+				w.Header().Set("Content-Type", "application/json")
+				if calls.Add(1) == 1 {
+					_, _ = io.WriteString(w, `{"id":"resp_call","object":"response","status":"completed","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{}"}]`+storeField+`}`)
+				} else {
+					_, _ = io.WriteString(w, `{"id":"resp_done","object":"response","status":"completed","output":[{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"done"}]}]`+storeField+`}`)
+				}
+			}))
+			defer server.Close()
+			a := openaiprovider.NewResponsesAgent(openai.NewClient(option.WithBaseURL(server.URL)), openaiprovider.AgentConfig{
+				Model: "test-model", DisableStoreOutput: tc.disableStore,
+				Config: agent.Config{Tools: []tool.Tool{functool.MustNew(functool.Config{Name: "lookup"},
+					func(context.Context, struct{}) (string, error) { return "found", nil })}},
+			})
+			session, err := a.CreateSession(t.Context(), agent.WithServiceID(tc.initialID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := []agent.Option{agent.WithSession(session)}
+			if tc.requestStore != nil {
+				opts = append(opts, openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(*tc.requestStore)}))
+			}
+			response, err := a.RunText(t.Context(), "lookup order", opts...).Collect()
+			if tc.wantError {
+				if err == nil || !strings.Contains(err.Error(), "did not return a valid conversation ID") {
+					t.Fatalf("error = %v, want missing conversation ID error", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if got := calls.Load(); got != 2 {
+				t.Fatalf("provider requests = %d, want 2", got)
+			}
+			<-requests
+			var followup struct {
+				Input              json.RawMessage `json:"input"`
+				PreviousResponseID *string         `json:"previous_response_id"`
+				Conversation       string          `json:"conversation"`
+			}
+			if err := json.Unmarshal(<-requests, &followup); err != nil {
+				t.Fatal(err)
+			}
+			wantInput := `[ {"type":"message","role":"user","content":[{"type":"input_text","text":"lookup order"}]}, {"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"}, {"type":"function_call_output","call_id":"call_1","output":"found"} ]`
+			wantPrevious, wantConversation, wantSession := "", "", tc.initialID
+			if tc.wantStored {
+				wantInput = `[{"type":"function_call_output","call_id":"call_1","output":"found"}]`
+				wantPrevious, wantSession = "resp_call", "resp_done"
+				if tc.initialID == "conv_old" {
+					wantPrevious, wantConversation, wantSession = "", "conv_old", "conv_old"
+				}
+			}
+			responsesBodyEqual(t, string(followup.Input), wantInput)
+			if got := followup.PreviousResponseID; got != nil && *got != wantPrevious || got == nil && wantPrevious != "" {
+				t.Errorf("follow-up previous_response_id = %v, want %q", got, wantPrevious)
+			}
+			if followup.Conversation != wantConversation {
+				t.Errorf("follow-up conversation = %q, want %q", followup.Conversation, wantConversation)
+			}
+			if got := session.ServiceID(); got != wantSession {
+				t.Errorf("session ID = %q, want %q", got, wantSession)
+			}
+			if !tc.wantError {
+				if response.String() != "done" {
+					t.Errorf("response = %q, want done", response.String())
+				}
+				if tc.wantStored && (response.ConversationID == nil || *response.ConversationID != wantSession) {
+					t.Errorf("response conversation ID = %v, want %q", response.ConversationID, wantSession)
+				}
+				if !tc.wantStored && response.ConversationID != nil {
+					t.Errorf("stateless response carried conversation ID %q", *response.ConversationID)
+				}
+			}
+		})
+	}
+}
+
+func TestResponsesStreamingToolCallsReportStorageState(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		finalStore string
+		wantID     string
+		wantInput  string
+	}{
+		{name: "stored", finalStore: "true", wantID: "resp_done", wantInput: `[{"type":"function_call_output","call_id":"call_1","output":"found"}]`},
+		{name: "provider disables storage", finalStore: "false", wantInput: `[{"type":"message","role":"user","content":[{"type":"input_text","text":"lookup order"}]},{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_1","output":"found"}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			requests := make(chan []byte, 2)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				requests <- body
+				w.Header().Set("Content-Type", "text/event-stream")
+				if calls.Add(1) == 1 {
+					_, _ = io.WriteString(w, `event: response.created
+data: {"type":"response.created","response":{"id":"resp_call","object":"response","status":"in_progress","store":`+tc.finalStore+`,"output":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{}"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"lookup","arguments":"{}"}}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_call","object":"response","status":"completed","store":`+tc.finalStore+`,"output":[]}}
+
+`)
+				} else {
+					_, _ = io.WriteString(w, `event: response.created
+data: {"type":"response.created","response":{"id":"resp_done","object":"response","status":"in_progress","store":`+tc.finalStore+`,"output":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","status":"in_progress","content":[]}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"content_index":0,"delta":"done"}
+
+event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_done","object":"response","status":"completed","store":`+tc.finalStore+`,"output":[]}}
+
+`)
+				}
+			}))
+			defer server.Close()
+			a := openaiprovider.NewResponsesAgent(openai.NewClient(option.WithBaseURL(server.URL)), openaiprovider.AgentConfig{
+				Model: "test-model", Config: agent.Config{Tools: []tool.Tool{functool.MustNew(functool.Config{Name: "lookup"},
+					func(context.Context, struct{}) (string, error) { return "found", nil })}},
+			})
+			session, err := a.CreateSession(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			var response agent.Response
+			for update, err := range a.RunText(t.Context(), "lookup order", agent.WithSession(session), agent.Stream(true)) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if tc.wantID != "" && update.ConversationID == nil {
+					t.Error("stored response omitted its conversation ID on a streaming update")
+				}
+				if tc.wantID == "" && update.ConversationID != nil {
+					t.Errorf("stateless response carried conversation ID %q", *update.ConversationID)
+				}
+				response.Update(update)
+			}
+			if calls.Load() != 2 || response.String() != "done" {
+				t.Fatalf("provider calls = %d, response = %q", calls.Load(), response.String())
+			}
+			<-requests
+			var followup struct {
+				Input              json.RawMessage `json:"input"`
+				PreviousResponseID *string         `json:"previous_response_id"`
+			}
+			if err := json.Unmarshal(<-requests, &followup); err != nil {
+				t.Fatal(err)
+			}
+			responsesBodyEqual(t, string(followup.Input), tc.wantInput)
+			if tc.wantID == "" {
+				if followup.PreviousResponseID != nil || response.ConversationID != nil || session.ServiceID() != "" {
+					t.Fatalf("stateless follow-up reused prior response: previous=%v, conversation=%v, session=%q", followup.PreviousResponseID, response.ConversationID, session.ServiceID())
+				}
+			} else {
+				if followup.PreviousResponseID == nil || *followup.PreviousResponseID != "resp_call" || response.ConversationID == nil || *response.ConversationID != tc.wantID || session.ServiceID() != tc.wantID {
+					t.Fatalf("stored follow-up lost response ID: previous=%v, conversation=%v, session=%q", followup.PreviousResponseID, response.ConversationID, session.ServiceID())
+				}
+			}
+		})
+	}
+}
+
 func TestDisableStoreOutputDoesNotUseOrUpdateResponseID(t *testing.T) {
 	const input = `
 						{
@@ -7350,6 +7594,9 @@ data: {"type":"response.completed","sequence_number":17,"response":{"truncation"
 		if update.ResponseID != "resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b" {
 			t.Errorf("update %d: expected ResponseID resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b, got %s", i, update.ResponseID)
 		}
+		if update.ConversationID == nil || *update.ConversationID != "resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b" {
+			t.Errorf("update %d: resumed conversation ID = %v, want resp_68d40dc671a0819cb0ee920078333451029e611c3cc4a34b", i, update.ConversationID)
+		}
 
 		// Verify continuation tokens for all but last update
 		if i < len(updates)-1 {
@@ -7677,11 +7924,7 @@ func responsesBodyEqual(t *testing.T, got string, want string) {
 	}
 }
 
-// A non-streaming Responses result with more than one output message must carry
-// response-level AdditionalProperties (e.g. EndUserId) on every message, not
-// only the first. currentUpdate is reset to a fresh value for each message
-// after the first, so the properties must be repopulated per message.
-func TestResponses_NonStreaming_AllMessagesKeepAdditionalProperties(t *testing.T) {
+func TestResponses_NonStreaming_PreservesResponsePropertyScope(t *testing.T) {
 	const input = `
 		{
 			"model":"gpt-4o-mini",
@@ -7711,21 +7954,173 @@ func TestResponses_NonStreaming_AllMessagesKeepAdditionalProperties(t *testing.T
 	defer server.Close()
 	a := newTestResponsesClient(server, "gpt-4o-mini")
 
-	var msgUpdates int
+	var msgUpdates, metadataUpdates int
+	var response agent.Response
 	for u, err := range a.RunText(t.Context(), "hello") {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		response.Update(u)
 		if u.MessageID == "" {
+			if got, _ := u.AdditionalProperties["EndUserId"].(string); got == "end-user-42" {
+				metadataUpdates++
+			}
 			continue
 		}
 		msgUpdates++
-		if got, _ := u.AdditionalProperties["EndUserId"].(string); got != "end-user-42" {
-			t.Errorf("message %q: EndUserId = %q, want %q", u.MessageID, got, "end-user-42")
+		if _, ok := u.AdditionalProperties["EndUserId"]; ok {
+			t.Errorf("message %q includes response-level EndUserId", u.MessageID)
 		}
 	}
-	if msgUpdates != 2 {
-		t.Fatalf("expected 2 message-bearing updates, got %d", msgUpdates)
+	if msgUpdates != 2 || metadataUpdates != 1 {
+		t.Fatalf("message updates=%d metadata updates=%d, want 2 and 1", msgUpdates, metadataUpdates)
+	}
+	if response.AdditionalProperties["EndUserId"] != "end-user-42" {
+		t.Fatalf("collected response lost EndUserId: %v", response.AdditionalProperties)
+	}
+}
+
+func TestResponses_Streaming_PreservesResponsePropertyScope(t *testing.T) {
+	for _, tc := range []struct {
+		status       string
+		properties   string
+		finishReason string
+	}{
+		{status: "completed", properties: `,"usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5}`, finishReason: "stop"},
+		{status: "incomplete", properties: `,"incomplete_details":{"reason":"max_output_tokens"}`, finishReason: "length"},
+		{status: "failed", properties: `,"error":{"code":"server_error","message":"Failed after producing text"}`},
+	} {
+		for _, request := range []struct {
+			name               string
+			previousProperties string
+			resume             bool
+		}{
+			{name: "late metadata"},
+			{name: "updated metadata", previousProperties: `,"user":"early-user","safety_identifier":"early-safety"`},
+			{name: "resumed stream", resume: true},
+		} {
+			t.Run(tc.status+"/"+request.name, func(t *testing.T) {
+				const input = `{
+					"model":"gpt-4o-mini", "stream":true, "background":true,
+					"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}]
+				}`
+				var output strings.Builder
+				if !request.resume {
+					output.WriteString(`event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_metadata","object":"response","created_at":1741891428,"status":"in_progress","model":"gpt-4o-mini","store":true,"output":[]` + request.previousProperties + `}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"type":"message","id":"msg_metadata","role":"assistant","status":"in_progress","content":[]}}
+
+`)
+				}
+				output.WriteString(`event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":2,"item_id":"msg_metadata","output_index":0,"content_index":0,"delta":"Done","logprobs":[]}
+
+event: response.` + tc.status + `
+data: {"type":"response.` + tc.status + `","sequence_number":3,"response":{"id":"resp_metadata","object":"response","created_at":1741891428,"status":"` + tc.status + `","model":"gpt-4o-mini","store":true,"user":"final-user","safety_identifier":"final-safety","output":[{"type":"message","id":"msg_metadata","role":"assistant","status":"completed","content":[{"type":"output_text","text":"Done","annotations":[]}]}]` + tc.properties + `}}
+
+`)
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if request.resume {
+						if r.Method != http.MethodGet || r.URL.Path != "/responses/resp_metadata" || r.URL.Query().Get("starting_after") != "1" {
+							t.Errorf("unexpected resumption request: %s %s", r.Method, r.URL)
+						}
+					} else {
+						if r.Method != http.MethodPost {
+							t.Errorf("request method = %s, want POST", r.Method)
+						}
+						body, err := io.ReadAll(r.Body)
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						responsesBodyEqual(t, string(body), input)
+					}
+					w.Header().Set("Content-Type", "text/event-stream")
+					if _, err := io.WriteString(w, output.String()); err != nil {
+						t.Error(err)
+					}
+				}))
+				defer server.Close()
+
+				a := newTestResponsesClient(server, "gpt-4o-mini")
+				session := &agent.Session{}
+				opts := []agent.Option{agent.Stream(true), agent.AllowBackgroundResponses(true), agent.WithSession(session)}
+				messages := []*message.Message{message.NewText("hello")}
+				if request.resume {
+					opts = append(opts, agent.WithContinuationToken(agenttest.NewContinuationToken(t, `{"response_id":"resp_metadata","sequence_number":1}`)))
+					messages = nil
+				}
+				var response agent.Response
+				var terminal *agent.ResponseUpdate
+				for update, err := range a.Run(t.Context(), messages, opts...) {
+					if err != nil {
+						t.Fatal(err)
+					}
+					response.Update(update)
+					if raw, ok := update.RawRepresentation.(responses.ResponseStreamEventUnion); ok && raw.Type == "response."+tc.status {
+						terminal = update
+					}
+				}
+				response.Coalesce()
+				if terminal == nil {
+					t.Fatal("terminal response event was not emitted")
+				}
+				if terminal.MessageID != "" {
+					t.Errorf("terminal metadata update inherited message ID %q", terminal.MessageID)
+				}
+				if response.AdditionalProperties["EndUserId"] != "final-user" || response.AdditionalProperties["SafetyIdentifier"] != "final-safety" {
+					t.Errorf("response properties = %v, want final response metadata", response.AdditionalProperties)
+				}
+				if len(response.Messages) != 1 || response.Messages[0].ID != "msg_metadata" || response.String() != "Done" {
+					t.Fatalf("response messages lost their ID or text: %+v", response.Messages)
+				}
+				for _, key := range []string{"EndUserId", "SafetyIdentifier", "Error"} {
+					if _, ok := response.Messages[0].AdditionalProperties[key]; ok {
+						t.Errorf("response property %s leaked into message metadata", key)
+					}
+				}
+				if response.ID != "resp_metadata" || response.ConversationID == nil || *response.ConversationID != "resp_metadata" || session.ServiceID() != "resp_metadata" {
+					t.Error("response or session lost its conversation ID")
+				}
+				if response.FinishReason != tc.finishReason || !terminal.CreatedAt.Equal(time.Unix(1741891428, 0)) {
+					t.Errorf("finish reason=%q created at=%v, want %q and the provider timestamp", response.FinishReason, terminal.CreatedAt, tc.finishReason)
+				}
+				switch tc.status {
+				case "completed":
+					if usage := response.Usage(); usage.InputTokenCount != 2 || usage.OutputTokenCount != 3 || usage.TotalTokenCount != 5 {
+						t.Errorf("usage = %+v, want the completed response's token counts", usage)
+					}
+				case "incomplete":
+					token := agenttest.DecodeContinuationToken(t, response.ContinuationToken)
+					var inner continuationToken
+					if err := json.Unmarshal([]byte(token.InnerToken), &inner); err != nil {
+						t.Fatal(err)
+					}
+					if inner.ResponseID != "resp_metadata" || inner.SequenceNumber != 3 {
+						t.Errorf("continuation token = %+v, want the incomplete response position", inner)
+					}
+				case "failed":
+					failure, ok := response.AdditionalProperties["Error"].(responses.ResponseError)
+					if !ok || failure.Code != "server_error" || failure.Message != "Failed after producing text" {
+						t.Errorf("response error metadata = %+v, want the provider's failure", response.AdditionalProperties["Error"])
+					}
+					var errorContent *message.ErrorContent
+					for content := range response.Contents() {
+						if failure, ok := content.(*message.ErrorContent); ok {
+							errorContent = failure
+						}
+					}
+					if errorContent == nil || errorContent.ErrorCode != "server_error" || errorContent.Message != "Failed after producing text" {
+						t.Errorf("error content = %+v, want the provider's failure", errorContent)
+					}
+				}
+				if tc.status != "incomplete" && response.ContinuationToken != "" {
+					t.Error("terminal response did not clear its continuation token")
+				}
+			})
+		}
 	}
 }
 

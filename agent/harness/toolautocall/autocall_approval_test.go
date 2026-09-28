@@ -169,7 +169,7 @@ func invokeAndAssertApprovalWithAgent(t *testing.T, next agent.RunFunc,
 	ctx := t.Context()
 
 	// Build options
-	opts := []agent.Option{agent.WithServiceID("test-conversation")}
+	opts := []agent.Option{agent.WithServiceID("test-conversation"), agent.Stream(true)}
 	for _, tool := range tools {
 		opts = append(opts, agent.WithTool(tool))
 	}
@@ -614,6 +614,54 @@ func TestFunctionInvoking_ApprovedResultPrecedesTrailingMessageWithServiceManage
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestFunctionInvoking_ApprovalWithProviderStateRetainsLocalHistory(t *testing.T) {
+	var resumed []*message.Message
+	runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
+		AddFunctionCall("call-1", "Func1", `{}`).
+		NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+			resumed = messages
+		}).AddText("done").Build()}
+	a := agent.New(agent.ProviderConfig{
+		Run:         runner.Run,
+		Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{NewID: func() string { return "" }})},
+	}, agent.Config{Tools: []tool.Tool{tool.ApprovalRequiredFunc(createFunc1())}})
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.Set("threadID", "thread-1")
+	response, err := a.RunText(t.Context(), "hello", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request *message.ToolApprovalRequestContent
+	for _, msg := range response.Messages {
+		for _, content := range msg.Contents {
+			if approval, ok := content.(*message.ToolApprovalRequestContent); ok {
+				request = approval
+			}
+		}
+	}
+	if request == nil {
+		t.Fatal("expected an approval request")
+	}
+	if _, err := a.RunMessage(t.Context(), message.New(request.CreateResponse(true, "")), agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	want := []*message.Message{
+		message.NewText("hello"),
+		{Role: message.RoleAssistant, Contents: message.Contents{
+			&message.FunctionCallContent{CallID: "call-1", Name: "Func1", Arguments: `{}`, InformationalOnly: true},
+		}},
+		{Role: message.RoleTool, Contents: message.Contents{
+			&message.FunctionResultContent{CallID: "call-1", Result: "Result 1"},
+		}},
+	}
+	if err := messagetest.MessagesEqual(resumed, want); err != nil {
+		t.Fatal(err)
 	}
 }
 

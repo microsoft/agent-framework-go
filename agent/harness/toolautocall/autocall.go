@@ -163,6 +163,28 @@ func New(cfg Config) agent.Middleware {
 }
 
 func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	if stream, _ := agent.GetOption(opts, agent.Stream); stream || f.maximumIterationsPerRequest == 0 {
+		return f.run(next, ctx, messages, opts, nil)
+	}
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		var finalConversationID *string
+		response, err := agent.ResponseStream(f.run(next, ctx, messages, opts, &finalConversationID)).Collect()
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		// A completed non-streaming run uses the final provider response's ID,
+		// even when it is nil. Earlier tool rounds still contribute messages.
+		response.ConversationID = finalConversationID
+		for _, update := range response.ToUpdates() {
+			if !yield(update, nil) {
+				return
+			}
+		}
+	}
+}
+
+func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts []agent.Option, finalConversationID **string) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		if f.maximumConsecutiveErrorsPerRequest < 0 {
 			yield(nil, fmt.Errorf("toolautocall: MaximumConsecutiveErrorsPerRequest must be 0 or greater, got %d", f.maximumConsecutiveErrorsPerRequest))
@@ -187,7 +209,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 		var messagesCloned bool
 		session, _ := agent.GetOption(opts, agent.WithSession)
 		serviceID, _ := agent.GetOption(opts, agent.WithServiceID)
-		serviceManagedHistory := serviceID != "" || session.ServiceID() != ""
+		serviceManagedHistory := strings.TrimSpace(serviceID) != ""
 		yieldUpdate := func(update *agent.ResponseUpdate) bool {
 			if !f.disableApprovalResponseBinding && update != nil {
 				if err := recordPendingApprovalRequests(session, update.Contents); err != nil {
@@ -248,7 +270,11 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				return
 			}
 			for _, msg := range preDownstreamCallHistory {
-				if !yield(convertToolResultMsgToUpdate(msg, msg.ID), nil) {
+				update := convertToolResultMsgToUpdate(msg, msg.ID)
+				if serviceManagedHistory {
+					update.ConversationID = new(serviceID)
+				}
+				if !yield(update, nil) {
 					return
 				}
 			}
@@ -263,7 +289,11 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				opts = updateOptionsForNextIteration(opts)
 				messages = slices.Insert(messages, approvedResultInsertIdx, newMsg)
 				newMsg.ID = toolMsgID
-				if !yield(convertToolResultMsgToUpdate(newMsg, toolMsgID), nil) {
+				update := convertToolResultMsgToUpdate(newMsg, toolMsgID)
+				if serviceManagedHistory {
+					update.ConversationID = new(serviceID)
+				}
+				if !yield(update, nil) {
 					return
 				}
 			}
@@ -272,6 +302,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 		// and we can now enter the main function calling loop.
 		var updates []*agent.ResponseUpdate
 		var functionCallContents []*message.FunctionCallContent
+		messagesToSend := messages
 		for i := 0; ; i++ {
 			if err := ctx.Err(); err != nil {
 				yield(nil, err)
@@ -288,7 +319,8 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			functionCallContents = functionCallContents[:0]
 			var hasApprovalRequiringFcc bool
 			var lastApprovalCheckedFCCIdx, lastYieldedUpdateIdx int
-			for update, err := range next(ctx, messages, opts...) {
+			var conversationID *string
+			for update, err := range next(ctx, messagesToSend, opts...) {
 				if err != nil {
 					yield(nil, err)
 					return
@@ -296,6 +328,9 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				if update == nil {
 					yield(nil, nil)
 					continue
+				}
+				if update.ConversationID != nil {
+					conversationID = update.ConversationID
 				}
 				updates = append(updates, update)
 				// Accumulate function call contents from the update.
@@ -353,6 +388,9 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				// We will yield the updates as soon as we receive a function call content that requires approval
 				// or when we reach the end of the updates stream.
 			}
+			if finalConversationID != nil {
+				*finalConversationID = conversationID
+			}
 			// Mark function calls as informational-only if the server already provided matching function results.
 			functionCallContents = markServerHandledFunctionCalls(updates, functionCallContents)
 
@@ -381,62 +419,36 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 
 			// Stream any generated function results. This mirrors what's done for ResponseAsync, where the returned messages
 			// includes all activities, including generated function results.
-			if !yield(convertToolResultMsgToUpdate(newMsg, toolMsgID), nil) {
+			resultUpdate := convertToolResultMsgToUpdate(newMsg, toolMsgID)
+			resultUpdate.ConversationID = conversationID
+			if !yield(resultUpdate, nil) {
 				return
 			}
 
-			// Build an assistant message containing the text, reasoning, and function
-			// calls that were produced this iteration. This is needed because chat APIs
-			// (e.g. OpenAI) require tool result messages to be preceded by an assistant
-			// message containing the corresponding tool_calls. Preserving the assistant's
-			// text and reasoning content keeps the turn intact for the next provider call,
-			// matching .NET's FunctionInvokingChatClient, which does
-			// augmentedHistory.AddMessages(response) rather than reconstructing from the
-			// function calls alone.
-			processedFunctionCalls := functionCallContents[:len(newMsg.Contents)]
-
-			// Coalesce the buffered updates for this iteration so streamed text/reasoning
-			// fragments merge, then carry the text and reasoning over alongside the
-			// processed (non-informational) function calls, preserving the exact
-			// assistant content order the model emitted (e.g. reasoning → text →
-			// tool_calls, or text following a tool_call).
-			processedFCCSet := make(map[*message.FunctionCallContent]struct{}, len(processedFunctionCalls))
-			for _, fcc := range processedFunctionCalls {
-				processedFCCSet[fcc] = struct{}{}
-			}
-			var iterationContents message.Contents
+			// Preserve every response message and content item, not just the
+			// invocable function calls. This includes images, hosted tool results,
+			// message IDs, and metadata needed if history becomes client-managed.
+			var iteration agent.Response
 			for _, u := range updates {
-				iterationContents = append(iterationContents, u.Contents...)
+				iteration.Update(u)
 			}
-			iterationContents = iterationContents.Coalesce()
-			assistantContents := make([]message.Content, 0, len(iterationContents))
-			for _, c := range iterationContents {
-				switch v := c.(type) {
-				case *message.TextContent, *message.TextReasoningContent:
-					assistantContents = append(assistantContents, c)
-				case *message.FunctionCallContent:
-					// Only carry over the non-informational function calls that were
-					// actually processed this iteration, keeping them in their original
-					// position relative to the surrounding text/reasoning.
-					if _, ok := processedFCCSet[v]; ok {
-						assistantContents = append(assistantContents, c)
-					}
-				}
-			}
+			iteration.Coalesce()
 
-			// Use the augmented history as the new set of messages to send.
-			// We include the original messages, the assistant message with function calls,
-			// and the tool results so that the downstream provider receives a well-formed
-			// conversation (user message → assistant tool_calls → tool results).
+			// Retain the complete exchange in case a later provider response stops
+			// reporting a conversation ID and the client must send the full history.
 			opts = updateOptionsForNextIteration(opts)
+			opts = updateConversationIDForNextIteration(opts, conversationID)
 			if !messagesCloned {
 				messages = slices.Clone(messages)
 				messagesCloned = true
 			}
-			messages = append(messages, &message.Message{
-				Role:     message.RoleAssistant,
-				Contents: assistantContents,
-			}, newMsg)
+			messages = append(messages, iteration.Messages...)
+			messages = append(messages, newMsg)
+			messagesToSend = messages
+			if conversationID != nil {
+				// The provider retained the current exchange; send only new results.
+				messagesToSend = []*message.Message{newMsg}
+			}
 		}
 	}
 }
@@ -532,6 +544,20 @@ func updateOptionsForNextIteration(opts []agent.Option) []agent.Option {
 		updated = append(updated, agent.WithContinuationToken(""))
 	}
 	return updated
+}
+
+func updateConversationIDForNextIteration(opts []agent.Option, conversationID *string) []agent.Option {
+	nextID := ""
+	if conversationID != nil {
+		nextID = *conversationID
+	}
+	currentID, _ := agent.GetOption(opts, agent.WithServiceID)
+	if currentID == nextID {
+		return opts
+	}
+	// A response without stored history must clear even a preexisting session
+	// ID for the next provider call; do not modify caller-owned options.
+	return append(slices.Clone(opts), agent.WithServiceID(nextID))
 }
 
 // prepareOptionsForLastIteration prepares options for the last iteration by removing schema tools.

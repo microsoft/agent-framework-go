@@ -26,7 +26,9 @@ func BenchmarkAgentRunTenTextUpdates(b *testing.B) {
 func benchmarkAgentRun(b *testing.B, updates []*agent.ResponseUpdate) {
 	a := newBenchmarkAgent(updates)
 	session := &agent.Session{}
-	session.SetServiceID("benchmark-session")
+	if len(updates) > 0 {
+		session.SetServiceID("benchmark-session")
+	}
 	options := []agent.Option{agent.WithSession(session)}
 	messages := []*message.Message{message.NewText("hello")}
 
@@ -65,6 +67,9 @@ func benchmarkTextUpdates(count int) []*agent.ResponseUpdate {
 				&message.TextContent{Text: "chunk"},
 			},
 		}
+	}
+	if count > 0 {
+		updates[count-1].ConversationID = new("benchmark-session")
 	}
 	return updates
 }

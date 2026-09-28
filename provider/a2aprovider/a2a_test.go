@@ -5,7 +5,9 @@ package a2aprovider_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
+	"strings"
 	"testing"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
@@ -713,9 +715,12 @@ func TestRunStreamingWithEmptyContextIDKeepsSessionContext(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, err := range a.RunText(t.Context(), "Test streaming", agent.WithSession(session), agent.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "Test streaming", agent.WithSession(session), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
+		}
+		if update.ConversationID == nil || *update.ConversationID != "ctx-1" {
+			t.Errorf("conversation ID = %v, want ctx-1", update.ConversationID)
 		}
 	}
 
@@ -743,9 +748,12 @@ func TestRunStreamingWithEmptyInitialContextStoresResponseContext(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	for _, err := range a.RunText(t.Context(), "Test streaming", agent.WithSession(session), agent.Stream(true)) {
+	for update, err := range a.RunText(t.Context(), "Test streaming", agent.WithSession(session), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v, want nil", err)
+		}
+		if update.ConversationID == nil || *update.ConversationID != "ctx-1" {
+			t.Errorf("conversation ID = %v, want ctx-1", update.ConversationID)
 		}
 	}
 
@@ -996,6 +1004,69 @@ func TestRunWithContinuationToken(t *testing.T) {
 	}
 }
 
+func TestRunValidatesRequestedContextID(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, continuation := range []bool{false, true} {
+			for _, withSession := range []bool{false, true} {
+				for _, responseContext := range []string{"ctx-request", "ctx-other", ""} {
+					t.Run(fmt.Sprintf("stream=%t/continuation=%t/session=%t/response=%s", stream, continuation, withSession, responseContext), func(t *testing.T) {
+						responseMessage := &a2a.Message{
+							ID: "response-1", Role: a2a.MessageRoleAgent, ContextID: responseContext,
+							Parts: a2a.ContentParts{a2a.NewTextPart("reply")},
+						}
+						transport := &mockA2ATransport{
+							responseToReturn:          responseMessage,
+							streamingResponseToReturn: responseMessage,
+							rawStreamingResponse:      true,
+						}
+						opts := []agent.Option{agent.WithServiceID("ctx-request"), agent.Stream(stream)}
+						messages := []*message.Message{message.NewText("hello")}
+						if continuation {
+							task := &a2a.Task{
+								ID: "task-1", ContextID: responseContext,
+								Status: a2a.TaskStatus{State: a2a.TaskStateCompleted},
+							}
+							transport.responseToReturn = task
+							transport.subscribeResponseToReturn = task
+							opts = append(opts, agent.WithContinuationToken(agenttest.NewContinuationToken(t, "task-1")))
+							messages = nil
+						}
+						session := &agent.Session{}
+						if withSession {
+							opts = append(opts, agent.WithSession(session))
+						}
+						a := newTestAgent(transport, agent.Config{})
+						response, err := a.Run(t.Context(), messages, opts...).Collect()
+						if !continuation {
+							if transport.capturedMessageSendParams == nil || transport.capturedMessageSendParams.Message.ContextID != "ctx-request" {
+								t.Fatalf("request did not use the run option context: %+v", transport.capturedMessageSendParams)
+							}
+						}
+						if responseContext == "ctx-other" {
+							if err == nil || !strings.Contains(err.Error(), "mismatched context ID") {
+								t.Fatalf("error = %v, want mismatched context ID", err)
+							}
+							if session.ServiceID() != "" || latestTaskID(session) != "" {
+								t.Fatalf("invalid response changed session: context=%q, task=%q", session.ServiceID(), latestTaskID(session))
+							}
+							return
+						}
+						if err != nil {
+							t.Fatal(err)
+						}
+						if response.ConversationID == nil || *response.ConversationID != "ctx-request" {
+							t.Errorf("conversation ID = %v, want ctx-request", response.ConversationID)
+						}
+						if withSession && session.ServiceID() != "ctx-request" {
+							t.Errorf("session ID = %q, want ctx-request", session.ServiceID())
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
 // TestRunWithTaskInSessionAndMessage tests that task ID is added as reference
 func TestRunWithTaskInSessionAndMessage(t *testing.T) {
 	transport := &mockA2ATransport{
@@ -1025,6 +1096,35 @@ func TestRunWithTaskInSessionAndMessage(t *testing.T) {
 		t.Error("message.ReferenceTasks is empty, expected task-123")
 	} else if string(capturedMsg.ReferenceTasks[0]) != "task-123" {
 		t.Errorf("message.ReferenceTasks[0] = %q, want %q", capturedMsg.ReferenceTasks[0], "task-123")
+	}
+}
+
+func TestRunPerServiceCallHistoryCanBecomeServiceManaged(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprint(stream), func(t *testing.T) {
+			first := &a2a.Message{ID: "first", Role: a2a.MessageRoleAgent, Parts: a2a.ContentParts{a2a.NewTextPart("first")}}
+			transport := &mockA2ATransport{
+				responseToReturn: first, streamingResponseToReturn: first, rawStreamingResponse: true,
+			}
+			a := newTestAgent(transport, agent.Config{RequirePerServiceCallHistoryPersistence: true})
+			session := &agent.Session{}
+			if _, err := a.RunText(t.Context(), "start", agent.WithSession(session), agent.Stream(stream)).Collect(); err != nil {
+				t.Fatal(err)
+			}
+			second := &a2a.Message{ID: "second", Role: a2a.MessageRoleAgent, ContextID: "ctx-new", Parts: a2a.ContentParts{a2a.NewTextPart("second")}}
+			transport.responseToReturn = second
+			transport.streamingResponseToReturn = second
+			response, err := a.RunText(t.Context(), "next", agent.WithSession(session), agent.Stream(stream)).Collect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := transport.capturedMessageSendParams.Message.ContextID; got != "" {
+				t.Errorf("local history ID reached the A2A service: %q", got)
+			}
+			if response.ConversationID == nil || *response.ConversationID != "ctx-new" || session.ServiceID() != "ctx-new" {
+				t.Fatalf("response/session ID = %v/%q, want ctx-new", response.ConversationID, session.ServiceID())
+			}
+		})
 	}
 }
 

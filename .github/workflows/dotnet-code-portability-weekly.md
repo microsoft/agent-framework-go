@@ -5,6 +5,9 @@ tracker-id: dotnet-code-portability-weekly
 model: "gpt-5.5"
 engine:
    id: copilot
+sandbox:
+   agent:
+      version: v0.28.24
 network:
    allowed:
       - defaults
