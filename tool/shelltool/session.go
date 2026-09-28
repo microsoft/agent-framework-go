@@ -187,6 +187,12 @@ func (s *persistentSession) run(ctx context.Context, command string, timeout *ti
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// The context may have been canceled before the call or while waiting
+	// for another command to finish. Do not submit its script to the shell.
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+
 	if !s.isAlive() {
 		return Result{}, fmt.Errorf("shelltool: persistent session is dead after timeout; retry")
 	}

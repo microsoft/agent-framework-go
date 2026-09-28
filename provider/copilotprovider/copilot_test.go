@@ -300,6 +300,9 @@ func TestRun_SurfacesLifecycleEventEmittedDuringSessionResume(t *testing.T) {
 	if !hasRawEventOfType(response, "session.start") {
 		t.Fatal("lifecycle event emitted before the session.resume response was dropped; OnEvent must be registered before the RPC")
 	}
+	if response.ConversationID == nil || *response.ConversationID != "existing-session" {
+		t.Errorf("conversation ID = %v, want existing-session", response.ConversationID)
+	}
 }
 
 func TestRun_PreservesUserSuppliedOnEventHandler(t *testing.T) {
@@ -482,6 +485,31 @@ func TestConvertToAgentResponseUpdate_UsageEvent_SurfacesReasoningTokens(t *test
 	}
 	if usage.Details.OutputTokenCount != 20 {
 		t.Fatalf("OutputTokenCount = %d, want 20", usage.Details.OutputTokenCount)
+	}
+}
+
+// A content-filter-triggered usage event must report the canonical
+// "content_filter" finish reason, taking precedence over the raw finishReason,
+// matching the Python client.
+func TestConvertToAgentResponseUpdate_UsageEvent_ContentFilterTriggeredMapsFinishReason(t *testing.T) {
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.usage", map[string]any{
+			"model":                  "claude-sonnet-4",
+			"inputTokens":            10,
+			"outputTokens":           0,
+			"finishReason":           "stop",
+			"contentFilterTriggered": true,
+		}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if response.FinishReason != "content_filter" {
+		t.Fatalf("FinishReason = %q, want content_filter", response.FinishReason)
 	}
 }
 
@@ -1261,6 +1289,74 @@ func assertStringSlice(t *testing.T, got any, want []string, name string) {
 	for i, item := range gotSlice {
 		if item != want[i] {
 			t.Fatalf("%s[%d] = %#v, want %#v", name, i, item, want[i])
+		}
+	}
+}
+
+func TestConvertToAgentResponseUpdate_AssistantMessageSurfacesCitations(t *testing.T) {
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.message", map[string]any{
+			"messageId": "msg-cite",
+			"content":   "The sky is blue.",
+			"citations": map[string]any{
+				"sources": []any{
+					map[string]any{
+						"id":       "s1",
+						"provider": "openai",
+						"title":    "Sky facts",
+						"url":      "https://example.com/sky",
+					},
+				},
+				"spans": []any{},
+			},
+		}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "why is the sky blue?", agentpkg.Stream(false))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	text := firstContent[*message.TextContent](t, response)
+	var citation *message.CitationAnnotation
+	for _, ann := range text.Annotations {
+		if c, ok := ann.(*message.CitationAnnotation); ok {
+			citation = c
+		}
+	}
+	if citation == nil {
+		t.Fatalf("expected a CitationAnnotation on the assistant text, got %#v", text.Annotations)
+	}
+	if citation.Title != "Sky facts" || citation.URL != "https://example.com/sky" {
+		t.Errorf("citation = %#v, want Title=%q URL=%q", citation, "Sky facts", "https://example.com/sky")
+	}
+}
+
+func TestConvertToAgentResponseUpdate_AssistantMessageSkipsEmptyCitationSources(t *testing.T) {
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.message", map[string]any{
+			"messageId": "msg-empty-cite",
+			"content":   "No usable citation here.",
+			"citations": map[string]any{
+				"sources": []any{
+					map[string]any{"id": "s1", "provider": "client"}, // no path/title/url
+				},
+				"spans": []any{},
+			},
+		}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hi", agentpkg.Stream(false))
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	text := firstContent[*message.TextContent](t, response)
+	for _, ann := range text.Annotations {
+		if _, ok := ann.(*message.CitationAnnotation); ok {
+			t.Fatalf("expected no CitationAnnotation for a source with no usable fields, got %#v", ann)
 		}
 	}
 }

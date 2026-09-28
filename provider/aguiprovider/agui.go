@@ -43,6 +43,17 @@ type provider struct {
 	cfg     AgentConfig
 }
 
+const threadIDStateKey = "aguiprovider.threadID"
+
+type threadIDOpt string
+
+func (o threadIDOpt) MAFValue() any { return string(o) }
+
+// WithThreadID sets the AG-UI thread ID when creating a session. Thread IDs
+// identify remote runs but do not imply that the service stores chat history.
+// They are persisted in session state, not in [agent.Session.ServiceID].
+func WithThreadID(id string) agent.Option { return threadIDOpt(id) }
+
 // NewAgent creates a new [agent.Agent] backed by a remote agent that speaks the
 // AG-UI protocol over Server-Sent Events via the AG-UI client. It panics if
 // aclient is nil.
@@ -68,17 +79,26 @@ func NewAgent(aclient *aguiSSEClient.Client, config AgentConfig) *agent.Agent {
 	}
 	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
-		ProviderName:                "agui",
-		Run:                         p.run,
-		Middlewares:                 providerMiddlewares,
-		ServiceDoesNotManageHistory: true,
+		ProviderName: "agui",
+		Run:          p.run,
+		Middlewares:  providerMiddlewares,
+		CreateSession: func(_ context.Context, session *agent.Session, opts ...agent.Option) error {
+			if id, ok := agent.GetOption(opts, WithThreadID); ok {
+				session.Set(threadIDStateKey, id)
+			}
+			return nil
+		},
 	}, config.Config)
 }
 
 func (p *provider) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		session, _ := agent.GetOption(options, agent.WithSession)
-		threadID := getOrCreateThreadID(session)
+		threadID, err := getOrCreateThreadID(session)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
 		runID := aguiEvents.GenerateRunID()
 
 		state, convertedMessages, err := toAGUIInputMessages(messages)
@@ -177,15 +197,16 @@ func decodeFrame(decoder *aguiEvents.EventDecoder, data []byte) (aguiEvents.Even
 	return decoder.DecodeEvent(envelope.Type, data)
 }
 
-func getOrCreateThreadID(session *agent.Session) string {
-	if session != nil && session.ServiceID() != "" {
-		return session.ServiceID()
+func getOrCreateThreadID(session *agent.Session) (string, error) {
+	var threadID string
+	if _, err := session.Get(threadIDStateKey, &threadID); err != nil {
+		return "", err
 	}
-	threadID := aguiEvents.GenerateThreadID()
-	if session != nil {
-		session.SetServiceID(threadID)
+	if threadID == "" {
+		threadID = aguiEvents.GenerateThreadID()
+		session.Set(threadIDStateKey, threadID)
 	}
-	return threadID
+	return threadID, nil
 }
 
 func toAGUITools(tools iter.Seq[tool.Tool]) []aguiTypes.Tool {
@@ -387,6 +408,10 @@ type toolCallAccumulator struct {
 	// kept separate from lastChunkMessageID so interleaved text and reasoning
 	// chunks that omit MessageID do not inherit each other's message.
 	lastReasoningChunkMessageID string
+	// lastThinkingMessageID is generated on ThinkingTextMessageStartEvent and
+	// reused across its content events, since the THINKING_TEXT_MESSAGE_* events
+	// carry no message id.
+	lastThinkingMessageID string
 }
 
 func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUpdate, error) {
@@ -486,6 +511,27 @@ func (a *toolCallAccumulator) onEvent(evt aguiEvents.Event) ([]*agent.ResponseUp
 			CreatedAt: eventTime(evt),
 			Contents:  message.Contents{&message.TextReasoningContent{ProtectedData: e.EncryptedValue}},
 		}}, nil
+	case *aguiEvents.ThinkingTextMessageStartEvent:
+		// The THINKING_TEXT_MESSAGE_* bracket carries no message id, so generate
+		// one to correlate its content events.
+		a.lastThinkingMessageID = aguiEvents.GenerateMessageID()
+		return nil, nil
+	case *aguiEvents.ThinkingTextMessageContentEvent:
+		if e.Delta == "" {
+			return nil, nil
+		}
+		if a.lastThinkingMessageID == "" {
+			a.lastThinkingMessageID = aguiEvents.GenerateMessageID()
+		}
+		return []*agent.ResponseUpdate{{
+			Role:      message.RoleAssistant,
+			MessageID: a.lastThinkingMessageID,
+			CreatedAt: eventTime(evt),
+			Contents:  message.Contents{&message.TextReasoningContent{Text: e.Delta}},
+		}}, nil
+	case *aguiEvents.ThinkingTextMessageEndEvent:
+		a.lastThinkingMessageID = ""
+		return nil, nil
 	case *aguiEvents.ToolCallStartEvent:
 		a.pending[e.ToolCallID] = &pendingToolCall{Name: e.ToolCallName, MessageID: cmp.Or(deref(e.ParentMessageID), e.ToolCallID)}
 		return nil, nil

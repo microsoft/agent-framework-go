@@ -20,6 +20,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/otelx"
 	"github.com/microsoft/agent-framework-go/internal/slogx"
+	"github.com/microsoft/agent-framework-go/internal/toolmiddleware"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 
@@ -64,6 +65,7 @@ type Config struct {
 	// provider requests. Request tools supplied through agent options take
 	// precedence; this collection is consulted afterward, which is useful when the
 	// provider is already configured with tool declarations out of band.
+	// Function invocation middleware registered before this middleware also wraps these tools.
 	AdditionalTools []tool.Tool
 
 	// IncludeDetailedErrors controls whether tool error details are included in
@@ -127,7 +129,7 @@ type autocall struct {
 	disableApprovalNotRequiredBypassing bool
 }
 
-// New creates a new function-invoking chat client that wraps the provided client.
+// New creates automatic tool-invocation middleware configured by cfg.
 func New(cfg Config) agent.Middleware {
 	if cfg.NewID == nil {
 		cfg.NewID = uuid.NewString
@@ -161,6 +163,28 @@ func New(cfg Config) agent.Middleware {
 }
 
 func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	if stream, _ := agent.GetOption(opts, agent.Stream); stream || f.maximumIterationsPerRequest == 0 {
+		return f.run(next, ctx, messages, opts, nil)
+	}
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		var finalConversationID *string
+		response, err := agent.ResponseStream(f.run(next, ctx, messages, opts, &finalConversationID)).Collect()
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		// A completed non-streaming run uses the final provider response's ID,
+		// even when it is nil. Earlier tool rounds still contribute messages.
+		response.ConversationID = finalConversationID
+		for _, update := range response.ToUpdates() {
+			if !yield(update, nil) {
+				return
+			}
+		}
+	}
+}
+
+func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts []agent.Option, finalConversationID **string) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		if f.maximumConsecutiveErrorsPerRequest < 0 {
 			yield(nil, fmt.Errorf("toolautocall: MaximumConsecutiveErrorsPerRequest must be 0 or greater, got %d", f.maximumConsecutiveErrorsPerRequest))
@@ -168,6 +192,10 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 		}
 		if f.maximumIterationsPerRequest < 0 {
 			yield(nil, fmt.Errorf("toolautocall: MaximumIterationsPerRequest must be 0 or greater, got %d", f.maximumIterationsPerRequest))
+			return
+		}
+		if err := ctx.Err(); err != nil {
+			yield(nil, err)
 			return
 		}
 		if f.maximumIterationsPerRequest == 0 {
@@ -181,7 +209,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 		var messagesCloned bool
 		session, _ := agent.GetOption(opts, agent.WithSession)
 		serviceID, _ := agent.GetOption(opts, agent.WithServiceID)
-		serviceManagedHistory := serviceID != "" || session.ServiceID() != ""
+		serviceManagedHistory := strings.TrimSpace(serviceID) != ""
 		yieldUpdate := func(update *agent.ResponseUpdate) bool {
 			if !f.disableApprovalResponseBinding && update != nil {
 				if err := recordPendingApprovalRequests(session, update.Contents); err != nil {
@@ -211,7 +239,7 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 			}
 			messagesCloned = messagesCloned || changed
 		}
-		tools, _ := f.createToolsMap(agent.AllOptions(opts, agent.WithTool))
+		tools, _ := f.createToolsMap(opts)
 
 		// This is a synthetic ID since we're generating the tool messages instead of getting them from
 		// the underlying provider. When emitting the streamed chunks, it's perfectly valid for us to
@@ -242,7 +270,11 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				return
 			}
 			for _, msg := range preDownstreamCallHistory {
-				if !yield(convertToolResultMsgToUpdate(msg, msg.ID), nil) {
+				update := convertToolResultMsgToUpdate(msg, msg.ID)
+				if serviceManagedHistory {
+					update.ConversationID = new(serviceID)
+				}
+				if !yield(update, nil) {
 					return
 				}
 			}
@@ -257,7 +289,11 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				opts = updateOptionsForNextIteration(opts)
 				messages = slices.Insert(messages, approvedResultInsertIdx, newMsg)
 				newMsg.ID = toolMsgID
-				if !yield(convertToolResultMsgToUpdate(newMsg, toolMsgID), nil) {
+				update := convertToolResultMsgToUpdate(newMsg, toolMsgID)
+				if serviceManagedHistory {
+					update.ConversationID = new(serviceID)
+				}
+				if !yield(update, nil) {
 					return
 				}
 			}
@@ -266,19 +302,25 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 		// and we can now enter the main function calling loop.
 		var updates []*agent.ResponseUpdate
 		var functionCallContents []*message.FunctionCallContent
+		messagesToSend := messages
 		for i := 0; ; i++ {
+			if err := ctx.Err(); err != nil {
+				yield(nil, err)
+				return
+			}
 			if i >= f.maximumIterationsPerRequest {
 				f.logger.Debug(ctx, "reached maximum iteration count; stopping function invocation loop", "maximumIterationsPerRequest", f.maximumIterationsPerRequest)
 				opts = prepareOptionsForLastIteration(opts)
 			}
-			tools, requiresApproval := f.createToolsMap(agent.AllOptions(opts, agent.WithTool))
+			tools, requiresApproval := f.createToolsMap(opts)
 
 			// Reset slice without reallocating.
 			updates = updates[:0]
 			functionCallContents = functionCallContents[:0]
 			var hasApprovalRequiringFcc bool
 			var lastApprovalCheckedFCCIdx, lastYieldedUpdateIdx int
-			for update, err := range next(ctx, messages, opts...) {
+			var conversationID *string
+			for update, err := range next(ctx, messagesToSend, opts...) {
 				if err != nil {
 					yield(nil, err)
 					return
@@ -286,6 +328,9 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				if update == nil {
 					yield(nil, nil)
 					continue
+				}
+				if update.ConversationID != nil {
+					conversationID = update.ConversationID
 				}
 				updates = append(updates, update)
 				// Accumulate function call contents from the update.
@@ -343,6 +388,9 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 				// We will yield the updates as soon as we receive a function call content that requires approval
 				// or when we reach the end of the updates stream.
 			}
+			if finalConversationID != nil {
+				*finalConversationID = conversationID
+			}
 			// Mark function calls as informational-only if the server already provided matching function results.
 			functionCallContents = markServerHandledFunctionCalls(updates, functionCallContents)
 
@@ -371,62 +419,36 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 
 			// Stream any generated function results. This mirrors what's done for ResponseAsync, where the returned messages
 			// includes all activities, including generated function results.
-			if !yield(convertToolResultMsgToUpdate(newMsg, toolMsgID), nil) {
+			resultUpdate := convertToolResultMsgToUpdate(newMsg, toolMsgID)
+			resultUpdate.ConversationID = conversationID
+			if !yield(resultUpdate, nil) {
 				return
 			}
 
-			// Build an assistant message containing the text, reasoning, and function
-			// calls that were produced this iteration. This is needed because chat APIs
-			// (e.g. OpenAI) require tool result messages to be preceded by an assistant
-			// message containing the corresponding tool_calls. Preserving the assistant's
-			// text and reasoning content keeps the turn intact for the next provider call,
-			// matching .NET's FunctionInvokingChatClient, which does
-			// augmentedHistory.AddMessages(response) rather than reconstructing from the
-			// function calls alone.
-			processedFunctionCalls := functionCallContents[:len(newMsg.Contents)]
-
-			// Coalesce the buffered updates for this iteration so streamed text/reasoning
-			// fragments merge, then carry the text and reasoning over alongside the
-			// processed (non-informational) function calls, preserving the exact
-			// assistant content order the model emitted (e.g. reasoning → text →
-			// tool_calls, or text following a tool_call).
-			processedFCCSet := make(map[*message.FunctionCallContent]struct{}, len(processedFunctionCalls))
-			for _, fcc := range processedFunctionCalls {
-				processedFCCSet[fcc] = struct{}{}
-			}
-			var iterationContents message.Contents
+			// Preserve every response message and content item, not just the
+			// invocable function calls. This includes images, hosted tool results,
+			// message IDs, and metadata needed if history becomes client-managed.
+			var iteration agent.Response
 			for _, u := range updates {
-				iterationContents = append(iterationContents, u.Contents...)
+				iteration.Update(u)
 			}
-			iterationContents = iterationContents.Coalesce()
-			assistantContents := make([]message.Content, 0, len(iterationContents))
-			for _, c := range iterationContents {
-				switch v := c.(type) {
-				case *message.TextContent, *message.TextReasoningContent:
-					assistantContents = append(assistantContents, c)
-				case *message.FunctionCallContent:
-					// Only carry over the non-informational function calls that were
-					// actually processed this iteration, keeping them in their original
-					// position relative to the surrounding text/reasoning.
-					if _, ok := processedFCCSet[v]; ok {
-						assistantContents = append(assistantContents, c)
-					}
-				}
-			}
+			iteration.Coalesce()
 
-			// Use the augmented history as the new set of messages to send.
-			// We include the original messages, the assistant message with function calls,
-			// and the tool results so that the downstream provider receives a well-formed
-			// conversation (user message → assistant tool_calls → tool results).
+			// Retain the complete exchange in case a later provider response stops
+			// reporting a conversation ID and the client must send the full history.
 			opts = updateOptionsForNextIteration(opts)
+			opts = updateConversationIDForNextIteration(opts, conversationID)
 			if !messagesCloned {
 				messages = slices.Clone(messages)
 				messagesCloned = true
 			}
-			messages = append(messages, &message.Message{
-				Role:     message.RoleAssistant,
-				Contents: assistantContents,
-			}, newMsg)
+			messages = append(messages, iteration.Messages...)
+			messages = append(messages, newMsg)
+			messagesToSend = messages
+			if conversationID != nil {
+				// The provider retained the current exchange; send only new results.
+				messagesToSend = []*message.Message{newMsg}
+			}
 		}
 	}
 }
@@ -524,6 +546,20 @@ func updateOptionsForNextIteration(opts []agent.Option) []agent.Option {
 	return updated
 }
 
+func updateConversationIDForNextIteration(opts []agent.Option, conversationID *string) []agent.Option {
+	nextID := ""
+	if conversationID != nil {
+		nextID = *conversationID
+	}
+	currentID, _ := agent.GetOption(opts, agent.WithServiceID)
+	if currentID == nextID {
+		return opts
+	}
+	// A response without stored history must clear even a preexisting session
+	// ID for the next provider call; do not modify caller-owned options.
+	return append(slices.Clone(opts), agent.WithServiceID(nextID))
+}
+
 // prepareOptionsForLastIteration prepares options for the last iteration by removing schema tools.
 //
 // On the last iteration, we won't be processing any function calls, so we should not
@@ -611,8 +647,16 @@ func (f *autocall) shouldTerminateLoopBasedOnHandleableFunctions(ctx context.Con
 	return false
 }
 
-func (f *autocall) createToolsMap(tools iter.Seq[tool.Tool]) (mtools map[string]tool.SchemaTool, anyRequiredApproval bool) {
+func (f *autocall) createToolsMap(opts []agent.Option) (mtools map[string]tool.SchemaTool, anyRequiredApproval bool) {
 	fn := func(t tool.Tool) {
+		if function, ok := t.(tool.FuncTool); ok {
+			for _, opt := range opts {
+				if wrap, ok := opt.(toolmiddleware.Wrapper); ok {
+					function = wrap(function)
+				}
+			}
+			t = function
+		}
 		if !anyRequiredApproval {
 			if approval, ok := t.(tool.ApprovalRequiredTool); ok && approval.ApprovalRequired() {
 				anyRequiredApproval = true
@@ -630,7 +674,7 @@ func (f *autocall) createToolsMap(tools iter.Seq[tool.Tool]) (mtools map[string]
 		}
 		mtools[declaration.Name()] = declaration
 	}
-	for t := range tools {
+	for t := range agent.AllOptions(opts, agent.WithTool) {
 		fn(t)
 	}
 	for _, t := range f.additionalTools {
@@ -1056,11 +1100,33 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 			}()
 		}
 		wg.Wait()
+		if err := ctx.Err(); err != nil {
+			var toolErrors []error
+			for _, result := range parallelResults {
+				if result.err != nil {
+					toolErrors = append(toolErrors, result.err)
+				}
+			}
+			if len(toolErrors) == 1 {
+				return nil, errCount, toolErrors[0]
+			}
+			if len(toolErrors) > 1 {
+				return nil, errCount, errors.Join(toolErrors...)
+			}
+			return nil, errCount, err
+		}
 		results = parallelResults
 	} else {
 		// Invoke each function serially.
 		for _, fc := range funcCalls {
 			result := f.processFunctionCall(ctx, tools, fc)
+			// Request cancellation must bypass the recoverable tool-error path.
+			if err := ctx.Err(); err != nil {
+				if result.err != nil {
+					return nil, errCount, result.err
+				}
+				return nil, errCount, err
+			}
 			if !captureCurrentIterationErrors && result.status == functionInvocationStatusException {
 				return nil, errCount, result.err
 			}
@@ -1109,6 +1175,9 @@ func (f *autocall) updateConsecutiveErrorCountOrThrow(ctx context.Context, added
 }
 
 func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]tool.SchemaTool, funcCall *message.FunctionCallContent) functionInvocationResult {
+	if err := ctx.Err(); err != nil {
+		return functionInvocationResult{status: functionInvocationStatusException, call: funcCall, err: err}
+	}
 	declaration, ok := tools[funcCall.Name]
 	if !ok {
 		f.logger.Warn(ctx, "function not found", "funcName", funcCall.Name)
@@ -1121,6 +1190,7 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	}
 	f.logger.Debug(ctx, "calling function", "funcName", funcCall.Name, slogx.SensitiveData("arguments", funcCall.Arguments))
 	start := time.Now()
+	ctx = agent.WithFuncCallID(ctx, funcCall.CallID)
 	ctx, span := startToolSpan(ctx, funcCall, declaration)
 	if span != nil {
 		defer span.End()

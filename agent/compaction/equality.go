@@ -46,32 +46,21 @@ func contentEqual(left, right message.Content) bool {
 	}
 	switch leftContent := left.(type) {
 	case *message.TextContent:
-		rightContent := right.(*message.TextContent)
-		return leftContent.Text == rightContent.Text
+		return textContentEqual(leftContent, right.(*message.TextContent))
 	case *message.TextReasoningContent:
-		rightContent := right.(*message.TextReasoningContent)
-		return leftContent.Text == rightContent.Text && leftContent.ProtectedData == rightContent.ProtectedData
+		return textReasoningContentEqual(leftContent, right.(*message.TextReasoningContent))
 	case *message.DataContent:
-		rightContent := right.(*message.DataContent)
-		return leftContent.MediaType == rightContent.MediaType && leftContent.Name == rightContent.Name && leftContent.Data == rightContent.Data
+		return dataContentEqual(leftContent, right.(*message.DataContent))
 	case *message.URIContent:
-		rightContent := right.(*message.URIContent)
-		return leftContent.URI == rightContent.URI && leftContent.MediaType == rightContent.MediaType
+		return uriContentEqual(leftContent, right.(*message.URIContent))
 	case *message.ErrorContent:
-		rightContent := right.(*message.ErrorContent)
-		return leftContent.Message == rightContent.Message && leftContent.ErrorCode == rightContent.ErrorCode && leftContent.Details == rightContent.Details
+		return errorContentEqual(leftContent, right.(*message.ErrorContent))
 	case *message.FunctionCallContent:
-		rightContent := right.(*message.FunctionCallContent)
-		return leftContent.CallID == rightContent.CallID && leftContent.Name == rightContent.Name && leftContent.Arguments == rightContent.Arguments &&
-			errorsEqual(leftContent.Error, rightContent.Error) && leftContent.InformationalOnly == rightContent.InformationalOnly
+		return functionCallContentEqual(leftContent, right.(*message.FunctionCallContent))
 	case *message.FunctionResultContent:
-		rightContent := right.(*message.FunctionResultContent)
-		return leftContent.CallID == rightContent.CallID && reflect.DeepEqual(leftContent.Result, rightContent.Result) &&
-			errorsEqual(leftContent.Error, rightContent.Error)
+		return functionResultContentEqual(leftContent, right.(*message.FunctionResultContent))
 	case *message.HostedFileContent:
-		rightContent := right.(*message.HostedFileContent)
-		return leftContent.FileID == rightContent.FileID && leftContent.MediaType == rightContent.MediaType && leftContent.Name == rightContent.Name &&
-			reflect.DeepEqual(leftContent.SizeInBytes, rightContent.SizeInBytes) && reflect.DeepEqual(leftContent.CreatedAt, rightContent.CreatedAt)
+		return hostedFileContentEqual(leftContent, right.(*message.HostedFileContent))
 	case *message.HostedVectorStoreContent:
 		return leftContent.VectorStoreID == right.(*message.HostedVectorStoreContent).VectorStoreID
 	case *message.MCPServerToolCallContent:
@@ -117,6 +106,41 @@ func contentEqual(left, right message.Content) bool {
 	default:
 		return true
 	}
+}
+
+func textContentEqual(left, right *message.TextContent) bool {
+	return left.Text == right.Text
+}
+
+func textReasoningContentEqual(left, right *message.TextReasoningContent) bool {
+	return left.Text == right.Text && left.ProtectedData == right.ProtectedData
+}
+
+func dataContentEqual(left, right *message.DataContent) bool {
+	return left.MediaType == right.MediaType && left.Name == right.Name && left.Data == right.Data
+}
+
+func uriContentEqual(left, right *message.URIContent) bool {
+	return left.URI == right.URI && left.MediaType == right.MediaType
+}
+
+func errorContentEqual(left, right *message.ErrorContent) bool {
+	return left.Message == right.Message && left.ErrorCode == right.ErrorCode && left.Details == right.Details
+}
+
+func functionCallContentEqual(left, right *message.FunctionCallContent) bool {
+	return left.CallID == right.CallID && left.Name == right.Name && left.Arguments == right.Arguments &&
+		errorsEqual(left.Error, right.Error) && left.InformationalOnly == right.InformationalOnly
+}
+
+func functionResultContentEqual(left, right *message.FunctionResultContent) bool {
+	return left.CallID == right.CallID && reflect.DeepEqual(left.Result, right.Result) &&
+		errorsEqual(left.Error, right.Error)
+}
+
+func hostedFileContentEqual(left, right *message.HostedFileContent) bool {
+	return left.FileID == right.FileID && left.MediaType == right.MediaType && left.Name == right.Name &&
+		reflect.DeepEqual(left.SizeInBytes, right.SizeInBytes) && reflect.DeepEqual(left.CreatedAt, right.CreatedAt)
 }
 
 // errorsEqual reports whether two content error values are equal. Errors are

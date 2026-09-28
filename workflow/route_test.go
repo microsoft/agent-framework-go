@@ -111,7 +111,9 @@ func TestMessageRouterKeepsUnknownPortableTypeOnCatchAllPath(t *testing.T) {
 	rb.AddHandlerRaw(reflect.TypeFor[map[string]any](), nil, func(*Context, any) (any, error) {
 		return "map", nil
 	})
-	rb.AddCatchAll(func(*Context, PortableValue) (any, error) {
+	var caught PortableValue
+	rb.AddCatchAll(func(_ *Context, msg PortableValue) (any, error) {
+		caught = msg
 		return "catch-all", nil
 	})
 	router, err := rb.build()
@@ -125,6 +127,9 @@ func TestMessageRouterKeepsUnknownPortableTypeOnCatchAllPath(t *testing.T) {
 	}
 	if result.result != "catch-all" {
 		t.Fatalf("RouteMessage() result = %v, want catch-all", result.result)
+	}
+	if caught.Delayed() {
+		t.Fatal("catch-all message remains delayed after routing")
 	}
 }
 

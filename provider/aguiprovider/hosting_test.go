@@ -174,6 +174,32 @@ func TestHandler_MixedToolInvocations_OnlyClientToolEmitted(t *testing.T) {
 	}
 }
 
+// A tool call's TOOL_CALL_START must carry parentMessageId so the client
+// associates it with the assistant message rather than creating a separate
+// message per tool call. Matches the Python host.
+func TestHandler_ToolCallCarriesParentMessageID(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				MessageID: "msg-1",
+				Role:      message.RoleAssistant,
+				Contents:  message.Contents{&message.FunctionCallContent{CallID: "c1", Name: "tool", Arguments: `{}`}},
+			}, nil)
+		}
+	})
+	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{})
+
+	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	content := rr.Body.String()
+	if !strings.Contains(content, "TOOL_CALL_START") || !strings.Contains(content, `"parentMessageId":"msg-1"`) {
+		t.Fatalf("expected TOOL_CALL_START with parentMessageId msg-1, got %q", content)
+	}
+}
+
 func TestHandler_StateSnapshotEmitsStateEvent(t *testing.T) {
 	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -198,6 +224,32 @@ func TestHandler_StateSnapshotEmitsStateEvent(t *testing.T) {
 	content := rr.Body.String()
 	if !strings.Contains(content, "STATE_SNAPSHOT") || !strings.Contains(content, "counter") {
 		t.Fatalf("expected state snapshot SSE event, got %q", content)
+	}
+}
+
+// UsageContent must be surfaced as a "usage" CUSTOM event rather than dropped,
+// matching the Python host.
+func TestHandler_UsageContentEmitsCustomEvent(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				Role: message.RoleAssistant,
+				Contents: message.Contents{&message.UsageContent{
+					Details: message.UsageDetails{InputTokenCount: 10, OutputTokenCount: 5, TotalTokenCount: 15},
+				}},
+			}, nil)
+		}
+	})
+	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{})
+
+	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	content := rr.Body.String()
+	if !strings.Contains(content, "CUSTOM") || !strings.Contains(content, `"usage"`) {
+		t.Fatalf("expected a usage CUSTOM event, got %q", content)
 	}
 }
 
@@ -876,4 +928,39 @@ func TestHandler_URIContentEmittedAsText(t *testing.T) {
 	if content := rr.Body.String(); !strings.Contains(content, "https://example.com/generated.png") {
 		t.Fatalf("expected URIContent URI surfaced in SSE payload, got %q", content)
 	}
+}
+
+func TestHandler_TextThenToolCall_ClosesTextBeforeToolLifecycle(t *testing.T) {
+	a := newTestAgent(func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				MessageID: "m1",
+				Role:      message.RoleAssistant,
+				Contents:  message.Contents{&message.TextContent{Text: "Let me check."}},
+			}, nil)
+			yield(&agent.ResponseUpdate{
+				MessageID: "m1",
+				Role:      message.RoleAssistant,
+				Contents:  message.Contents{&message.FunctionCallContent{CallID: "call-1", Name: "get_weather", Arguments: "{}"}},
+			}, nil)
+		}
+	})
+	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{})
+
+	body := `{"threadId":"thread-1","runId":"run-1","messages":[{"id":"u1","role":"user","content":"ping"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	lifecycle := eventsWithPrefixes(decodeSSEEvents(t, rr.Body.String()), "TEXT_MESSAGE_", "TOOL_CALL_")
+	// The text message lifecycle must be fully closed before the tool-call
+	// lifecycle opens, rather than the tool call nesting inside an open message.
+	assertEventTypes(t, lifecycle, []string{
+		"TEXT_MESSAGE_START",
+		"TEXT_MESSAGE_CONTENT",
+		"TEXT_MESSAGE_END",
+		"TOOL_CALL_START",
+		"TOOL_CALL_ARGS",
+		"TOOL_CALL_END",
+	})
 }

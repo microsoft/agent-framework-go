@@ -63,9 +63,10 @@ func NewDataContentFromReader(reader io.Reader, mediaType string) (*DataContent,
 }
 
 // SaveToFile writes the decoded content to path without overwriting an
-// existing file. If path is empty or names an existing directory, Name is used
-// as the file name; otherwise a random name and inferred extension are used.
-// The returned path identifies the created file.
+// existing file. If path is empty or names an existing directory, the file is
+// created in that directory using Name, or a random name with an inferred
+// extension when Name is empty. Otherwise the content is written to path
+// verbatim. The returned path identifies the created file.
 func (t *DataContent) SaveToFile(path string) (string, error) {
 	if t == nil {
 		return "", fmt.Errorf("content cannot be nil")

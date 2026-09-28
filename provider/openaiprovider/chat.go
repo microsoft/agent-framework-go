@@ -149,7 +149,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 			if choice.Message.Refusal != "" {
 				contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal, ErrorCode: "Refusal"})
 			}
-			finishReason = choice.FinishReason
+			finishReason = normalizeChatFinishReason(choice.FinishReason)
 		}
 		if resp.JSON.Usage.Valid() {
 			contents = addUsage(contents, resp.Usage)
@@ -209,7 +209,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 			}
 			var finishReason string
 			if len(chunk.Choices) > 0 {
-				finishReason = chunk.Choices[0].FinishReason
+				finishReason = normalizeChatFinishReason(chunk.Choices[0].FinishReason)
 			}
 			resp := &agent.ResponseUpdate{
 				Contents:          contents,
@@ -228,6 +228,17 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 			yield(nil, stream.Err())
 		}
 	}
+}
+
+// normalizeChatFinishReason maps the deprecated "function_call" finish reason,
+// still emitted by some OpenAI-compatible endpoints, onto the canonical
+// "tool_calls", matching the Python client. Other reasons pass through
+// unchanged.
+func normalizeChatFinishReason(reason string) string {
+	if reason == "function_call" {
+		return "tool_calls"
+	}
+	return reason
 }
 
 func mapRole(r string) message.Role {
@@ -549,9 +560,9 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 // sanitizeAuthorName mirrors the .NET OpenAIChatClient.SanitizeAuthorName used
 // for ChatMessage.AuthorName. The Chat Completions API only accepts a limited
 // character set for the participant "name" field, so it keeps only alphanumeric
-// characters and caps the result at 64 characters. It returns an empty string
-// when the input is empty, whitespace-only, or entirely disallowed characters,
-// in which case the caller leaves the name field unset.
+// characters and underscores and caps the result at 64 characters. It returns an
+// empty string when the input is empty, whitespace-only, or contains no such
+// characters, in which case the caller leaves the name field unset.
 func sanitizeAuthorName(name string) string {
 	if strings.TrimSpace(name) == "" {
 		return ""

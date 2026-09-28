@@ -3,11 +3,11 @@
 package shelltool
 
 import (
-	"context"
 	"io"
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -106,41 +106,45 @@ func (r *scriptedReader) Read(p []byte) (int, error) {
 // reads. readExitCode must wake on the live stdout signal for the second read
 // rather than waiting out the 100ms fallback poll.
 func TestReadExitCodeWakesOnLiveStdoutSignal(t *testing.T) {
-	s := &persistentSession{stdoutSignal: newSignal()}
-	s.readerWG.Add(1)
+	// Use virtual time: a busy CI host can otherwise exceed the wall-clock
+	// bound even when readExitCode correctly wakes on the live signal.
+	synctest.Test(t, func(t *testing.T) {
+		s := &persistentSession{stdoutSignal: newSignal()}
+		s.readerWG.Add(1)
 
-	reader := &scriptedReader{
-		chunks: [][]byte{
-			[]byte("hello\nSENTINEL"),
-			[]byte("_0\n"),
-		},
-		delay: 5 * time.Millisecond,
-	}
-	go s.readLoop(reader, &s.stdoutBuf, true)
+		reader := &scriptedReader{
+			chunks: [][]byte{
+				[]byte("hello\nSENTINEL"),
+				[]byte("_0\n"),
+			},
+			delay: 5 * time.Millisecond,
+		}
+		go s.readLoop(reader, &s.stdoutBuf, true)
 
-	start := time.Now()
-	idx, rc, timedOut, overflow, err := s.waitForSentinel(context.Background(), []byte("SENTINEL"), 0, 1<<20)
-	elapsed := time.Since(start)
-	s.readerWG.Wait()
+		start := time.Now()
+		idx, rc, timedOut, overflow, err := s.waitForSentinel(t.Context(), []byte("SENTINEL"), 0, 1<<20)
+		elapsed := time.Since(start)
+		s.readerWG.Wait()
 
-	if err != nil {
-		t.Fatalf("waitForSentinel: %v", err)
-	}
-	if timedOut || overflow {
-		t.Fatalf("timedOut=%v overflow=%v, want both false", timedOut, overflow)
-	}
-	if idx < 0 {
-		t.Fatalf("sentinel not found: idx=%d", idx)
-	}
-	if rc != 0 {
-		t.Fatalf("rc = %d, want 0", rc)
-	}
-	// The exit-code line arrives ~5ms after the sentinel on a live signal.
-	// Before the fix readExitCode discarded that signal and only noticed the
-	// line on the 100ms fallback poll, so elapsed would be ~100ms.
-	if elapsed >= 80*time.Millisecond {
-		t.Fatalf("readExitCode gated on 100ms poll: elapsed %v", elapsed)
-	}
+		if err != nil {
+			t.Fatalf("waitForSentinel: %v", err)
+		}
+		if timedOut || overflow {
+			t.Fatalf("timedOut=%v overflow=%v, want both false", timedOut, overflow)
+		}
+		if idx < 0 {
+			t.Fatalf("sentinel not found: idx=%d", idx)
+		}
+		if rc != 0 {
+			t.Fatalf("rc = %d, want 0", rc)
+		}
+		// The exit-code line arrives 5ms after the sentinel on a live signal.
+		// Before the fix readExitCode discarded that signal and only noticed the
+		// line on the 100ms fallback poll, so elapsed would be about 100ms.
+		if elapsed >= 80*time.Millisecond {
+			t.Fatalf("readExitCode gated on 100ms poll: elapsed %v", elapsed)
+		}
+	})
 }
 
 func TestResolvedShellArgvIncludesExtraArgv(t *testing.T) {

@@ -7,10 +7,14 @@
 package mcptool
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"net/url"
+	"reflect"
 	"strings"
 	"unicode/utf8"
 
@@ -20,18 +24,49 @@ import (
 )
 
 // AddTool registers a tool.FuncTool on the given mcp.Server so it is exposed to MCP clients.
+// Native mcp.Content and []mcp.Content results are returned as MCP content blocks;
+// they must contain content types valid in a tool response. Nil content entries
+// are represented as the text "null". A *mcp.CallToolResult is returned as-is.
+// Array return schemas and their structured results are wrapped in an object with
+// a "result" property so structured output also works with older MCP clients.
+// The text content retains the original JSON for existing clients.
+// Explicit MCP results and MCP/framework content bypass this wrapping. When an
+// output schema is advertised, callers returning these types must provide
+// structured content matching that schema for successful results.
 func AddTool(src *mcp.Server, tl tool.FuncTool) {
+	outputSchema, wrapOutput := mcpOutputSchema(tl.ReturnSchema())
 	src.AddTool(&mcp.Tool{
 		Name:         tl.Name(),
 		Description:  tl.Description(),
 		InputSchema:  tl.Schema(),
-		OutputSchema: objectSchemaOrNil(tl.ReturnSchema()),
+		OutputSchema: outputSchema,
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		result, err := tl.Call(ctx, string(req.Params.Arguments))
 		if err != nil {
 			callResult := &mcp.CallToolResult{}
 			callResult.SetError(err)
 			return callResult, nil
+		}
+		if wrapOutput {
+			switch result.(type) {
+			case *mcp.CallToolResult, mcp.Content, []mcp.Content, message.Content, message.Contents, []message.Content:
+				// Explicit content results retain their existing conversion behavior.
+			default:
+				data, err := json.Marshal(result)
+				if err != nil {
+					callResult := &mcp.CallToolResult{}
+					callResult.SetError(fmt.Errorf("marshaling array tool result: %w", err))
+					return callResult, nil
+				}
+				text := string(data)
+				if raw, ok := result.(json.RawMessage); ok {
+					text = string(raw)
+				}
+				return &mcp.CallToolResult{
+					Content:           []mcp.Content{&mcp.TextContent{Text: text}},
+					StructuredContent: map[string]any{"result": json.RawMessage(data)},
+				}, nil
+			}
 		}
 		return agentResultToMCPCallToolResult(result), nil
 	})
@@ -46,13 +81,8 @@ func Connect(ctx context.Context, transport mcp.Transport) (*mcp.ClientSession, 
 	return client.Connect(ctx, transport, nil)
 }
 
-// ListTools enumerates the remote server's tools and wraps each as a tool.Tool.
+// ListTools enumerates all pages of the remote server's tools and wraps each as a tool.Tool.
 func ListTools(ctx context.Context, session *mcp.ClientSession) ([]tool.Tool, error) {
-	toolsResult, err := session.ListTools(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list tools: %w", err)
-	}
-
 	// Create agent.Tool instances for each MCP tool.
 	//
 	// Normalization (normalizeMCPName) can map distinct remote names onto the
@@ -62,9 +92,12 @@ func ListTools(ctx context.Context, session *mcp.ClientSession) ([]tool.Tool, er
 	// first tool. Detect it here and fail loudly so the caller gets a clear
 	// signal instead of missing/unreachable tools.
 	// Create tool.Tool instances for each MCP tool
-	result := make([]tool.Tool, 0, len(toolsResult.Tools))
-	seen := make(map[string]string, len(toolsResult.Tools))
-	for _, mcpTool := range toolsResult.Tools {
+	result := make([]tool.Tool, 0)
+	seen := make(map[string]string)
+	for mcpTool, err := range session.Tools(ctx, nil) {
+		if err != nil {
+			return nil, fmt.Errorf("failed to list tools: %w", err)
+		}
 		agentTool := newMCPToolWrapper(session, mcpTool)
 		if existing, ok := seen[agentTool.name]; ok {
 			return nil, fmt.Errorf("normalized MCP tool name collision: remote tools %q and %q both normalize to %q", existing, mcpTool.Name, agentTool.name)
@@ -84,7 +117,7 @@ func mcpCallToolResultToAgentContent(result *mcp.CallToolResult) message.Content
 	if mcpCallToolResultNeedsEnvelope(result) {
 		return message.Contents{
 			&message.TextContent{
-				ContentHeader: mcpContentHeader(result),
+				ContentHeader: mcpContentHeader(result, nil),
 				Text:          jsonText(result),
 			},
 		}
@@ -136,14 +169,14 @@ func mcpContentToAgentContentWithRaw(mcpContents []mcp.Content, rawOverride any)
 		switch contentValue := contentValue.(type) {
 		case *mcp.TextContent:
 			result = append(result, &message.TextContent{
-				ContentHeader: mcpContentHeader(raw),
+				ContentHeader: mcpContentHeader(raw, contentValue.Meta),
 				Text:          contentValue.Text,
 			})
 
 		case *mcp.ImageContent:
 			data, mediaType := mcpDataContent(contentValue.Data, contentValue.MIMEType, "image/*")
 			result = append(result, &message.DataContent{
-				ContentHeader: mcpContentHeader(raw),
+				ContentHeader: mcpContentHeader(raw, contentValue.Meta),
 				Data:          data,
 				MediaType:     mediaType,
 			})
@@ -151,14 +184,14 @@ func mcpContentToAgentContentWithRaw(mcpContents []mcp.Content, rawOverride any)
 		case *mcp.AudioContent:
 			data, mediaType := mcpDataContent(contentValue.Data, contentValue.MIMEType, "audio/*")
 			result = append(result, &message.DataContent{
-				ContentHeader: mcpContentHeader(raw),
+				ContentHeader: mcpContentHeader(raw, contentValue.Meta),
 				Data:          data,
 				MediaType:     mediaType,
 			})
 
 		case *mcp.ResourceLink:
 			result = append(result, &message.URIContent{
-				ContentHeader: mcpContentHeader(raw),
+				ContentHeader: mcpContentHeader(raw, contentValue.Meta),
 				MediaType:     contentValue.MIMEType,
 				URI:           contentValue.URI,
 			})
@@ -168,7 +201,7 @@ func mcpContentToAgentContentWithRaw(mcpContents []mcp.Content, rawOverride any)
 
 		case *mcp.ToolUseContent: //nolint:staticcheck // ToolUseContent is deprecated per SEP-2577 but remains functional during the deprecation window.
 			result = append(result, &message.TextContent{
-				ContentHeader: mcpContentHeader(raw),
+				ContentHeader: mcpContentHeader(raw, contentValue.Meta),
 				Text:          jsonText(contentValue),
 			})
 
@@ -178,14 +211,14 @@ func mcpContentToAgentContentWithRaw(mcpContents []mcp.Content, rawOverride any)
 				result = append(result, nestedContents...)
 			} else {
 				result = append(result, &message.TextContent{
-					ContentHeader: mcpContentHeader(raw),
+					ContentHeader: mcpContentHeader(raw, contentValue.Meta),
 					Text:          jsonText(contentValue.StructuredContent),
 				})
 			}
 
 		default:
 			result = append(result, &message.TextContent{
-				ContentHeader: mcpContentHeader(raw),
+				ContentHeader: mcpContentHeader(raw, nil),
 				Text:          fmt.Sprintf("[Unknown MCP content type: %T]", contentValue),
 			})
 		}
@@ -197,12 +230,12 @@ func mcpContentToAgentContentWithRaw(mcpContents []mcp.Content, rawOverride any)
 func mcpEmbeddedResourceToAgentContent(contentValue *mcp.EmbeddedResource, raw any) message.Content {
 	if contentValue.Resource == nil {
 		return &message.TextContent{
-			ContentHeader: mcpContentHeader(raw),
+			ContentHeader: mcpContentHeader(raw, contentValue.Meta),
 			Text:          "[MCP embedded resource missing resource data]",
 		}
 	}
 
-	header := mcpContentHeader(raw)
+	header := mcpContentHeader(raw, contentValue.Meta)
 	if contentValue.Resource.Text != "" {
 		return &message.TextContent{
 			ContentHeader: header,
@@ -219,9 +252,10 @@ func mcpEmbeddedResourceToAgentContent(contentValue *mcp.EmbeddedResource, raw a
 	}
 }
 
-func mcpContentHeader(raw any) message.ContentHeader {
+func mcpContentHeader(raw any, meta mcp.Meta) message.ContentHeader {
 	return message.ContentHeader{
-		RawRepresentation: raw,
+		RawRepresentation:    raw,
+		AdditionalProperties: maps.Clone(meta),
 	}
 }
 
@@ -267,24 +301,86 @@ func jsonText(value any) string {
 	return string(data)
 }
 
-func objectSchemaOrNil(schema any) any {
+func mcpOutputSchema(schema any) (any, bool) {
 	if schema == nil {
-		return nil
+		return nil, false
 	}
-	schemaMap, ok := schema.(map[string]any)
-	if !ok {
-		data, err := json.Marshal(schema)
-		if err != nil {
-			return nil
+	// Decode a copy so relocating references never changes the tool's schema.
+	data, err := json.Marshal(schema)
+	if err != nil {
+		return nil, false
+	}
+	var schemaMap map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schemaMap); err != nil {
+		return nil, false
+	}
+	if schemaMap["type"] == "object" {
+		return schema, false
+	}
+	isArray := schemaMap["type"] == "array"
+	if types, ok := schemaMap["type"].([]any); ok {
+		for _, typ := range types {
+			if typ != "array" && typ != "null" {
+				return nil, false
+			}
+			if typ == "array" {
+				isArray = true
+			}
 		}
-		if err := json.Unmarshal(data, &schemaMap); err != nil {
-			return nil
+	}
+	if !isArray {
+		return nil, false
+	}
+	relocateOutputSchemaRefs(schemaMap)
+	wrapped := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"result": schemaMap},
+		"required":   []string{"result"},
+	}
+	if dialect, ok := schemaMap["$schema"]; ok {
+		wrapped["$schema"] = dialect
+	}
+	return wrapped, true
+}
+
+// The schema moves under properties.result. Only visit schema keywords, leaving
+// JSON data in defaults/examples unchanged. A nested $id establishes its own root.
+func relocateOutputSchemaRefs(value any) {
+	switch schema := value.(type) {
+	case map[string]any:
+		if id, _ := schema["$id"].(string); id != "" {
+			return
+		}
+		for _, key := range []string{"$ref", "$dynamicRef"} {
+			ref, _ := schema[key].(string)
+			if !strings.HasPrefix(ref, "#") {
+				continue
+			}
+			fragment, err := url.PathUnescape(ref[1:])
+			if err == nil && (fragment == "" || strings.HasPrefix(fragment, "/")) {
+				schema[key] = "#/properties/result" + ref[1:]
+			}
+		}
+		for key, child := range schema {
+			switch key {
+			case "$defs", "definitions", "properties", "patternProperties", "dependentSchemas", "dependencies":
+				if children, ok := child.(map[string]any); ok {
+					for _, child := range children {
+						relocateOutputSchemaRefs(child)
+					}
+				}
+			case "items", "prefixItems", "contains", "contentSchema", "additionalItems", "additionalProperties",
+				"unevaluatedItems", "unevaluatedProperties", "propertyNames", "allOf", "anyOf", "oneOf", "not", "if", "then", "else":
+				relocateOutputSchemaRefs(child)
+			}
+		}
+	case []any:
+		for _, child := range schema {
+			relocateOutputSchemaRefs(child)
 		}
 	}
-	if schemaMap["type"] != "object" {
-		return nil
-	}
-	return schema
 }
 
 func agentResultToMCPCallToolResult(result any) *mcp.CallToolResult {
@@ -293,6 +389,14 @@ func agentResultToMCPCallToolResult(result any) *mcp.CallToolResult {
 		return &mcp.CallToolResult{}
 	case *mcp.CallToolResult:
 		return resultValue
+	case mcp.Content:
+		return &mcp.CallToolResult{Content: []mcp.Content{nativeMCPContentOrNull(resultValue)}}
+	case []mcp.Content:
+		contents := make([]mcp.Content, len(resultValue))
+		for i, content := range resultValue {
+			contents[i] = nativeMCPContentOrNull(content)
+		}
+		return &mcp.CallToolResult{Content: contents}
 	case string:
 		return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: resultValue}}}
 	case json.RawMessage:
@@ -321,6 +425,15 @@ func agentResultToMCPCallToolResult(result any) *mcp.CallToolResult {
 	default:
 		return structuredResultToMCPCallToolResult(resultValue)
 	}
+}
+
+// Native MCP content should remain a protocol content block. Nil pointers need
+// a fallback because the SDK content marshalers dereference their receivers.
+func nativeMCPContentOrNull(content mcp.Content) mcp.Content {
+	if content == nil || (reflect.ValueOf(content).Kind() == reflect.Pointer && reflect.ValueOf(content).IsNil()) {
+		return &mcp.TextContent{Text: "null"}
+	}
+	return content
 }
 
 func functionResultToMCPCallToolResult(functionResult *message.FunctionResultContent) *mcp.CallToolResult {
@@ -370,23 +483,24 @@ func agentContentToMCPContent(contentValue message.Content) mcp.Content {
 	switch c := contentValue.(type) {
 	case *message.TextContent:
 		if c != nil {
-			return &mcp.TextContent{Text: c.Text}
+			return &mcp.TextContent{Text: c.Text, Meta: maps.Clone(c.AdditionalProperties)}
 		}
 	case *message.ErrorContent:
 		if c != nil {
-			return &mcp.TextContent{Text: c.Message}
+			return &mcp.TextContent{Text: c.Message, Meta: maps.Clone(c.AdditionalProperties)}
 		}
 	case *message.DataContent:
 		if c != nil {
+			meta := maps.Clone(c.AdditionalProperties)
 			data, err := base64.StdEncoding.DecodeString(c.Data)
 			if err != nil {
-				return &mcp.TextContent{Text: fmt.Sprintf("[Invalid data content: %v]", err)}
+				return &mcp.TextContent{Text: fmt.Sprintf("[Invalid data content: %v]", err), Meta: meta}
 			}
 			switch c.TopLevelMediaType() {
 			case "image":
-				return &mcp.ImageContent{Data: data, MIMEType: c.MediaType}
+				return &mcp.ImageContent{Data: data, MIMEType: c.MediaType, Meta: meta}
 			case "audio":
-				return &mcp.AudioContent{Data: data, MIMEType: c.MediaType}
+				return &mcp.AudioContent{Data: data, MIMEType: c.MediaType, Meta: meta}
 			case "text":
 				// Text resources carry their payload in Text, not Blob. The reverse
 				// mapping (mcpContentToAgentContent) already reads Resource.Text for
@@ -394,19 +508,19 @@ func agentContentToMCPContent(contentValue message.Content) mcp.Content {
 				// Non-UTF-8 payloads cannot survive JSON transport as Text (invalid
 				// sequences are replaced), so fall back to Blob for those.
 				if utf8.Valid(data) {
-					return &mcp.EmbeddedResource{Resource: &mcp.ResourceContents{
+					return &mcp.EmbeddedResource{Meta: meta, Resource: &mcp.ResourceContents{
 						URI:      c.Name,
 						MIMEType: c.MediaType,
 						Text:     string(data),
 					}}
 				}
-				return &mcp.EmbeddedResource{Resource: &mcp.ResourceContents{
+				return &mcp.EmbeddedResource{Meta: meta, Resource: &mcp.ResourceContents{
 					URI:      c.Name,
 					MIMEType: c.MediaType,
 					Blob:     data,
 				}}
 			default:
-				return &mcp.EmbeddedResource{Resource: &mcp.ResourceContents{
+				return &mcp.EmbeddedResource{Meta: meta, Resource: &mcp.ResourceContents{
 					URI:      c.Name,
 					MIMEType: c.MediaType,
 					Blob:     data,
@@ -415,10 +529,17 @@ func agentContentToMCPContent(contentValue message.Content) mcp.Content {
 		}
 	case *message.URIContent:
 		if c != nil {
-			return &mcp.ResourceLink{URI: c.URI, MIMEType: c.MediaType}
+			// MCP requires a non-empty resource-link name; URIContent has none,
+			// so default it to the URI (as the embedded-resource path already
+			// does), rather than emitting an empty required field.
+			return &mcp.ResourceLink{Name: c.URI, URI: c.URI, MIMEType: c.MediaType, Meta: maps.Clone(c.AdditionalProperties)}
 		}
 	}
-	return &mcp.TextContent{Text: jsonText(contentValue)}
+	var meta mcp.Meta
+	if contentValue != nil && (reflect.ValueOf(contentValue).Kind() != reflect.Pointer || !reflect.ValueOf(contentValue).IsNil()) {
+		meta = maps.Clone(contentValue.Header().AdditionalProperties)
+	}
+	return &mcp.TextContent{Text: jsonText(contentValue), Meta: meta}
 }
 
 var (

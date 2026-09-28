@@ -63,8 +63,9 @@ func NewAgent(cclient *copilot.Client, config AgentConfig) *agent.Agent {
 		cfg:    config,
 	}
 	return agent.New(agent.ProviderConfig{
-		ProviderName: "copilot",
-		Run:          p.run,
+		ProviderName:         "copilot",
+		Run:                  p.run,
+		ManagesToolExecution: true,
 	}, config.Config)
 }
 
@@ -104,8 +105,9 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 		}
 		defer func() { _ = copilotSession.Disconnect() }()
 
-		if frameworkSession != nil && frameworkSession.ServiceID() == "" {
-			frameworkSession.SetServiceID(copilotSession.SessionID)
+		var conversationID *string
+		if copilotSession.SessionID != "" {
+			conversationID = &copilotSession.SessionID
 		}
 
 		messageOptions, cleanupAttachments, err := buildMessageOptions(messages)
@@ -128,6 +130,7 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 			}
 			update, done, eventErr := p.responseUpdateForSessionEvent(event, isStreaming)
 			if update != nil {
+				update.ConversationID = conversationID
 				if !yield(update, nil) {
 					return
 				}
@@ -241,9 +244,13 @@ func (p *provider) openSession(
 	eventHandler copilot.SessionEventHandler,
 	options []agent.Option,
 ) (*copilot.Session, error) {
-	if frameworkSession != nil && frameworkSession.ServiceID() != "" {
+	id, ok := agent.GetOption(options, agent.WithServiceID)
+	if !ok {
+		id = frameworkSession.ServiceID()
+	}
+	if id != "" {
 		cfg := p.resumeSessionConfig(streaming, eventHandler, options)
-		return p.client.ResumeSession(ctx, frameworkSession.ServiceID(), &cfg)
+		return p.client.ResumeSession(ctx, id, &cfg)
 	}
 	cfg := p.sessionConfig(streaming, eventHandler, options)
 	return p.client.CreateSession(ctx, &cfg)
@@ -499,6 +506,7 @@ func toCopilotTool(funcTool tool.FuncTool) (copilot.Tool, error) {
 			if ctx == nil {
 				ctx = context.Background()
 			}
+			ctx = agent.WithFuncCallID(ctx, invocation.ToolCallID)
 			result, err := funcTool.Call(ctx, arguments)
 			if err != nil {
 				return copilot.ToolResult{}, err
@@ -668,10 +676,32 @@ func (p *provider) assistantMessageUpdate(event copilot.SessionEvent, data *copi
 			ContentHeader: message.ContentHeader{RawRepresentation: event},
 		}}
 	} else {
-		update.Contents = []message.Content{&message.TextContent{
+		textContent := &message.TextContent{
 			ContentHeader: message.ContentHeader{RawRepresentation: event},
 			Text:          data.Content,
-		}}
+		}
+		// Surface native model citations (enabled via
+		// AgentConfig.SessionConfig.EnableCitations) as CitationAnnotations,
+		// mirroring the OpenAI chat/Responses providers.
+		if data.Citations != nil {
+			for _, source := range data.Citations.Sources {
+				fileID := firstNonNilString(source.Path)
+				title := firstNonNilString(source.Title)
+				url := firstNonNilString(source.URL)
+				// Skip sources with no usable fields so we do not emit an empty
+				// annotation, matching the filtering other providers apply.
+				if fileID == "" && title == "" && url == "" {
+					continue
+				}
+				textContent.Annotations = append(textContent.Annotations, &message.CitationAnnotation{
+					FileID:            fileID,
+					Title:             title,
+					URL:               url,
+					RawRepresentation: source,
+				})
+			}
+		}
+		update.Contents = []message.Content{textContent}
 		if data.ReasoningText != nil {
 			update.Contents = append(update.Contents, &message.TextReasoningContent{
 				ContentHeader: message.ContentHeader{RawRepresentation: event},
@@ -807,7 +837,14 @@ func (p *provider) assistantUsageUpdate(event copilot.SessionEvent, data *copilo
 			Details:       details,
 		}},
 	}
-	if data.FinishReason != nil {
+	// Content filtering takes precedence over the raw finish reason: when the
+	// response was blocked or truncated by content filtering (a "refusal" stop
+	// reason for Anthropic models), report the canonical "content_filter",
+	// matching the Python client.
+	switch {
+	case data.ContentFilterTriggered != nil && *data.ContentFilterTriggered:
+		update.FinishReason = "content_filter"
+	case data.FinishReason != nil:
 		update.FinishReason = *data.FinishReason
 	}
 	return update

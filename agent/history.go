@@ -4,6 +4,8 @@ package agent
 
 import (
 	"context"
+	"errors"
+	"iter"
 	"runtime"
 	"slices"
 	"sync"
@@ -285,4 +287,126 @@ func getInMemoryHistoryProviderState(session *Session, stateKey string, initiali
 	}
 	session.Set(stateKey, state)
 	return state, nil
+}
+
+// This ID tells outer middleware that history is retained downstream. It never
+// reaches the service, and is only used with per-service-call persistence.
+const localHistoryConversationID = "_agent_local_chat_history"
+
+func (a *Agent) persistServiceCallHistory(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
+	return func(yield func(*ResponseUpdate, error) bool) {
+		session, _ := GetOption(options, WithSession)
+		serviceID, _ := GetOption(options, WithServiceID)
+		if serviceID == localHistoryConversationID {
+			serviceID = ""
+			options = append(slices.Clone(options), WithServiceID(""))
+		}
+		continuationToken, _ := GetOption(options, WithContinuationToken)
+		allowBackground, _ := GetOption(options, AllowBackgroundResponses)
+		backgroundOrContinuation := continuationToken != "" || allowBackground
+		serviceManaged := serviceID != ""
+		// Simulation is selected by the request, independently of any real
+		// conversation ID returned later in the stream.
+		skipSimulation := serviceManaged || backgroundOrContinuation
+		messagesForService := messages
+		if !skipSimulation {
+			if history := a.historyProviderForSession(session, options, false); history != nil {
+				var err error
+				messagesForService, err = history.Invoking(ctx, InvokingContext{Messages: messages, Options: options})
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+			}
+		}
+
+		stream, _ := GetOption(options, Stream)
+		var response Response
+		var runErr error
+		var stopped bool
+		for update, err := range next(ctx, messagesForService, options...) {
+			if err != nil {
+				runErr = err
+				break
+			}
+			// Assemble the actual service response before outer middleware can
+			// replace function calls with approval requests or stamp its own ID.
+			response.Update(update)
+			if stream {
+				if update != nil {
+					if update.ConversationID != nil && *update.ConversationID != "" {
+						serviceManaged = true
+					} else if !skipSimulation {
+						out := *update
+						out.ConversationID = new(localHistoryConversationID)
+						update = &out
+					}
+				}
+				if !yield(update, nil) {
+					stopped = true
+					break
+				}
+			}
+		}
+		if stopped {
+			if len(messages) > 0 {
+				// Preserve inputs on a cooperative pause, notably tool results
+				// paired with calls already stored by an earlier service request.
+				// Cleanup must not replace the caller's reason for stopping.
+				persistCtx := ctx
+				if ctx.Err() != nil {
+					persistCtx = context.WithoutCancel(ctx)
+				}
+				_ = a.notifyServiceCallProviders(persistCtx, session, messages, nil, options, nil)
+			}
+			return
+		}
+		if runErr != nil {
+			if err := a.notifyServiceCallProviders(ctx, session, messages, nil, options, runErr); err != nil {
+				runErr = errors.Join(runErr, err)
+			}
+			yield(nil, runErr)
+			return
+		}
+		response.Coalesce()
+		if err := a.notifyServiceCallProviders(ctx, session, messages, response.Messages, options, nil); err != nil {
+			yield(nil, err)
+			return
+		}
+		// Background and continuation calls still notify providers above, but
+		// leave session IDs to the outer, continuation-aware lifecycle.
+		if !backgroundOrContinuation {
+			if serviceManaged || response.ConversationID != nil && *response.ConversationID != "" {
+				if err := a.updateSessionConversationID(ctx, session, response.ConversationID); err != nil {
+					yield(nil, err)
+					return
+				}
+			} else {
+				response.ConversationID = new(localHistoryConversationID)
+				session.SetServiceID(localHistoryConversationID)
+			}
+		}
+		if !stream {
+			for _, update := range response.ToUpdates() {
+				if !yield(update, nil) {
+					return
+				}
+			}
+		}
+	}
+}
+
+func (a *Agent) notifyServiceCallProviders(ctx context.Context, session *Session, requests, responses []*message.Message, options []Option, runErr error) error {
+	invoked := InvokedContext{RequestMessages: requests, ResponseMessages: responses, Options: options, Err: runErr}
+	if history := a.historyProviderForSession(session, options, false); history != nil {
+		if err := history.Invoked(ctx, invoked); err != nil {
+			return err
+		}
+	}
+	for _, provider := range a.contextProviders {
+		if err := provider.Invoked(ctx, invoked); err != nil {
+			return err
+		}
+	}
+	return nil
 }

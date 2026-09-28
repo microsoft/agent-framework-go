@@ -147,6 +147,39 @@ func TestTruncationStrategy_ExcludesOldestGroups(t *testing.T) {
 	}
 }
 
+func TestTruncationStrategy_PreservesRawJSONBelowTokenLimit(t *testing.T) {
+	const payload = `{"order_id":"ORD-1042","status":"shipped"}`
+	for _, tt := range []struct {
+		name   string
+		result any
+	}{
+		{name: "raw JSON", result: json.RawMessage(payload)},
+		{name: "string", result: payload},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			messages := []*message.Message{
+				textMessage(message.RoleUser, "lookup"),
+				functionCallMessage("call-1", "lookup_order"),
+				functionResultMessage("call-1", tt.result),
+			}
+			index := compaction.CreateMessageIndex(messages, nil)
+			if got, want := index.TotalByteCount(), 72; got != want {
+				t.Errorf("TotalByteCount = %d, want %d", got, want)
+			}
+			strategy := &compaction.TruncationStrategy{
+				Trigger:                compaction.TokensExceed(25),
+				MinimumPreservedGroups: new(1),
+			}
+			if compacted, err := strategy.Compact(t.Context(), index); err != nil || compacted {
+				t.Fatalf("Compact = %t, %v; want no compaction below the token limit", compacted, err)
+			}
+			if got, want := len(index.IncludedMessages()), len(messages); got != want {
+				t.Errorf("retained %d messages, want %d", got, want)
+			}
+		})
+	}
+}
+
 func TestTruncationStrategy_SkipsPreExcludedAndSystemGroups(t *testing.T) {
 	index := compaction.CreateMessageIndex([]*message.Message{
 		textMessage(message.RoleSystem, "system"),
@@ -347,6 +380,44 @@ func TestToolResultStrategy_CollapsesOldToolGroups(t *testing.T) {
 	}
 	if !isSummaryMessage(index.IncludedMessages()[1]) {
 		t.Fatal("expected collapsed tool result to be marked as summary")
+	}
+}
+
+func TestDefaultToolCallFormatter_ResultTypes(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		result any
+		want   string
+	}{
+		{name: "raw JSON object", result: json.RawMessage(`{"status":"shipped"}`), want: "[Tool Calls]\nlookup:\n  - {\"status\":\"shipped\"}"},
+		{name: "raw JSON array", result: json.RawMessage(`["first","second"]`), want: "[Tool Calls]\nlookup:\n  - [\"first\",\"second\"]"},
+		{name: "raw JSON null", result: json.RawMessage(`null`), want: "[Tool Calls]\nlookup:\n  - null"},
+		{name: "empty raw JSON", result: json.RawMessage{}, want: "[Tool Calls]\nlookup:"},
+		{name: "nil raw JSON", result: json.RawMessage(nil), want: "[Tool Calls]\nlookup:"},
+		{name: "string", result: "shipped", want: "[Tool Calls]\nlookup:\n  - shipped"},
+		{name: "number", result: 42, want: "[Tool Calls]\nlookup:\n  - 42"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			group := &compaction.MessageGroup{
+				Messages: []*message.Message{
+					{
+						Role: message.RoleAssistant,
+						Contents: []message.Content{
+							&message.FunctionCallContent{CallID: "call-1", Name: "lookup"},
+						},
+					},
+					{
+						Role: message.RoleTool,
+						Contents: []message.Content{
+							&message.FunctionResultContent{CallID: "call-1", Result: tc.result},
+						},
+					},
+				},
+			}
+			if got := compaction.DefaultToolCallFormatter(group); got != tc.want {
+				t.Fatalf("formatter output = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

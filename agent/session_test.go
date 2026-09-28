@@ -283,3 +283,27 @@ func mustUnmarshalJSON(t *testing.T, data []byte, session *agent.Session) {
 		t.Fatalf("unexpected unmarshal error: %v", err)
 	}
 }
+
+func TestSession_MarshalAfterGet_PreservesUnreadFields(t *testing.T) {
+	// A Session round-trips through encoding/json for persistence. Reading a key
+	// with a partial/narrower struct must not cause the unread fields to be
+	// dropped when the session is later re-serialized.
+	const original = `{"State":{"k":{"A":1,"B":2}},"ServiceID":""}`
+	var s agent.Session
+	if err := json.Unmarshal([]byte(original), &s); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	var partial struct {
+		A int
+	}
+	if ok, err := s.Get("k", &partial); err != nil || !ok {
+		t.Fatalf("Get: ok=%v err=%v", ok, err)
+	}
+	out, err := json.Marshal(&s)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if string(out) != original {
+		t.Errorf("round-trip corrupted after Get:\n got:  %s\n want: %s", out, original)
+	}
+}

@@ -15,11 +15,18 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
+)
+
+const (
+	loadSkillToolName         = "load_skill"
+	readSkillResourceToolName = "read_skill_resource"
+	runSkillScriptToolName    = "run_skill_script"
 )
 
 func funcToolPointer(t *testing.T, value tool.FuncTool) uintptr {
@@ -203,8 +210,100 @@ func TestProvider_DefaultApproval_RequiresAllSkillTools(t *testing.T) {
 	}}, nil, root)
 
 	_, tools := captureProviderContext(t, provider)
-	for _, name := range []string{"load_skill", "read_skill_resource", "run_skill_script"} {
+	for _, name := range []string{loadSkillToolName, readSkillResourceToolName, runSkillScriptToolName} {
 		assertToolApprovalRequired(t, findTool(t, tools, name), true)
+	}
+}
+
+func TestProvider_ReadOnlyToolsAutoApprovalRule(t *testing.T) {
+	tests := []struct {
+		name string
+		call *message.FunctionCallContent
+		want bool
+	}{
+		{
+			name: "load_skill",
+			call: &message.FunctionCallContent{Name: loadSkillToolName},
+			want: true,
+		},
+		{
+			name: "read_skill_resource",
+			call: &message.FunctionCallContent{Name: readSkillResourceToolName},
+			want: true,
+		},
+		{
+			name: "run_skill_script",
+			call: &message.FunctionCallContent{Name: runSkillScriptToolName},
+			want: false,
+		},
+		{
+			name: "other tool",
+			call: &message.FunctionCallContent{Name: "weather"},
+			want: false,
+		},
+		{
+			name: "nil function call",
+			call: nil,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := skills.ReadOnlyToolsAutoApprovalRule(t.Context(), &toolapproval.ToolAutoApprovalRuleContext{FunctionCall: tt.call})
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("expected %t, got %t", tt.want, got)
+			}
+		})
+	}
+}
+
+func TestProvider_AllToolsAutoApprovalRule(t *testing.T) {
+	tests := []struct {
+		name string
+		call *message.FunctionCallContent
+		want bool
+	}{
+		{
+			name: "load_skill",
+			call: &message.FunctionCallContent{Name: loadSkillToolName},
+			want: true,
+		},
+		{
+			name: "read_skill_resource",
+			call: &message.FunctionCallContent{Name: readSkillResourceToolName},
+			want: true,
+		},
+		{
+			name: "run_skill_script",
+			call: &message.FunctionCallContent{Name: runSkillScriptToolName},
+			want: true,
+		},
+		{
+			name: "other tool",
+			call: &message.FunctionCallContent{Name: "weather"},
+			want: false,
+		},
+		{
+			name: "nil function call",
+			call: nil,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := skills.AllToolsAutoApprovalRule(t.Context(), &toolapproval.ToolAutoApprovalRuleContext{FunctionCall: tt.call})
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("expected %t, got %t", tt.want, got)
+			}
+		})
 	}
 }
 
@@ -481,7 +580,7 @@ func TestProvider_WithScripts_ExposesRunSkillScriptTool(t *testing.T) {
 	}, nil, root)
 
 	_, tools := captureProviderContext(t, provider)
-	runTool := findTool(t, tools, "run_skill_script")
+	runTool := findTool(t, tools, runSkillScriptToolName)
 	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"scripts/run.py","arguments":["--value","42"]}`)
 	if err != nil {
 		t.Fatal(err)
@@ -512,7 +611,7 @@ func TestProvider_RunSkillScript_RequiresExactName(t *testing.T) {
 	}, nil, root)
 
 	_, tools := captureProviderContext(t, provider)
-	runTool := findTool(t, tools, "run_skill_script")
+	runTool := findTool(t, tools, runSkillScriptToolName)
 	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"./scripts/run.py"}`)
 	if err != nil {
 		t.Fatalf("expected no tool error, got %v", err)
@@ -600,7 +699,7 @@ func TestProvider_RunSkillScript_PropagatesErrorByDefault(t *testing.T) {
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
 
 	_, tools := captureProviderContext(t, provider)
-	runTool := findTool(t, tools, "run_skill_script")
+	runTool := findTool(t, tools, runSkillScriptToolName)
 	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"explode"}`)
 	if err == nil {
 		t.Fatalf("expected script error to propagate, got result %#v", result)
@@ -620,7 +719,7 @@ func TestProvider_RunSkillScript_PropagatesNilRunnerErrorByDefault(t *testing.T)
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
 
 	_, tools := captureProviderContext(t, provider)
-	runTool := findTool(t, tools, "run_skill_script")
+	runTool := findTool(t, tools, runSkillScriptToolName)
 	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"explode"}`)
 	if err == nil {
 		t.Fatalf("expected nil-runner error to propagate, got result %#v", result)
@@ -648,7 +747,7 @@ func TestProvider_RunSkillScript_IncludesDetailsWhenEnabled(t *testing.T) {
 	})
 
 	_, tools := captureProviderContext(t, provider)
-	runTool := findTool(t, tools, "run_skill_script")
+	runTool := findTool(t, tools, runSkillScriptToolName)
 	result, err := runTool.Call(t.Context(), `{"skillName":"script-skill","scriptName":"explode"}`)
 	if err != nil {
 		t.Fatal(err)
@@ -700,7 +799,7 @@ func TestProvider_DisableSkillToolApprovalOptions_DisableApprovalPerTool(t *test
 	}, root)
 
 	_, tools := captureProviderContext(t, provider)
-	for _, name := range []string{"load_skill", "read_skill_resource", "run_skill_script"} {
+	for _, name := range []string{loadSkillToolName, readSkillResourceToolName, runSkillScriptToolName} {
 		assertToolApprovalRequired(t, findTool(t, tools, name), false)
 	}
 }
@@ -720,27 +819,27 @@ func TestProvider_DisableSkillToolApprovalOptions_AffectOnlyTargetTool(t *testin
 			name: "load_skill",
 			opts: skills.ContextProviderOptions{DisableLoadSkillApproval: true},
 			want: map[string]bool{
-				"load_skill":          false,
-				"read_skill_resource": true,
-				"run_skill_script":    true,
+				loadSkillToolName:         false,
+				readSkillResourceToolName: true,
+				runSkillScriptToolName:    true,
 			},
 		},
 		{
 			name: "read_skill_resource",
 			opts: skills.ContextProviderOptions{DisableReadSkillResourceApproval: true},
 			want: map[string]bool{
-				"load_skill":          true,
-				"read_skill_resource": false,
-				"run_skill_script":    true,
+				loadSkillToolName:         true,
+				readSkillResourceToolName: false,
+				runSkillScriptToolName:    true,
 			},
 		},
 		{
 			name: "run_skill_script",
 			opts: skills.ContextProviderOptions{DisableRunSkillScriptApproval: true},
 			want: map[string]bool{
-				"load_skill":          true,
-				"read_skill_resource": true,
-				"run_skill_script":    false,
+				loadSkillToolName:         true,
+				readSkillResourceToolName: true,
+				runSkillScriptToolName:    false,
 			},
 		},
 	}
@@ -778,7 +877,7 @@ func TestProvider_FromFileSourceWithRunner_UsesScriptRunner(t *testing.T) {
 	)
 
 	_, tools := captureProviderContext(t, provider)
-	runTool := findTool(t, tools, "run_skill_script")
+	runTool := findTool(t, tools, runSkillScriptToolName)
 	result, err := runTool.Call(t.Context(), `{"skillName":"runner-skill","scriptName":"scripts/run.py"}`)
 	if err != nil {
 		t.Fatal(err)
@@ -810,7 +909,7 @@ func TestNewProvider_ProvidesInlineSkills(t *testing.T) {
 	for i, t2 := range tools {
 		toolNames[i] = t2.Name()
 	}
-	for _, name := range []string{"load_skill", "read_skill_resource", "run_skill_script"} {
+	for _, name := range []string{loadSkillToolName, readSkillResourceToolName, runSkillScriptToolName} {
 		if !slices.Contains(toolNames, name) {
 			t.Fatalf("expected %s tool to be present, got %v", name, toolNames)
 		}

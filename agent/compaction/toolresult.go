@@ -4,6 +4,7 @@ package compaction
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -99,8 +100,8 @@ func (strategy *ToolResultStrategy) Compact(_ context.Context, index *MessageInd
 	return compacted, nil
 }
 
-// DefaultToolCallFormatter produces a YAML-like summary of tool-call groups, including tool names,
-// results, and deduplication counts for repeated tool names.
+// DefaultToolCallFormatter produces a YAML-like summary of tool-call groups, listing each
+// tool name once with its results grouped beneath it.
 //
 // This is the formatter used when no custom ToolCallFormatter is supplied. It can be referenced
 // directly in a custom formatter to augment or wrap the default output.
@@ -120,7 +121,11 @@ func DefaultToolCallFormatter(group *MessageGroup) string {
 			case *message.FunctionCallContent:
 				functionCalls = append(functionCalls, call{id: typed.CallID, name: typed.Name})
 			case *message.FunctionResultContent:
-				resultsByCallID[typed.CallID] = fmt.Sprint(typed.Result)
+				if raw, ok := typed.Result.(json.RawMessage); ok {
+					resultsByCallID[typed.CallID] = string(raw)
+				} else {
+					resultsByCallID[typed.CallID] = fmt.Sprint(typed.Result)
+				}
 				hasFunctionResult = true
 			}
 		}

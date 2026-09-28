@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/agentopts"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -42,8 +43,8 @@ type Config struct {
 	// asks to continue wins, and the loop stops only when all evaluators stop.
 	Evaluators []Evaluator
 
-	// MaxIterations is the absolute safety cap for a single run. When nil,
-	// DefaultMaxIterations is used.
+	// MaxIterations is the absolute safety cap for a single run. When nil, a
+	// default of 10 iterations is used.
 	MaxIterations *int
 
 	// OnBehalfOfAuthorName stamps loop-synthesized feedback messages. When empty,
@@ -173,6 +174,13 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 		initialMessages := cloneMessages(messages)
 		currentMessages := cloneMessages(messages)
 		currentOpts := slices.Clone(opts)
+		var retainHistory bool
+		for _, opt := range opts {
+			if _, ok := opt.(agentopts.SessionlessHistory); ok {
+				retainHistory = !cfg.FreshContextPerIteration
+			}
+		}
+		var historyMessages []*message.Message
 		stream, _ := agent.GetOption(opts, agent.Stream)
 		returnLastResponseOnly := cfg.NonStreamingReturnsLastResponseOnly && !stream
 		initialSession, hasSession := agent.GetOption(opts, agent.WithSession)
@@ -194,7 +202,18 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 		for {
 			var resp agent.Response
 			var iterationUpdates []*agent.ResponseUpdate
-			for update, err := range next(ctx, currentMessages, currentOpts...) {
+			messagesToSend := currentMessages
+			activeSession, _ := agent.GetOption(currentOpts, agent.WithSession)
+			serviceID, _ := agent.GetOption(currentOpts, agent.WithServiceID)
+			if retainHistory && activeSession.ServiceID() == "" && serviceID == "" {
+				messagesToSend = make([]*message.Message, 0, len(historyMessages)+len(currentMessages))
+				source := message.Source{Type: agent.SourceTypeHistoryProvider, ID: "loop"}
+				for _, msg := range historyMessages {
+					messagesToSend = append(messagesToSend, msg.WithSource(source))
+				}
+				messagesToSend = append(messagesToSend, currentMessages...)
+			}
+			for update, err := range next(ctx, messagesToSend, currentOpts...) {
 				if update != nil {
 					resp.Update(update)
 					if returnLastResponseOnly {
@@ -213,6 +232,12 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 				}
 			}
 			resp.Coalesce()
+			if retainHistory {
+				// Retain the completed iteration, not the intermediate invocations
+				// performed by downstream middleware such as tool approval.
+				historyMessages = append(historyMessages, currentMessages...)
+				historyMessages = append(historyMessages, resp.Messages...)
+			}
 			loopCtx.Iteration++
 			loopCtx.LastResponse = &resp
 

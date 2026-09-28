@@ -58,11 +58,17 @@ func (v *stateValue) readInto(out any) (bool, error) {
 }
 
 func (v *stateValue) MarshalJSON() ([]byte, error) {
-	if v.hasCached {
-		return json.Marshal(v.cached)
-	}
+	// Prefer the original raw JSON when present: it is the authoritative
+	// serialized form for a deserialized value and preserves fields that were
+	// never read. Reading a value caches a typed copy (readInto), but that copy
+	// may be a narrower/partial view, so re-encoding it would silently drop the
+	// unread fields on the next save. Values created via Set have raw == nil and
+	// marshal losslessly from cached.
 	if v.raw != nil {
 		return slices.Clone(v.raw), nil
+	}
+	if v.hasCached {
+		return json.Marshal(v.cached)
 	}
 	return []byte("null"), nil
 }

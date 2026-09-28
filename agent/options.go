@@ -96,7 +96,10 @@ func AllOptions[T any](opts []Option, setter func(T) Option) iter.Seq[T] {
 	}
 }
 
-// WithServiceID sets the service ID for a session.
+// WithServiceID supplies a provider-specific service ID. On [Agent.CreateSession]
+// it seeds the new session; on [Agent.Run] it must match a non-empty session ID.
+// During automatic tool calls [ResponseUpdate.ConversationID] determines the ID
+// used on the next provider request, including when a missing ID clears an old one.
 func WithServiceID(id string) Option {
 	return serviceIDOpt(id)
 }

@@ -14,7 +14,11 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness/loop"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
 func TestLoop_StopsImmediately_InvokesOnce(t *testing.T) {
@@ -71,8 +75,238 @@ func TestLoop_ContinuesUntilEvaluatorStops(t *testing.T) {
 	if got := capture.messagesPerCall[0][0].String(); got != "go" {
 		t.Fatalf("first call input = %q, want %q", got, "go")
 	}
-	if got := capture.messagesPerCall[1][0].String(); got != "custom follow-up" {
-		t.Fatalf("second call input = %q, want %q", got, "custom follow-up")
+	if got, want := messageTexts(capture.messagesPerCall[1]), []string{"go", "iteration 1", "custom follow-up"}; !slices.Equal(got, want) {
+		t.Fatalf("second call input = %v, want %v", got, want)
+	}
+}
+
+func TestLoop_DefaultHistoryWithoutExplicitSession(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		stream          bool
+		serviceID       string
+		assignServiceID bool
+		historyProvider agent.HistoryProvider
+	}{
+		{name: "local history"},
+		{name: "streaming local history", stream: true},
+		{name: "service history", serviceID: "conversation-1"},
+		{name: "service history assigned during run", assignServiceID: true},
+		{name: "configured history", historyProvider: agent.NewInMemoryHistoryProvider(agent.InMemoryHistoryProviderConfig{})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			capture := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
+				updates := textUpdates("draft")
+				if tc.serviceID != "" {
+					updates[0].ConversationID = new(tc.serviceID)
+				}
+				if tc.assignServiceID {
+					updates[0].ConversationID = new("conversation-1")
+				}
+				return updates
+			})
+			provider := capture.provider()
+			a := agent.New(provider, agent.Config{
+				HistoryProvider: tc.historyProvider,
+				Middlewares: []agent.Middleware{loop.New(loop.Config{
+					Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+						if ctx.Iteration == 1 {
+							return loop.Continue("make it shorter"), nil
+						}
+						return loop.Stop(), nil
+					})},
+				})},
+			})
+			for _, prompt := range []string{"first request", "independent request"} {
+				capture.messagesPerCall = nil
+				if _, err := a.RunText(t.Context(), prompt, agent.Stream(tc.stream), agent.WithServiceID(tc.serviceID)).Collect(); err != nil {
+					t.Fatal(err)
+				}
+				if len(capture.messagesPerCall) != 2 {
+					t.Fatalf("provider calls = %d, want 2", len(capture.messagesPerCall))
+				}
+				if got := messageTexts(capture.messagesPerCall[0]); !slices.Equal(got, []string{prompt}) {
+					t.Fatalf("first input = %v, want [%s]", got, prompt)
+				}
+				want := []string{prompt, "draft", "make it shorter"}
+				if tc.serviceID != "" || tc.assignServiceID {
+					want = []string{"make it shorter"}
+				}
+				if got := messageTexts(capture.messagesPerCall[1]); !slices.Equal(got, want) {
+					t.Fatalf("second input = %v, want %v", got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestLoop_RefreshesConversationIDAfterEachInvocation(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run("stream="+strconv.FormatBool(stream), func(t *testing.T) {
+			var receivedIDs []string
+			a := agent.New(agent.ProviderConfig{Run: func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				return func(yield func(*agent.ResponseUpdate, error) bool) {
+					id, _ := agent.GetOption(opts, agent.WithServiceID)
+					receivedIDs = append(receivedIDs, id)
+					nextID := "conversation-" + strconv.Itoa(len(receivedIDs))
+					yield(&agent.ResponseUpdate{ConversationID: &nextID, Contents: message.Contents{&message.TextContent{Text: "draft"}}}, nil)
+				}
+			}}, agent.Config{Middlewares: []agent.Middleware{loop.New(loop.Config{
+				Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+					if ctx.Iteration == 1 {
+						return loop.Continue("refine"), nil
+					}
+					return loop.Stop(), nil
+				})},
+			})}})
+			session := &agent.Session{}
+			session.SetServiceID("conversation-0")
+			if _, err := a.RunText(t.Context(), "hello", agent.WithSession(session), agent.Stream(stream)).Collect(); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(receivedIDs, []string{"conversation-0", "conversation-1"}) || session.ServiceID() != "conversation-2" {
+				t.Fatalf("provider IDs = %v, session ID = %q", receivedIDs, session.ServiceID())
+			}
+		})
+	}
+}
+
+func TestLoop_ContextProviderDoesNotStoreReplayedHistory(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run("stream="+strconv.FormatBool(stream), func(t *testing.T) {
+			source := message.Source{ID: "caller"}
+			prompt := message.NewText("first request").WithSource(source)
+			feedback := message.NewText("make it shorter").WithSource(source)
+			var provided, storedRequests, storedResponses []string
+			contextProvider := agent.NewContextProvider(agent.ContextProviderConfig{
+				SourceID: "memory",
+				Provide: func(_ context.Context, ctx agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+					provided = append(provided, messageTexts(ctx.Messages)...)
+					return nil, nil, nil
+				},
+				Store: func(_ context.Context, ctx agent.InvokedContext) error {
+					storedRequests = append(storedRequests, messageTexts(ctx.RequestMessages)...)
+					storedResponses = append(storedResponses, messageTexts(ctx.ResponseMessages)...)
+					return nil
+				},
+			})
+			capture := newCaptureAgent(func(call int, _ []*message.Message) []*agent.ResponseUpdate {
+				return textUpdates("draft " + strconv.Itoa(call))
+			})
+			a := agent.New(capture.provider(), agent.Config{
+				ContextProviders: []agent.ContextProvider{contextProvider},
+				Middlewares: []agent.Middleware{loop.New(loop.Config{
+					Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+						if ctx.Iteration == 1 {
+							return loop.ContinueWithMessages([]*message.Message{feedback}), nil
+						}
+						return loop.Stop(), nil
+					})},
+				})},
+			})
+			resp, err := a.Run(t.Context(), []*message.Message{prompt}, agent.Stream(stream)).Collect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantRequests := []string{"first request", "make it shorter"}
+			if !slices.Equal(provided, wantRequests) {
+				t.Errorf("context retrieval inputs = %v, want %v", provided, wantRequests)
+			}
+			if !slices.Equal(storedRequests, wantRequests) {
+				t.Errorf("stored requests = %v, want %v", storedRequests, wantRequests)
+			}
+			if want := []string{"draft 1", "draft 2"}; !slices.Equal(storedResponses, want) {
+				t.Errorf("stored responses = %v, want %v", storedResponses, want)
+			}
+			if len(capture.messagesPerCall) != 2 {
+				t.Fatalf("provider calls = %d, want 2", len(capture.messagesPerCall))
+			}
+			if got, want := messageTexts(capture.messagesPerCall[1]), []string{"first request", "draft 1", "make it shorter"}; !slices.Equal(got, want) {
+				t.Errorf("second input = %v, want %v", got, want)
+			}
+			if prompt.Source != source || feedback.Source != source {
+				t.Error("caller message sources changed")
+			}
+			for _, msg := range resp.Messages {
+				if msg.Role != message.RoleAssistant {
+					continue
+				}
+				if msg.Source != (message.Source{}) {
+					t.Errorf("source of %q = %v, want unchanged external source", msg.String(), msg.Source)
+				}
+			}
+		})
+	}
+}
+
+func TestLoop_AutoApprovalPreservesHistoryWithoutDuplicatingInput(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stream bool
+		cap    *int
+	}{
+		{name: "non-streaming"},
+		{name: "streaming", stream: true},
+		{name: "approval iteration cap", cap: new(1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var toolCalls int
+			capture := newCaptureAgent(func(call int, _ []*message.Message) []*agent.ResponseUpdate {
+				if call == 1 {
+					return []*agent.ResponseUpdate{{Role: message.RoleAssistant, Contents: message.Contents{
+						&message.FunctionCallContent{CallID: "call-1", Name: "lookup", Arguments: `{}`},
+					}}}
+				}
+				return textUpdates("answer")
+			})
+			provider := capture.provider()
+			provider.Middlewares = []agent.Middleware{toolautocall.New(toolautocall.Config{})}
+			a := agent.New(provider, agent.Config{
+				Tools: []tool.Tool{tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) {
+					toolCalls++
+					return "found", nil
+				}))},
+				Middlewares: []agent.Middleware{
+					loop.New(loop.Config{Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+						if ctx.Iteration == 1 {
+							return loop.Continue("make it shorter"), nil
+						}
+						return loop.Stop(), nil
+					})}}),
+					toolapproval.New(toolapproval.Config{
+						MaxAutoApprovalIterations: tc.cap,
+						AutoApprovalRules: []toolapproval.AutoApprovalRule{func(context.Context, *toolapproval.ToolAutoApprovalRuleContext) (bool, error) {
+							return true, nil
+						}},
+					}),
+				},
+			})
+			if _, err := a.RunText(t.Context(), "lookup order 42", agent.Stream(tc.stream)).Collect(); err != nil {
+				t.Fatal(err)
+			}
+			if capture.callCount != 3 || toolCalls != 1 {
+				t.Fatalf("provider calls = %d, tool calls = %d, want 3 and 1", capture.callCount, toolCalls)
+			}
+			for i, messages := range capture.messagesPerCall {
+				var prompts, results int
+				for _, msg := range messages {
+					if msg.String() == "lookup order 42" {
+						prompts++
+					}
+					for _, content := range msg.Contents {
+						if result, ok := content.(*message.FunctionResultContent); ok && result.CallID == "call-1" && result.Result == "found" {
+							results++
+						}
+					}
+				}
+				if prompts != 1 || (i > 0 && results != 1) {
+					t.Errorf("provider call %d: prompt copies = %d, tool results = %d, want 1 each after approval", i+1, prompts, results)
+				}
+			}
+			if got := capture.messagesPerCall[2]; got[len(got)-1].String() != "make it shorter" {
+				t.Fatal("next loop iteration lost evaluator feedback")
+			}
+		})
 	}
 }
 
@@ -111,11 +345,11 @@ func TestLoop_MultipleEvaluators_FirstContinueWins(t *testing.T) {
 	if secondCalls != 1 {
 		t.Fatalf("secondCalls = %d, want 1", secondCalls)
 	}
-	if got := capture.messagesPerCall[1][0].String(); got != "from first" {
-		t.Fatalf("second call input = %q, want from first", got)
+	if got, want := messageTexts(capture.messagesPerCall[1]), []string{"go", "iteration 1", "from first"}; !slices.Equal(got, want) {
+		t.Fatalf("second call input = %v, want %v", got, want)
 	}
-	if got := capture.messagesPerCall[2][0].String(); got != "from second" {
-		t.Fatalf("third call input = %q, want from second", got)
+	if got, want := messageTexts(capture.messagesPerCall[2]), []string{"go", "iteration 1", "from first", "iteration 2", "from second"}; !slices.Equal(got, want) {
+		t.Fatalf("third call input = %v, want %v", got, want)
 	}
 }
 
@@ -162,11 +396,11 @@ func TestLoop_ContinueWithMessagesSendsMessagesVerbatim(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := capture.messagesPerCall[1][0].Role; got != message.RoleSystem {
-		t.Fatalf("role = %q, want %q", got, message.RoleSystem)
+	if got, want := messageTexts(capture.messagesPerCall[1]), []string{"go", "ack", "explicit"}; !slices.Equal(got, want) {
+		t.Fatalf("second call input = %v, want %v", got, want)
 	}
-	if got := capture.messagesPerCall[1][0].String(); got != "explicit" {
-		t.Fatalf("message = %q, want explicit", got)
+	if got := capture.messagesPerCall[1][2].Role; got != message.RoleSystem {
+		t.Fatalf("role = %q, want %q", got, message.RoleSystem)
 	}
 }
 

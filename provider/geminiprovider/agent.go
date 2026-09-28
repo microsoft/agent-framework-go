@@ -297,6 +297,23 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 			FunctionDeclarations: funcDecls,
 		})
 	}
+	// Classify the final tool set: a tool with function declarations vs a
+	// server-side (native) tool (GoogleSearch, CodeExecution, FileSearch, or a
+	// caller-supplied native tool with no declarations). Both function
+	// declarations and native tools can also arrive via a caller-supplied
+	// GenerateContentConfig.Tools, so scan cfg.Tools rather than only the
+	// option-derived funcDecls.
+	hasFuncDecls, hasServerSideTool := false, false
+	for _, tl := range cfg.Tools {
+		if tl == nil {
+			continue
+		}
+		if len(tl.FunctionDeclarations) > 0 {
+			hasFuncDecls = true
+		} else {
+			hasServerSideTool = true
+		}
+	}
 
 	// Apply structured output format.
 	if frmt, ok := agent.GetOption(opts, agent.WithResponseFormat); ok {
@@ -337,6 +354,20 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 		cfg.ToolConfig.FunctionCallingConfig = fc
 	}
 
+	// On the Gemini Developer API, when function declarations are combined with a
+	// server-side (native) tool, ask the server to echo its tool invocations so
+	// the caller can observe them. The flag is Developer-API-only (Vertex rejects
+	// it), matching the Python client's `not self._vertexai` gate.
+	if hasFuncDecls && hasServerSideTool && a.client.ClientConfig().Backend != genai.BackendVertexAI {
+		if cfg.ToolConfig == nil {
+			cfg.ToolConfig = &genai.ToolConfig{}
+		} else {
+			tc := *cfg.ToolConfig
+			cfg.ToolConfig = &tc
+		}
+		cfg.ToolConfig.IncludeServerSideToolInvocations = genai.Ptr(true)
+	}
+
 	// Build a map of CallID → function name by scanning all messages first.
 	// This is needed because FunctionResultContent doesn't store the function name,
 	// but genai's FunctionResponse requires it to match the FunctionDeclaration.
@@ -349,11 +380,23 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 		}
 	}
 
-	// Build contents from messages.
+	// Build contents from messages. Consecutive tool-role messages (e.g. the
+	// tool-approval path emits accepted and rejected results as separate
+	// messages) are coalesced into a single user content, since Gemini expects
+	// the function responses answering one model turn in one content. This
+	// mirrors the Python client's pending-tool-parts accumulation.
 	var contents []*genai.Content
+	var pendingToolParts []*genai.Part
+	flushToolParts := func() {
+		if len(pendingToolParts) > 0 {
+			contents = append(contents, &genai.Content{Role: genai.RoleUser, Parts: pendingToolParts})
+			pendingToolParts = nil
+		}
+	}
 	for _, msg := range messages {
 		switch msg.Role {
 		case message.RoleSystem:
+			flushToolParts()
 			// Gemini uses a single system instruction content that can hold multiple parts.
 			// Add each non-empty system text content as its own part.
 			for _, c := range msg.Contents {
@@ -361,7 +404,14 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 					appendSystemInstruction(cfg, tc.Text)
 				}
 			}
-		case message.RoleUser, message.RoleTool:
+		case message.RoleTool:
+			parts, err := buildRequestParts(msg, callIDToName)
+			if err != nil {
+				return nil, nil, err
+			}
+			pendingToolParts = append(pendingToolParts, parts...)
+		case message.RoleUser:
+			flushToolParts()
 			parts, err := buildRequestParts(msg, callIDToName)
 			if err != nil {
 				return nil, nil, err
@@ -373,6 +423,7 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 				})
 			}
 		case message.RoleAssistant:
+			flushToolParts()
 			parts, err := buildRequestParts(msg, callIDToName)
 			if err != nil {
 				return nil, nil, err
@@ -387,6 +438,7 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 			return nil, nil, fmt.Errorf("geminiprovider: unsupported message role %q", msg.Role)
 		}
 	}
+	flushToolParts()
 
 	return contents, cfg, nil
 }
@@ -773,12 +825,14 @@ func toFinishReason(reason genai.FinishReason) string {
 	case genai.FinishReasonMaxTokens:
 		return "length"
 	case genai.FinishReasonSafety, genai.FinishReasonRecitation,
+		genai.FinishReasonLanguage,
 		genai.FinishReasonBlocklist, genai.FinishReasonProhibitedContent,
 		genai.FinishReasonSPII,
 		genai.FinishReasonImageSafety, genai.FinishReasonImageProhibitedContent,
 		genai.FinishReasonImageRecitation:
 		return "content_filter"
-	case genai.FinishReasonMalformedFunctionCall, genai.FinishReasonTooManyToolCalls:
+	case genai.FinishReasonMalformedFunctionCall, genai.FinishReasonTooManyToolCalls,
+		genai.FinishReasonUnexpectedToolCall:
 		return "tool_calls"
 	default:
 		return ""

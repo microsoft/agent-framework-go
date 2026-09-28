@@ -33,6 +33,14 @@ type statefulEdgeState struct {
 	unseen          map[string]struct{}
 }
 
+type edgeKind int
+
+const (
+	directEdge edgeKind = iota
+	fanOutEdge
+	fanInEdge
+)
+
 func newStatefulEdgeState(sourceIDs []string) *statefulEdgeState {
 	state := &statefulEdgeState{
 		sourceIDs: sourceIDs,
@@ -134,7 +142,7 @@ func NewEdgeRunner(wf *workflow.Workflow, tracer StepTracer, ensureExecutor func
 	var statefulEdges map[int]*statefulEdgeState
 	for _, edges := range wf.Edges() {
 		for _, edge := range edges {
-			if len(edge.Connection.SourceIDs) <= 1 {
+			if kindOfEdge(edge) != fanInEdge {
 				continue
 			}
 			if statefulEdges == nil {
@@ -203,6 +211,7 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedConditionFalse)
 		return nil, nil
 	}
+	kind := kindOfEdge(edge)
 	targetIDs := selectedTargetIDs(edge, envelope)
 	if len(targetIDs) == 0 {
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTargetMismatch)
@@ -210,7 +219,7 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 	}
 
 	var envelopes []*MessageEnvelope
-	if len(edge.Connection.SourceIDs) == 1 {
+	if kind != fanInEdge {
 		envelopes = []*MessageEnvelope{envelope}
 	} else {
 		// Stateful edge - track source messages.
@@ -235,7 +244,7 @@ func (em *EdgeRunner) PrepareDeliveryForEdge(ctx context.Context, edge workflow.
 		span.SetDeliveryStatus(observability.DeliveryStatusDroppedTargetMismatch)
 		return nil, nil
 	}
-	if len(edge.Connection.SourceIDs) == 1 {
+	if kind != fanInEdge {
 		// Filter targets that can handle the message type.
 		runtimeType, err := em.messageRuntimeType(ctx, envelope)
 		if err != nil {
@@ -458,11 +467,22 @@ func edgeGroupMetadata(edge workflow.Edge) observability.EdgeGroupMetadata {
 }
 
 func edgeGroupType(edge workflow.Edge) string {
-	if len(edge.Connection.SourceIDs) > 1 {
+	switch kindOfEdge(edge) {
+	case fanInEdge:
 		return "FanInEdgeRunner"
+	case fanOutEdge:
+		return "FanOutEdgeRunner"
+	default:
+		return "DirectEdgeRunner"
+	}
+}
+
+func kindOfEdge(edge workflow.Edge) edgeKind {
+	if len(edge.Connection.SourceIDs) > 1 {
+		return fanInEdge
 	}
 	if len(edge.Connection.SinkIDs) > 1 || edge.Assigner != nil {
-		return "FanOutEdgeRunner"
+		return fanOutEdge
 	}
-	return "DirectEdgeRunner"
+	return directEdge
 }

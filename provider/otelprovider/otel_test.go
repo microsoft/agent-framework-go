@@ -381,6 +381,47 @@ func TestOtel_Run_CreatesSpan(t *testing.T) {
 	}
 }
 
+// The invoke_agent span must carry gen_ai.response.finish_reasons, matching the
+// Python/.NET observability which set it from the response finish reason.
+func TestOtel_Run_SpanHasFinishReasons(t *testing.T) {
+	exporter := setupTracer(t)
+	mw := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+
+	a := agent.New(agent.ProviderConfig{
+		ProviderName: "test-provider",
+		Run: func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(&agent.ResponseUpdate{MessageID: "m1", ResponseID: "r1", FinishReason: "stop"}, nil)
+			}
+		},
+	}, agent.Config{Middlewares: []agent.Middleware{mw}})
+
+	if _, err := a.RunMessage(t.Context(), message.NewText("hi")).Collect(); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	spans := exporter.GetSpans()
+	if len(spans) == 0 {
+		t.Fatal("expected at least 1 span")
+	}
+	span := spans[len(spans)-1]
+
+	var got []string
+	found := false
+	for _, attr := range span.Attributes {
+		if string(attr.Key) == "gen_ai.response.finish_reasons" {
+			got = attr.Value.AsStringSlice()
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected gen_ai.response.finish_reasons attribute to be present")
+	}
+	if len(got) != 1 || got[0] != "stop" {
+		t.Errorf("gen_ai.response.finish_reasons = %v, want [stop]", got)
+	}
+}
+
 func TestOtel_Run_SpanHasCorrectAttributes(t *testing.T) {
 	exporter := setupTracer(t)
 

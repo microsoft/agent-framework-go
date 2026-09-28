@@ -263,14 +263,7 @@ func (mr *messageRouter) routeMessage(ctx *Context, msg any) (result callResult,
 	}
 	pvalue, isPortable := msg.(PortableValue)
 	if isPortable {
-		if info, ok := mr.typeInfo(pvalue.TypeID); ok {
-			if v, ok := pvalue.As(info.runtimeType); ok {
-				// If we found a runtime type, we can use it
-				msg = v
-			}
-		} else if value := pvalue.Any(); value != nil && pvalue.TypeID.MatchPolymorphic(reflect.TypeOf(value)) {
-			msg = value
-		}
+		msg = mr.unwrapPortableMessage(&pvalue)
 	}
 	defer func() {
 		if r := recover(); r != nil {
@@ -295,6 +288,20 @@ func (mr *messageRouter) routeMessage(ctx *Context, msg any) (result callResult,
 		return callResult{result: ret, err: err, autoOutput: true}, handled
 	}
 	return callResult{}, false
+}
+
+// unwrapPortableMessage preserves delayed deserialization cache updates in pvalue.
+func (mr *messageRouter) unwrapPortableMessage(pvalue *PortableValue) any {
+	if info, ok := mr.typeInfo(pvalue.TypeID); ok {
+		if v, ok := pvalue.As(info.runtimeType); ok {
+			return v
+		}
+		return *pvalue
+	}
+	if value := pvalue.Any(); value != nil && pvalue.TypeID.MatchPolymorphic(reflect.TypeOf(value)) {
+		return value
+	}
+	return *pvalue
 }
 
 func (mr *messageRouter) typeInfo(typeID TypeID) (typeHandlingInfo, bool) {

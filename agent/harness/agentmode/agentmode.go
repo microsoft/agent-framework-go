@@ -25,14 +25,17 @@ import (
 
 const stateKey = "agentModeState"
 
+const modeGetInstructions = "Use the mode_get tool to check your current operating mode.\n"
+
+const modeSetInstructions = "Use the mode_set tool to switch between modes as your work progresses. Only use mode_set if the user explicitly instructs/allows you to change modes.\n\n"
+
+const planModeTransition = "7. When approval is granted, always switch to execute mode (using the `mode_set` tool), and follow the steps for *Execute mode*."
+
 const defaultInstructions = `## Agent Mode
 
 - You can operate in different modes. Depending on the mode you are in, you will be required to follow different processes.
 
-Use the mode_get tool to check your current operating mode.
-Use the mode_set tool to switch between modes as your work progresses. Only use mode_set if the user explicitly instructs/allows you to change modes.
-
-You are currently operating in the {current_mode} mode.
+{mode_get_instructions}{mode_set_instructions}You are currently operating in the {current_mode} mode.
 
 ### Mandatory Mode based Workflow
 
@@ -54,7 +57,8 @@ type state struct {
 
 // Config configures the agent mode provider.
 type Config struct {
-	// Modes is the set of available modes. If empty, defaults to "plan" and "execute".
+	// Modes is the set of available modes. If nil, defaults to "plan" and "execute".
+	// An empty, non-nil slice is invalid.
 	Modes []Mode
 
 	// DefaultMode is the initial mode. Must be one of the configured Modes.
@@ -64,6 +68,14 @@ type Config struct {
 	// Instructions overrides the default instruction template.
 	// Use {available_modes} and {current_mode} as placeholders.
 	Instructions *string
+
+	// DisableModeSetTool omits the built-in mode_set tool while retaining mode
+	// state and instructions.
+	DisableModeSetTool bool
+
+	// DisableModeGetTool omits the built-in mode_get tool while retaining mode
+	// state and instructions.
+	DisableModeGetTool bool
 }
 
 var defaultModes = []Mode{
@@ -82,7 +94,7 @@ Process to follow when in plan mode:
   4. Do short exploratory research if it helps with being able to ask sensible clarifications from the user.
 5. Write the plan to a memory file, so that it is retained even if compaction happens. Make sure to update the plan file if the user requests changes.
 6. Present the plan to the user and ask for approval to switch to execute mode and process the plan.
-7. When approval is granted, always switch to execute mode (using the ` + "`mode_set`" + ` tool), and follow the steps for *Execute mode*.`,
+{plan_mode_transition}`,
 	},
 	{
 		Name: "execute",
@@ -106,9 +118,9 @@ If 2. Work autonomously using your best judgment — do not ask the user questio
 // Panics if the configuration contains duplicate names, an empty mode name or
 // instructions, or a default mode that is not in the configured set.
 func New(cfg Config) *Provider {
-	modes := defaultModes
-	if len(cfg.Modes) > 0 {
-		modes = cfg.Modes
+	modes := cfg.Modes
+	if modes == nil {
+		modes = defaultModes
 	}
 	if len(modes) == 0 {
 		panic("agentmode: at least one mode must be configured")
@@ -147,6 +159,10 @@ func New(cfg Config) *Provider {
 		modes:            modes,
 		defaultMode:      defaultMode,
 		instructions:     instructions,
+		usesDefaultModes: cfg.Modes == nil,
+		usesDefaultInstr: cfg.Instructions == nil,
+		disableModeSet:   cfg.DisableModeSetTool,
+		disableModeGet:   cfg.DisableModeGetTool,
 		validModes:       validModes,
 		modeNamesDisplay: strings.Join(modeNames, "\", \""),
 	}
@@ -165,6 +181,10 @@ type Provider struct {
 	modes            []Mode
 	defaultMode      string
 	instructions     string
+	usesDefaultModes bool
+	usesDefaultInstr bool
+	disableModeSet   bool
+	disableModeGet   bool
 	validModes       map[string]struct{}
 	modeNamesDisplay string
 
@@ -188,10 +208,10 @@ type Provider struct {
 // keeping the registry from growing unbounded.
 func (p *Provider) getSessionLock(opts []agent.Option) *sync.Mutex {
 	session, _ := agent.GetOption(opts, agent.WithSession)
-	return p.getSessionLockForSession(session)
+	return p.sessionLock(session)
 }
 
-func (p *Provider) getSessionLockForSession(session *agent.Session) *sync.Mutex {
+func (p *Provider) sessionLock(session *agent.Session) *sync.Mutex {
 	if session == nil {
 		return &p.nullSessionLock
 	}
@@ -211,7 +231,7 @@ func (p *Provider) getSessionLockForSession(session *agent.Session) *sync.Mutex 
 	return actual.(*sync.Mutex)
 }
 
-func (p *Provider) loadStateForSession(session *agent.Session) *state {
+func (p *Provider) loadSessionState(session *agent.Session) *state {
 	if session == nil {
 		return &state{CurrentMode: p.defaultMode}
 	}
@@ -222,7 +242,7 @@ func (p *Provider) loadStateForSession(session *agent.Session) *state {
 	return &state{CurrentMode: p.defaultMode}
 }
 
-func (p *Provider) saveStateForSession(session *agent.Session, s *state) {
+func (p *Provider) saveSessionState(session *agent.Session, s *state) {
 	if session == nil || s == nil {
 		return
 	}
@@ -239,12 +259,12 @@ func (p *Provider) Invoked(ctx context.Context, invoked agent.InvokedContext) er
 
 func (p *Provider) loadState(opts []agent.Option) *state {
 	session, _ := agent.GetOption(opts, agent.WithSession)
-	return p.loadStateForSession(session)
+	return p.loadSessionState(session)
 }
 
 func (p *Provider) saveState(opts []agent.Option, s *state) {
 	session, _ := agent.GetOption(opts, agent.WithSession)
-	p.saveStateForSession(session, s)
+	p.saveSessionState(session, s)
 }
 
 func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
@@ -255,10 +275,10 @@ func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) 
 	mu := p.getSessionLock(opts)
 	mu.Lock()
 	st := p.loadState(opts)
-	// Persist the initial state so SetModeForSession can read it.
+	// Persist the initial state so SetMode can read it.
 	p.saveState(opts, st)
 
-	// If the mode was changed externally (e.g. via SetModeForSession), inject a notification
+	// If the mode was changed externally (e.g. via SetMode), inject a notification
 	// so the agent clearly sees the change in conversation context.
 	if st.PreviousMode != "" {
 		outMessages = append(outMessages, message.NewText(fmt.Sprintf(
@@ -287,79 +307,118 @@ func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) 
 func (p *Provider) buildInstructions(currentMode string) string {
 	var sb strings.Builder
 	for _, m := range p.modes {
-		fmt.Fprintf(&sb, "#### %s\n\n%s\n\n", m.Name, strings.TrimRight(m.Instructions, "\n"))
+		instructions := m.Instructions
+		if p.usesDefaultModes && m.Name == "plan" {
+			transition := planModeTransition
+			if p.disableModeSet {
+				transition = ""
+			}
+			instructions = strings.ReplaceAll(instructions, "{plan_mode_transition}", transition)
+		}
+		fmt.Fprintf(&sb, "#### %s\n\n%s\n\n", m.Name, strings.TrimRight(instructions, "\n"))
 	}
 	modesText := strings.TrimRight(sb.String(), "\n")
 
-	result := strings.ReplaceAll(p.instructions, "{available_modes}", modesText)
+	result := p.instructions
+	if p.usesDefaultInstr {
+		modeGetText := modeGetInstructions
+		if p.disableModeGet {
+			modeGetText = ""
+		}
+		modeSetText := modeSetInstructions
+		if p.disableModeSet {
+			modeSetText = ""
+		}
+		result = strings.ReplaceAll(result, "{mode_get_instructions}", modeGetText)
+		result = strings.ReplaceAll(result, "{mode_set_instructions}", modeSetText)
+	}
+	result = strings.ReplaceAll(result, "{available_modes}", modesText)
 	result = strings.ReplaceAll(result, "{current_mode}", currentMode)
 	return result
 }
 
 func (p *Provider) createTools(opts []agent.Option) []tool.FuncTool {
-	setTool := functool.MustNew(
-		functool.Config{
-			Name:        "mode_set",
-			Description: fmt.Sprintf("Switch the agent's operating mode. Supported modes: \"%s\".", p.modeNamesDisplay),
-		},
-		func(ctx context.Context, mode string) (string, error) {
-			if _, ok := p.validModes[mode]; !ok {
-				return "", fmt.Errorf("invalid mode: %q. Supported modes: \"%s\"", mode, p.modeNamesDisplay)
-			}
-			mu := p.getSessionLock(opts)
-			mu.Lock()
-			defer mu.Unlock()
-			st := p.loadState(opts)
-			st.CurrentMode = mode
-			p.saveState(opts, st)
-			return fmt.Sprintf("Mode changed to %q.", mode), nil
-		},
-	)
+	tools := make([]tool.FuncTool, 0, 2)
 
-	getTool := functool.MustNew(
-		functool.Config{
-			Name:        "mode_get",
-			Description: "Get the agent's current operating mode.",
-		},
-		func(ctx context.Context, _ struct{}) (string, error) {
-			mu := p.getSessionLock(opts)
-			mu.Lock()
-			defer mu.Unlock()
-			st := p.loadState(opts)
-			return st.CurrentMode, nil
-		},
-	)
+	if !p.disableModeSet {
+		type setModeInput struct {
+			Mode string `json:"mode" jsonschema:"The operating mode to switch to"`
+		}
+		setTool := functool.MustNew(
+			functool.Config{
+				Name:        "mode_set",
+				Description: fmt.Sprintf("Switch the agent's operating mode. Supported modes: \"%s\".", p.modeNamesDisplay),
+			},
+			func(ctx context.Context, input setModeInput) (string, error) {
+				if _, ok := p.validModes[input.Mode]; !ok {
+					return "", fmt.Errorf("invalid mode: %q. Supported modes: \"%s\"", input.Mode, p.modeNamesDisplay)
+				}
+				mu := p.getSessionLock(opts)
+				mu.Lock()
+				defer mu.Unlock()
+				st := p.loadState(opts)
+				st.PreviousMode = ""
+				st.CurrentMode = input.Mode
+				p.saveState(opts, st)
+				return fmt.Sprintf("Mode changed to %q.", input.Mode), nil
+			},
+		)
+		tools = append(tools, setTool)
+	}
 
-	return []tool.FuncTool{setTool, getTool}
+	if !p.disableModeGet {
+		getTool := functool.MustNew(
+			functool.Config{
+				Name:        "mode_get",
+				Description: "Get the agent's current operating mode.",
+			},
+			func(ctx context.Context, _ struct{}) (string, error) {
+				mu := p.getSessionLock(opts)
+				mu.Lock()
+				defer mu.Unlock()
+				st := p.loadState(opts)
+				return st.CurrentMode, nil
+			},
+		)
+		tools = append(tools, getTool)
+	}
+
+	return tools
 }
 
-// ModeForSession returns the current operating mode from session state.
+// Mode returns the current operating mode from session state.
 // If no state has been persisted yet, it returns the configured default mode.
-func (p *Provider) ModeForSession(session *agent.Session) string {
-	mu := p.getSessionLockForSession(session)
+func (p *Provider) Mode(session *agent.Session) string {
+	mu := p.sessionLock(session)
 	mu.Lock()
 	defer mu.Unlock()
-	return p.loadStateForSession(session).CurrentMode
+	return p.loadSessionState(session).CurrentMode
 }
 
-// SetModeForSession sets the operating mode in session state, validating it
-// against the provider's configured modes. Returns an error if the mode is
-// invalid or no session is available.
-func (p *Provider) SetModeForSession(session *agent.Session, mode string) error {
+// SetMode sets the operating mode in session state. It returns an error if the
+// mode is invalid or no session is available. Set disableNotification to true
+// to suppress the next mode-change notification and clear any pending one.
+func (p *Provider) SetMode(session *agent.Session, mode string, disableNotification bool) error {
 	if _, ok := p.validModes[mode]; !ok {
 		return fmt.Errorf("agentmode: invalid mode %q", mode)
 	}
-	mu := p.getSessionLockForSession(session)
+	mu := p.sessionLock(session)
 	mu.Lock()
 	defer mu.Unlock()
 	if session == nil {
 		return fmt.Errorf("agentmode: no session available")
 	}
-	s := p.loadStateForSession(session)
+	s := p.loadSessionState(session)
+	if disableNotification {
+		s.PreviousMode = ""
+	}
 	if s.CurrentMode != mode {
 		s.PreviousMode = s.CurrentMode
+		if disableNotification {
+			s.PreviousMode = ""
+		}
 		s.CurrentMode = mode
 	}
-	p.saveStateForSession(session, s)
+	p.saveSessionState(session, s)
 	return nil
 }

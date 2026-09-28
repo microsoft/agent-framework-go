@@ -134,6 +134,10 @@ func TestAddTodos_CreatesSingleItem(t *testing.T) {
 	if items[0].Title != "Buy milk" {
 		t.Errorf("expected 'Buy milk', got %q", items[0].Title)
 	}
+	// Numbering starts at 1, matching the .NET/Python harnesses.
+	if items[0].ID != 1 {
+		t.Errorf("first todo ID = %d, want 1", items[0].ID)
+	}
 }
 
 // 3. AddTodos_CreatesMultipleItemsWithIncrementingIds

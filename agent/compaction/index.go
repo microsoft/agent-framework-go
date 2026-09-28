@@ -394,6 +394,9 @@ func computeContentByteCount(content message.Content) int {
 	case *message.FunctionCallContent:
 		return stringByteCount(typed.CallID) + stringByteCount(typed.Name) + stringByteCount(typed.Arguments)
 	case *message.FunctionResultContent:
+		if raw, ok := typed.Result.(json.RawMessage); ok {
+			return stringByteCount(typed.CallID) + len(raw)
+		}
 		return stringByteCount(typed.CallID) + stringByteCount(fmt.Sprint(typed.Result))
 	case *message.ErrorContent:
 		return stringByteCount(typed.Message) + stringByteCount(typed.ErrorCode) + stringByteCount(typed.Details)

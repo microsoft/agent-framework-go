@@ -131,11 +131,17 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 
 	runFn := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			sess, _ := agent.GetOption(options, agent.WithSession)
+			if sess != nil && sess.ServiceID() == "" {
+				sess.SetServiceID(providerServiceID)
+			}
+			conversationID := sess.ServiceID()
 			responseID := newMessageID()
 			stream, _ := agent.GetOption(options, agent.Stream)
 			mergeState := newCollectedResponseMergeState()
 			streamedMessageIDs := make(map[streamedMessageKey]struct{})
 			consumerActive := true
+			var emittedUpdate bool
 			emitResult := func(update *agent.ResponseUpdate, err error) bool {
 				if !consumerActive {
 					return false
@@ -147,16 +153,15 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 				if update == nil {
 					return true
 				}
+				// The workflow session owns its history, independently of any
+				// hosted agent whose updates are being surfaced here.
+				update.ConversationID = &conversationID
+				emittedUpdate = true
 				mergeState.AddUpdate(update, terminalWorkflowOutput)
 				if !stream {
 					return true
 				}
 				return emitResult(update, nil)
-			}
-
-			sess, _ := agent.GetOption(options, agent.WithSession)
-			if sess != nil && sess.ServiceID() == "" {
-				sess.SetServiceID(providerServiceID)
 			}
 
 			state, initialMessagesSent, err := loadOrInitState(ctx, sess, env, wf, messages)
@@ -314,11 +319,19 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 				}
 			}
 			if !stream {
-				for _, update := range mergeState.ComputeMerged(responseID, agentID, agentName).ToUpdates() {
+				response := mergeState.ComputeMerged(responseID, agentID, agentName)
+				response.ConversationID = &conversationID
+				updates := response.ToUpdates()
+				if len(updates) == 0 {
+					updates = []*agent.ResponseUpdate{{ResponseID: responseID, ConversationID: &conversationID}}
+				}
+				for _, update := range updates {
 					if !emitResult(update, nil) {
 						return
 					}
 				}
+			} else if !emittedUpdate {
+				emitResult(&agent.ResponseUpdate{ResponseID: responseID, ConversationID: &conversationID}, nil)
 			}
 		}
 	}

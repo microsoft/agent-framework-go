@@ -151,10 +151,14 @@ func (s *Activity) CaptureError(err error) {
 	if s == nil || s.span == nil || err == nil {
 		return
 	}
+	// RecordError already captures the message as exception.message on the
+	// exception event. Set only error.type on the span itself (the semantic
+	// convention span attribute), matching .NET's CaptureException and the
+	// agent-level otelprovider span; error.message stays on error events (see
+	// ErrorAttributes) as .NET does.
 	s.span.RecordError(err)
 	s.span.SetAttributes(
 		workflowobservability.StringAttribute(TagErrorType, otelx.ErrorTypeName(err)),
-		workflowobservability.StringAttribute(TagErrorMessage, err.Error()),
 	)
 	s.span.SetError(err.Error())
 }

@@ -3,13 +3,19 @@
 package fsskills_test
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
 )
+
+type fsWithoutLinkInspection struct {
+	fs.FS
+}
 
 func TestFileSource_EmptyPaths_ReturnsEmptyList(t *testing.T) {
 	source := fsskills.NewSource()
@@ -300,6 +306,50 @@ func TestFileSource_ReadResource_ValidResource_ReturnsContent(t *testing.T) {
 	}
 }
 
+func TestFileSource_ReadResource_RevalidatesParentDirectoriesBeforeUse(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirWithResource(t, filepath.Join(root, "trusted"), "read-skill", "A skill", "See docs.", "references/doc.md", "trusted content")
+	createSkillDirWithResource(t, filepath.Join(root, "outside", "trusted"), "read-skill", "A skill", "See docs.", "references/doc.md", "outside content")
+
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 {
+		t.Fatalf("expected one skill with one resource, got %d skills and %d resources", len(loaded), len(loaded[0].Resources))
+	}
+
+	if err := os.Rename(filepath.Join(root, "trusted"), filepath.Join(root, "trusted-real")); err != nil {
+		t.Fatal(err)
+	}
+	createSymlink(t, filepath.Join(root, "trusted"), filepath.Join(root, "outside", "trusted"))
+
+	_, err = loaded[0].Resources[0].Read(t.Context())
+	if err == nil {
+		t.Fatal("expected resource read to fail after the discovered path was replaced with a symlink")
+	}
+}
+
+func TestFileSource_ReadResource_FailsWithoutLinkInspection(t *testing.T) {
+	source := fsskills.NewSource(fsWithoutLinkInspection{fstest.MapFS{
+		"read-skill/SKILL.md":          {Data: []byte("---\nname: read-skill\ndescription: A skill\n---\nSee docs.")},
+		"read-skill/references/doc.md": {Data: []byte("content")},
+	}})
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 {
+		t.Fatalf("expected one skill with one resource, got %d skills and %d resources", len(loaded), len(loaded[0].Resources))
+	}
+
+	if _, err := loaded[0].Resources[0].Read(t.Context()); err == nil {
+		t.Fatal("expected resource read to fail when the filesystem does not support link inspection")
+	}
+}
+
 func TestFileSource_MetadataWithQuotedValues_ParsedCorrectly(t *testing.T) {
 	root := t.TempDir()
 	createSkillDirRaw(t, root, "quoted-meta", strings.Join([]string{
@@ -514,6 +564,258 @@ func TestFileSource_NoOptionalFields_DefaultZeroValues(t *testing.T) {
 	}
 }
 
+func TestFileSource_QuotedFrontmatterPropertyNames_AreParsed(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "quoted-root-keys", strings.Join([]string{
+		"---",
+		`"name": quoted-root-keys`,
+		`'description': "A quoted root property skill"`,
+		`"metadata":`,
+		"  author: contoso",
+		"---",
+		"Body.",
+	}, "\n"))
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	fm := loaded[0].Frontmatter
+	if fm.Name != "quoted-root-keys" || fm.Description != "A quoted root property skill" {
+		t.Fatalf("unexpected frontmatter: %#v", fm)
+	}
+	if fm.Metadata["author"] != "contoso" {
+		t.Fatalf("expected metadata author contoso, got %#v", fm.Metadata["author"])
+	}
+}
+
+func TestFileSource_AmbiguousFrontmatter_IsRejected(t *testing.T) {
+	tests := []struct {
+		name   string
+		fields []string
+	}{
+		{
+			name: "duplicate recognized field",
+			fields: []string{
+				"description: first",
+				"description: second",
+			},
+		},
+		{
+			name: "incorrectly cased recognized field",
+			fields: []string{
+				"Description: invalid casing",
+			},
+		},
+		{
+			name: "duplicate quoted recognized field",
+			fields: []string{
+				"allowed-tools: read",
+				`"allowed-tools": write`,
+			},
+		},
+		{
+			name: "duplicate metadata root",
+			fields: []string{
+				"metadata:",
+				"  author: first",
+				`"metadata":`,
+				"  author: second",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			lines := []string{"---", "name: ambiguous-skill"}
+			lines = append(lines, tt.fields...)
+			lines = append(lines, "---", "Body.")
+			createSkillDirRaw(t, root, "ambiguous-skill", strings.Join(lines, "\n"))
+
+			source := fsskills.NewSource(os.DirFS(root))
+			loaded, err := source.Skills(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(loaded) != 0 {
+				t.Fatalf("expected ambiguous frontmatter to be rejected, got %d skill(s)", len(loaded))
+			}
+		})
+	}
+}
+
+func TestFileSource_IndentedValueOnNextLine_IsParsed(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "indented-next-line", strings.Join([]string{
+		"---",
+		"name: indented-next-line",
+		"description:",
+		"  'Read files'",
+		"license: MIT",
+		"---",
+		"Body.",
+	}, "\n"))
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	fm := loaded[0].Frontmatter
+	if fm.Description != "Read files" || fm.License != "MIT" {
+		t.Fatalf("unexpected frontmatter: %#v", fm)
+	}
+}
+
+func TestFileSource_IndentedBlockScalarOnNextLine_IsFolded(t *testing.T) {
+	tests := []struct {
+		name     string
+		newline  string
+		fields   []string
+		expected string
+	}{
+		{
+			name:    "folded scalar LF",
+			newline: "\n",
+			fields: []string{
+				"description:",
+				"  >-",
+				"  Read",
+				"  files",
+			},
+			expected: "Read files",
+		},
+		{
+			name:    "literal scalar LF",
+			newline: "\n",
+			fields: []string{
+				"description:",
+				"  |-",
+				"  Read",
+				"  files",
+			},
+			expected: "Read\nfiles",
+		},
+		{
+			name:    "folded scalar CRLF",
+			newline: "\r\n",
+			fields: []string{
+				"description:",
+				"  >-",
+				"  Read",
+				"  files",
+			},
+			expected: "Read files",
+		},
+		{
+			name:    "literal scalar CRLF",
+			newline: "\r\n",
+			fields: []string{
+				"description:",
+				"  |-",
+				"  Read",
+				"  files",
+			},
+			expected: "Read\nfiles",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			skillName := "indented-block-scalar"
+			lines := append([]string{"---", "name: " + skillName}, tt.fields...)
+			lines = append(lines, "---", "Body.")
+			createSkillDirRaw(t, root, skillName, strings.Join(lines, tt.newline))
+
+			source := fsskills.NewSource(os.DirFS(root))
+			loaded, err := source.Skills(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(loaded) != 1 {
+				t.Fatalf("expected 1 skill, got %d", len(loaded))
+			}
+			if loaded[0].Frontmatter.Description != tt.expected {
+				t.Fatalf("unexpected description: %q", loaded[0].Frontmatter.Description)
+			}
+		})
+	}
+}
+
+func TestFileSource_EmptyOptionalScalar_RemainsZeroValue(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "empty-optionals", strings.Join([]string{
+		"---",
+		"name: empty-optionals",
+		"description: Read files",
+		"license:   ",
+		"compatibility:\t",
+		"allowed-tools: ",
+		"---",
+		"Body.",
+	}, "\n"))
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	fm := loaded[0].Frontmatter
+	if fm.License != "" || fm.Compatibility != "" || fm.AllowedTools != "" {
+		t.Fatalf("expected zero-value optional fields, got %#v", fm)
+	}
+}
+
+func TestFileSource_DuplicateMetadata_KeepsFirstValue(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "duplicate-metadata", strings.Join([]string{
+		"---",
+		"name: duplicate-metadata",
+		"description: Read files",
+		"metadata:",
+		"  author: First",
+		"  Author: Second",
+		"  author: Third",
+		"  version: 1.0",
+		"---",
+		"Body.",
+	}, "\n"))
+	source := fsskills.NewSource(os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	fm := loaded[0].Frontmatter
+	if len(fm.Metadata) != 2 {
+		t.Fatalf("expected 2 metadata entries, got %#v", fm.Metadata)
+	}
+	if fm.Metadata["author"] != "First" {
+		t.Fatalf("expected first metadata value to win, got %#v", fm.Metadata["author"])
+	}
+	if _, exists := fm.Metadata["Author"]; exists {
+		t.Fatalf("expected first metadata key spelling to be preserved, got %#v", fm.Metadata)
+	}
+	if fm.Metadata["version"] != "1.0" {
+		t.Fatalf("expected version metadata to be preserved, got %#v", fm.Metadata["version"])
+	}
+}
+
 func TestFileSource_ResourcesInSubdirectory_DiscoveredWithDefaultDepth(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "sub-res-skill", "Subdirectory resources", "Body.")
@@ -704,5 +1006,57 @@ func createSymlink(t *testing.T, linkPath, targetPath string) {
 	}
 	if err := os.Symlink(targetPath, linkPath); err != nil {
 		t.Skipf("symlink creation unavailable: %v", err)
+	}
+}
+
+func TestFileSource_MetadataWithBlankLineCRLF_KeepsAllKeys(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "gap-meta-crlf", strings.Join([]string{
+		"---",
+		"name: gap-meta-crlf",
+		"description: d",
+		"metadata:",
+		"  a: 1",
+		"",
+		"  b: 2",
+		"  c: 3",
+		"---",
+		"Body.",
+	}, "\r\n"))
+
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := loaded[0].Frontmatter.Metadata
+	if m["a"] != "1" || m["b"] != "2" || m["c"] != "3" {
+		t.Fatalf("CRLF metadata keys dropped after blank line: %#v", m)
+	}
+}
+
+func TestFileSource_MetadataWithBlankLine_KeepsAllKeys(t *testing.T) {
+	root := t.TempDir()
+	createSkillDirRaw(t, root, "gap-meta", strings.Join([]string{
+		"---",
+		"name: gap-meta",
+		"description: d",
+		"metadata:",
+		"  a: 1",
+		"",
+		"  b: 2",
+		"  c: 3",
+		"---",
+		"Body.",
+	}, "\n"))
+
+	source := fsskills.NewSource(os.DirFS(root))
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := loaded[0].Frontmatter.Metadata
+	if m["a"] != "1" || m["b"] != "2" || m["c"] != "3" {
+		t.Fatalf("metadata keys dropped after blank line: %#v", m)
 	}
 }

@@ -102,9 +102,9 @@ type approvalRequiredFunc struct {
 // ApprovalRequired reports that the wrapped tool requires user approval.
 func (approvalRequiredFunc) ApprovalRequired() bool { return true }
 
-// ApprovalRequiredFunc wraps a tool to indicate that it requires user approval before invocation.
-// If the tool already requires approval, it is returned as-is.
-// Not all tools support approval, in which case the original tool is returned.
+// ApprovalRequiredFunc wraps a tool so that it requires user approval before invocation.
+// If the tool already reports that it requires approval, it is returned as-is;
+// otherwise it is wrapped so that it does.
 func ApprovalRequiredFunc(t FuncTool) FuncTool {
 	if t == nil {
 		return nil

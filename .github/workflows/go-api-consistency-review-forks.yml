@@ -1,4 +1,5 @@
 name: Dispatch fork API consistency reviews
+run-name: "Dispatch API consistency - PR #${{ github.event.pull_request.number }}"
 
 # Fork pull_request runs cannot access the credentials needed by the agent's
 # safe-output jobs. Dispatch the review from the trusted base branch instead,
@@ -9,6 +10,8 @@ on:
     paths-ignore:
       - '.github/**'
       - 'docs/**'
+      - '**/*_test.go'
+      - 'cmd/verifyexamples/**'
       - 'README*'
       - 'LICENSE*'
       - '*.md'
@@ -43,5 +46,11 @@ jobs:
               ref: process.env.TARGET_REF,
               inputs: {
                 pr_number: process.env.PR_NUMBER,
+                // Preserve PR context for safe-output handlers on dispatched runs.
+                aw_context: JSON.stringify({
+                  repo: `${context.repo.owner}/${context.repo.repo}`,
+                  item_type: 'pull_request',
+                  item_number: Number(process.env.PR_NUMBER),
+                }),
               },
             });

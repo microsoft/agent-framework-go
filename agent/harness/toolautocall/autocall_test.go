@@ -13,12 +13,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
+	"github.com/microsoft/agent-framework-go/internal/toolmiddleware"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -36,6 +38,272 @@ func (schemaOnlyTool) Schema() any {
 
 func (schemaOnlyTool) ReturnSchema() any {
 	return nil
+}
+
+func TestFunctionInvoking_ResponseConversationID(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		initialSessionID string
+		initialOptionID  string
+		responseIDs      [2]string
+		wantCounts       [2]int
+		wantIDs          [3]string
+	}{
+		{name: "client managed", wantCounts: [2]int{3, 5}},
+		{name: "new service session", responseIDs: [2]string{"conv-1", "conv-2"}, wantCounts: [2]int{1, 1}, wantIDs: [3]string{"", "conv-1", "conv-2"}},
+		{name: "existing service session", initialSessionID: "conv-0", responseIDs: [2]string{"conv-1", "conv-2"}, wantCounts: [2]int{1, 1}, wantIDs: [3]string{"conv-0", "conv-1", "conv-2"}},
+		{name: "stale service ID is not a history signal", initialSessionID: "conv-0", wantCounts: [2]int{3, 5}, wantIDs: [3]string{"conv-0", "", ""}},
+		{name: "run option is cleared", initialOptionID: "conv-0", wantCounts: [2]int{3, 5}, wantIDs: [3]string{"conv-0", "", ""}},
+		{name: "service becomes client managed", responseIDs: [2]string{"conv-1", ""}, wantCounts: [2]int{1, 5}, wantIDs: [3]string{"", "conv-1", ""}},
+		{name: "client becomes service managed", responseIDs: [2]string{"", "conv-2"}, wantCounts: [2]int{3, 1}, wantIDs: [3]string{"", "", "conv-2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := &agent.Session{}
+			session.SetServiceID(tc.initialSessionID)
+			var calls int
+			run := func(_ context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				return func(yield func(*agent.ResponseUpdate, error) bool) {
+					id, ok := agent.GetOption(opts, agent.WithServiceID)
+					if !ok {
+						id = session.ServiceID()
+					}
+					if id != tc.wantIDs[calls] {
+						t.Errorf("provider call %d: service ID = %q, want %q", calls+1, id, tc.wantIDs[calls])
+					}
+					if calls > 0 {
+						if got, want := len(messages), tc.wantCounts[calls-1]; got != want {
+							t.Fatalf("provider call %d: messages = %d, want %d", calls+1, got, want)
+						}
+						last := messages[len(messages)-1]
+						if last.Role != message.RoleTool || len(last.Contents) != 1 {
+							t.Fatalf("provider call %d: last message = %+v, want one tool result", calls+1, last)
+						}
+						result, ok := last.Contents[0].(*message.FunctionResultContent)
+						if !ok || result.CallID != fmt.Sprintf("call-%d", calls) || result.Result != "found" {
+							t.Fatalf("provider call %d: tool result = %+v", calls+1, last.Contents[0])
+						}
+						if len(messages) > 1 && messages[0].String() != "lookup order" {
+							t.Fatal("client-managed history lost the original user message")
+						}
+					}
+					calls++
+					if calls == 3 {
+						yield(&agent.ResponseUpdate{ResponseID: "response-3", Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "done"}}}, nil)
+						return
+					}
+					responseID := fmt.Sprintf("response-%d", calls)
+					if !yield(&agent.ResponseUpdate{ResponseID: responseID, Role: message.RoleAssistant, Contents: message.Contents{
+						&message.FunctionCallContent{CallID: fmt.Sprintf("call-%d", calls), Name: "lookup", Arguments: `{}`},
+					}}, nil) {
+						return
+					}
+					if tc.responseIDs[calls-1] != "" {
+						yield(&agent.ResponseUpdate{ResponseID: responseID, ConversationID: new(tc.responseIDs[calls-1])}, nil)
+					}
+				}
+			}
+			opts := []agent.Option{agent.Stream(true), agent.WithSession(session), agent.WithTool(functool.MustNew(functool.Config{Name: "lookup"},
+				func(context.Context, struct{}) (string, error) { return "found", nil }))}
+			if tc.initialSessionID != "" {
+				opts = append(opts, agent.WithServiceID(tc.initialSessionID))
+			}
+			if tc.initialOptionID != "" {
+				opts = append(opts, agent.WithServiceID(tc.initialOptionID))
+			}
+			var results []*agent.ResponseUpdate
+			for update, err := range toolautocall.New(toolautocall.Config{}).Run(run, t.Context(), []*message.Message{message.NewText("lookup order")}, opts...) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if update != nil && update.Role == message.RoleTool {
+					results = append(results, update)
+				}
+			}
+			if calls != 3 || len(results) != 2 {
+				t.Fatalf("provider calls = %d, tool results = %d, want 3 and 2", calls, len(results))
+			}
+			for i, result := range results {
+				if want := tc.responseIDs[i]; want != "" {
+					if result.ConversationID == nil || *result.ConversationID != want {
+						t.Errorf("tool result %d: conversation ID = %v, want %q", i, result.ConversationID, want)
+					}
+				} else if result.ConversationID != nil {
+					t.Errorf("tool result %d: unexpected conversation ID %q", i, *result.ConversationID)
+				}
+			}
+		})
+	}
+}
+
+func TestFunctionInvoking_HistoryFallbackPreservesAllMessages(t *testing.T) {
+	image := &message.DataContent{Data: "AQ==", MediaType: "image/png"}
+	var calls int
+	run := func(_ context.Context, messages []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			calls++
+			if calls == 3 {
+				if len(messages) != 6 || messages[1].ID != "image-message" || messages[2].ID != "call-message" {
+					t.Fatalf("fallback did not preserve message boundaries and IDs: %+v", messages)
+				}
+				if len(messages[1].Contents) != 1 || messages[1].Contents[0] != image || messages[1].AdditionalProperties["source"] != "image-provider" {
+					t.Fatalf("fallback lost image or metadata: %+v", messages[1])
+				}
+				yield(&agent.ResponseUpdate{Contents: message.Contents{&message.TextContent{Text: "done"}}}, nil)
+				return
+			}
+			if calls == 1 {
+				if !yield(&agent.ResponseUpdate{
+					MessageID: "image-message", ConversationID: new("conversation-1"), Role: message.RoleAssistant,
+					Contents: message.Contents{image}, AdditionalProperties: map[string]any{"source": "image-provider"},
+				}, nil) {
+					return
+				}
+			}
+			yield(&agent.ResponseUpdate{MessageID: "call-message", Role: message.RoleAssistant, Contents: message.Contents{
+				&message.FunctionCallContent{CallID: fmt.Sprintf("call-%d", calls), Name: "lookup", Arguments: `{}`},
+			}}, nil)
+		}
+	}
+	fn := functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) { return "found", nil })
+	for _, err := range toolautocall.New(toolautocall.Config{}).Run(run, t.Context(), []*message.Message{message.NewText("hello")}, agent.WithTool(fn)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 3 {
+		t.Errorf("provider calls = %d, want 3", calls)
+	}
+}
+
+func TestFunctionInvoking_InvocationIdentity(t *testing.T) {
+	toolFailure := errors.New("tool failed")
+	for _, tc := range []struct {
+		name       string
+		concurrent bool
+		wrap       bool
+		additional bool
+		shadowed   bool
+		emptyID    bool
+		toolError  error
+	}{
+		{name: "without wrappers"},
+		{name: "middleware wrapper", wrap: true},
+		{name: "concurrent wrappers", wrap: true, concurrent: true},
+		{name: "empty call ID", wrap: true, emptyID: true},
+		{name: "additional tool", additional: true},
+		{name: "additional tool wrappers", additional: true, wrap: true},
+		{name: "concurrent additional tool wrappers", additional: true, wrap: true, concurrent: true},
+		{name: "additional tool failure", additional: true, wrap: true, toolError: toolFailure},
+		{name: "request tool takes precedence", shadowed: true, wrap: true},
+		{name: "tool failure", wrap: true, toolError: toolFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			type auditKey struct{}
+			var handlerCalls, wrapperCalls, innerCalls atomic.Int32
+			firstID := "call-1"
+			if tc.emptyID {
+				firstID = ""
+			}
+			testTool := functool.MustNew(functool.Config{Name: "lookup"}, func(ctx context.Context, args struct {
+				ID string `json:"id"`
+			},
+			) (string, error) {
+				handlerCalls.Add(1)
+				callID, ok := toolmiddleware.CallIDFromContext(ctx)
+				if !ok || callID != args.ID {
+					t.Errorf("handler call ID = %q, %v; want %q", callID, ok, args.ID)
+				}
+				if tc.wrap && ctx.Value(auditKey{}) != args.ID {
+					t.Errorf("wrapper context value = %v, want %q", ctx.Value(auditKey{}), args.ID)
+				}
+				return args.ID, tc.toolError
+			})
+			observer := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+				wrapperCalls.Add(1)
+				callID, ok := toolmiddleware.CallIDFromContext(ctx)
+				if !ok || callID != invocation.CallID || invocation.Function != testTool {
+					t.Error("callback did not receive the original tool and invocation identity")
+				}
+				result, err := next(context.WithValue(ctx, auditKey{}, invocation.CallID), invocation)
+				if result != invocation.CallID && err == nil {
+					t.Errorf("wrapper result = %v, want %q", result, invocation.CallID)
+				}
+				if !errors.Is(err, tc.toolError) {
+					t.Errorf("wrapper error = %v, want %v", err, tc.toolError)
+				}
+				return result, err
+			})
+			inner := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+				innerCalls.Add(1)
+				if ctx.Value(auditKey{}) != invocation.CallID {
+					t.Error("callbacks did not execute in registration order")
+				}
+				return next(ctx, invocation)
+			})
+			checkProviderContext := func(ctx context.Context, _ []*message.Message, opts ...agent.Option) {
+				if callID, ok := toolmiddleware.CallIDFromContext(ctx); ok {
+					t.Errorf("call ID leaked to provider: %q", callID)
+				}
+				if tc.additional && len(slices.Collect(agent.AllOptions(opts, agent.WithTool))) != 0 {
+					t.Error("additional tools leaked into provider options")
+				}
+			}
+			runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder(checkProviderContext).
+				AddFunctionCall(firstID, "lookup", fmt.Sprintf(`{"id":%q}`, firstID)).
+				AddFunctionCall("call-2", "lookup", `{"id":"call-2"}`).
+				NewTurn(checkProviderContext).AddText("done").Build()}
+			cfg := toolautocall.Config{AllowConcurrentInvocations: tc.concurrent}
+			options := []agent.Option{agent.WithTool(testTool)}
+			if tc.additional {
+				cfg.AdditionalTools = []tool.Tool{testTool}
+				options = nil
+			}
+			if tc.shadowed {
+				cfg.AdditionalTools = []tool.Tool{functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) {
+					t.Error("additional tool took precedence over the request tool")
+					return "", nil
+				})}
+			}
+			agentConfig := agent.Config{}
+			if tc.wrap {
+				agentConfig.FunctionMiddlewares = []agent.FunctionInvocationMiddleware{observer, inner}
+			}
+			a := agent.New(agent.ProviderConfig{
+				Run: runner.Run, Middlewares: []agent.Middleware{toolautocall.New(cfg)},
+			}, agentConfig)
+			updates := a.RunText(t.Context(), "start", options...)
+			var results []*message.FunctionResultContent
+			for update, err := range updates {
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, content := range update.Contents {
+					if result, ok := content.(*message.FunctionResultContent); ok {
+						results = append(results, result)
+					}
+				}
+			}
+			if handlerCalls.Load() != 2 || len(results) != 2 {
+				t.Fatalf("handler calls = %d, results = %d; want 2 of each", handlerCalls.Load(), len(results))
+			}
+			for i, id := range []string{firstID, "call-2"} {
+				if results[i].CallID != id || !errors.Is(results[i].Error, tc.toolError) {
+					t.Errorf("result = %#v, want call ID %q and error %v", results[i], id, tc.toolError)
+				}
+			}
+			if tc.wrap && (wrapperCalls.Load() != 2 || innerCalls.Load() != 2) {
+				t.Errorf("wrapper calls = %d, inner calls = %d; want 2 of each", wrapperCalls.Load(), innerCalls.Load())
+			}
+			if tc.additional && cfg.AdditionalTools[0] != testTool {
+				t.Error("middleware mutated configured additional tools")
+			}
+			if !tc.additional {
+				if original, _ := agent.GetOption(options, agent.WithTool); original != testTool {
+					t.Error("middleware mutated the caller's options")
+				}
+			}
+		})
+	}
 }
 
 func TestFunctionInvoking_DoesNotInvokeServerHandledFunctionCalls(t *testing.T) {
@@ -1794,6 +2062,87 @@ func TestMessageInjection_ApprovedApprovalResponseInjectionIsForwarded(t *testin
 	}
 }
 
+func TestMessageInjection_UpdatesConversationIDBetweenProviderCalls(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		initialSessionID string
+		initialOptionID  string
+		responseIDs      [3]string
+		wantIDs          [3]string
+	}{
+		{name: "new conversation", responseIDs: [3]string{"conv-1", "conv-2", "conv-3"}, wantIDs: [3]string{"", "conv-1", "conv-2"}},
+		{name: "session advances", initialSessionID: "conv-0", responseIDs: [3]string{"conv-1", "conv-2", "conv-3"}, wantIDs: [3]string{"conv-0", "conv-1", "conv-2"}},
+		{name: "run option advances", initialOptionID: "conv-0", responseIDs: [3]string{"conv-1", "conv-2", "conv-3"}, wantIDs: [3]string{"conv-0", "conv-1", "conv-2"}},
+		{name: "run option cleared", initialOptionID: "conv-0", responseIDs: [3]string{"", "conv-2", "conv-3"}, wantIDs: [3]string{"conv-0", "", "conv-2"}},
+		{name: "stored becomes stateless", responseIDs: [3]string{"conv-1", "", "conv-3"}, wantIDs: [3]string{"", "conv-1", ""}},
+		{name: "stateless"},
+	} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", tc.name, stream), func(t *testing.T) {
+				injection := &agent.MessageInjector{}
+				session := &agent.Session{}
+				session.SetServiceID(tc.initialSessionID)
+				var calls int
+				run := func(_ context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return func(yield func(*agent.ResponseUpdate, error) bool) {
+						if calls >= len(tc.wantIDs) {
+							t.Fatal("unexpected extra provider call")
+						}
+						id, _ := agent.GetOption(opts, agent.WithServiceID)
+						if id != tc.wantIDs[calls] {
+							t.Errorf("provider call %d: conversation ID = %q, want %q", calls+1, id, tc.wantIDs[calls])
+						}
+						wantText := "original"
+						if calls > 0 {
+							wantText = fmt.Sprintf("injected-%d", calls)
+						}
+						if got := messageTexts(messages); !slices.Equal(got, []string{wantText}) {
+							t.Errorf("provider call %d: messages = %v, want [%s]", calls+1, got, wantText)
+						}
+						if got := session.ServiceID(); got != tc.initialSessionID {
+							t.Errorf("session ID changed during the run: %q, want %q", got, tc.initialSessionID)
+						}
+						responseID := tc.responseIDs[calls]
+						calls++
+						if calls < len(tc.wantIDs) {
+							if err := injection.EnqueueMessages(session, message.NewText(fmt.Sprintf("injected-%d", calls))); err != nil {
+								t.Fatal(err)
+							}
+						}
+						if responseID != "" {
+							if !yield(&agent.ResponseUpdate{ConversationID: new(responseID)}, nil) {
+								return
+							}
+						}
+						// A later update without an ID must not clear this call's ID.
+						yield(&agent.ResponseUpdate{
+							MessageID: fmt.Sprintf("message-%d", calls), Role: message.RoleAssistant,
+							Contents: message.Contents{&message.TextContent{Text: "reply"}},
+						}, nil)
+					}
+				}
+				a := newMessageInjectingAgent(run, toolautocall.Config{}, nil, injection)
+				opts := []agent.Option{agent.WithSession(session), agent.Stream(stream)}
+				if tc.initialOptionID != "" {
+					opts = append(opts, agent.WithServiceID(tc.initialOptionID))
+				}
+				if _, err := a.RunText(t.Context(), "original", opts...).Collect(); err != nil {
+					t.Fatal(err)
+				}
+				if calls != len(tc.wantIDs) {
+					t.Errorf("provider calls = %d, want %d", calls, len(tc.wantIDs))
+				}
+				if got := session.ServiceID(); got != tc.responseIDs[2] {
+					t.Errorf("session ID = %q, want %q", got, tc.responseIDs[2])
+				}
+				if id, _ := agent.GetOption(opts, agent.WithServiceID); id != tc.initialOptionID {
+					t.Errorf("caller option changed to %q, want %q", id, tc.initialOptionID)
+				}
+			})
+		}
+	}
+}
+
 func TestMessageInjection_IsIndependentFromToolAutoCallIterationLimit(t *testing.T) {
 	var calls int
 	injection := &agent.MessageInjector{}
@@ -1930,4 +2279,149 @@ func messageTexts(messages []*message.Message) []string {
 		}
 	}
 	return texts
+}
+
+func TestFunctionInvoking_RequestCancellation(t *testing.T) {
+	toolFailure := errors.New("first failed")
+	secondFailure := errors.New("second failed")
+	wrappedFailure := fmt.Errorf("wrapped error: %w", toolFailure)
+	for _, tc := range []struct {
+		name          string
+		cancelAt      string
+		deadline      bool
+		concurrent    bool
+		maxIterations *int
+		toolErrors    []error
+		wantErrors    []error
+		wantTools     int32
+		wantProviders int
+	}{
+		{name: "before request", cancelAt: "before request", wantErrors: []error{context.Canceled}},
+		{name: "before request with autocall disabled", cancelAt: "before request", maxIterations: new(0), wantErrors: []error{context.Canceled}},
+		{name: "expired request with autocall disabled", cancelAt: "before request", deadline: true, maxIterations: new(0), wantErrors: []error{context.DeadlineExceeded}},
+		{name: "active request with autocall disabled", maxIterations: new(0), wantProviders: 1},
+		{name: "before tools", cancelAt: "before tools", wantProviders: 1, wantErrors: []error{context.Canceled}},
+		{name: "before concurrent tools", cancelAt: "before tools", concurrent: true, wantProviders: 1, wantErrors: []error{context.Canceled}},
+		{name: "during first tool", cancelAt: "first tool", toolErrors: []error{context.Canceled}, wantTools: 1, wantProviders: 1, wantErrors: []error{context.Canceled}},
+		{name: "cancellation with tool failure", cancelAt: "first tool", toolErrors: []error{toolFailure}, wantTools: 1, wantProviders: 1, wantErrors: []error{toolFailure}},
+		{name: "cancellation with wrapped tool failure", cancelAt: "first tool", toolErrors: []error{wrappedFailure}, wantTools: 1, wantProviders: 1, wantErrors: []error{wrappedFailure}},
+		{name: "deadline with tool failure", cancelAt: "first tool", deadline: true, toolErrors: []error{toolFailure}, wantTools: 1, wantProviders: 1, wantErrors: []error{toolFailure}},
+		{name: "concurrent cancellation with tool failure", cancelAt: "concurrent tools", concurrent: true, toolErrors: []error{nil, toolFailure}, wantTools: 2, wantProviders: 1, wantErrors: []error{toolFailure}},
+		{name: "concurrent cancellation with multiple failures", cancelAt: "concurrent tools", concurrent: true, toolErrors: []error{toolFailure, secondFailure}, wantTools: 2, wantProviders: 1, wantErrors: []error{toolFailure, secondFailure}},
+		{name: "concurrent cancellation with cancelled sibling", cancelAt: "concurrent tools", concurrent: true, toolErrors: []error{toolFailure, context.Canceled}, wantTools: 2, wantProviders: 1, wantErrors: []error{toolFailure, context.Canceled}},
+		{name: "during successful first tool", cancelAt: "first tool", wantTools: 1, wantProviders: 1, wantErrors: []error{context.Canceled}},
+		{name: "during last tool", cancelAt: "last tool", toolErrors: []error{nil, context.Canceled}, wantTools: 2, wantProviders: 1, wantErrors: []error{context.Canceled}},
+		{name: "during concurrent tools", cancelAt: "concurrent tools", concurrent: true, toolErrors: []error{context.Canceled, context.Canceled}, wantTools: 2, wantProviders: 1, wantErrors: []error{context.Canceled, context.Canceled}},
+		{name: "during successful concurrent tools", cancelAt: "concurrent tools", concurrent: true, wantTools: 2, wantProviders: 1, wantErrors: []error{context.Canceled}},
+		{name: "deadline during first tool", cancelAt: "first tool", deadline: true, toolErrors: []error{context.DeadlineExceeded}, wantTools: 1, wantProviders: 1, wantErrors: []error{context.DeadlineExceeded}},
+		{name: "after tool results", cancelAt: "after results", wantTools: 2, wantProviders: 1, wantErrors: []error{context.Canceled}},
+		{name: "ordinary tool error", toolErrors: []error{toolFailure}, wantTools: 2, wantProviders: 2},
+		{name: "independent tool cancellation", toolErrors: []error{context.Canceled}, wantTools: 2, wantProviders: 2},
+		{name: "independent tool deadline", toolErrors: []error{context.DeadlineExceeded}, wantTools: 2, wantProviders: 2},
+		{name: "independent concurrent cancellation", concurrent: true, toolErrors: []error{context.Canceled}, wantTools: 2, wantProviders: 2},
+	} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", tc.name, stream), func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					wantErrors, wantProviders := tc.wantErrors, tc.wantProviders
+					if !stream && tc.cancelAt == "after results" {
+						// Non-streaming results are delivered after the whole tool
+						// loop completes; caller cancellation cannot undo that work.
+						wantErrors, wantProviders = nil, 2
+					}
+					ctx, cancel := context.WithTimeout(t.Context(), time.Hour)
+					defer cancel()
+					stop := func() {
+						if tc.deadline {
+							time.Sleep(time.Hour) // synctest advances time without a real wait.
+							<-ctx.Done()
+						} else {
+							cancel()
+						}
+					}
+					if tc.cancelAt == "before request" {
+						stop()
+					}
+					var toolCalls atomic.Int32
+					testTool := functool.MustNew(functool.Config{Name: "test_tool"}, func(context.Context, struct{}) (string, error) {
+						n := toolCalls.Add(1)
+						if tc.cancelAt == "first tool" && n == 1 || tc.cancelAt == "last tool" && n == 2 {
+							stop()
+						}
+						if tc.cancelAt == "concurrent tools" {
+							if n == 2 {
+								stop()
+							}
+							<-ctx.Done() // Both invocations must start before cancellation.
+						}
+						if int(n) <= len(tc.toolErrors) {
+							return "", tc.toolErrors[n-1]
+						}
+						return "result", nil
+					})
+					providerCalls := 0
+					provider := func(ctx context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+						return func(yield func(*agent.ResponseUpdate, error) bool) {
+							providerCalls++
+							if providerCalls > 1 {
+								if err := ctx.Err(); err != nil {
+									yield(nil, err)
+								} else {
+									yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "Done"}}}, nil)
+								}
+								return
+							}
+							if tc.cancelAt == "before tools" {
+								stop()
+							}
+							calls := message.Contents{
+								&message.FunctionCallContent{CallID: "1", Name: "test_tool", Arguments: `{}`},
+								&message.FunctionCallContent{CallID: "2", Name: "test_tool", Arguments: `{}`},
+							}
+							if stream {
+								for _, call := range calls {
+									if !yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{call}}, nil) {
+										return
+									}
+								}
+							} else {
+								yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: calls}, nil)
+							}
+						}
+					}
+					var runErr error
+					for update, err := range toolautocall.New(toolautocall.Config{
+						AllowConcurrentInvocations:  tc.concurrent,
+						MaximumIterationsPerRequest: tc.maxIterations,
+					}).Run(
+						provider, ctx, []*message.Message{message.NewText("Call both tools.")}, agent.WithTool(testTool), agent.Stream(stream)) {
+						if err != nil {
+							runErr = err
+							break
+						}
+						if tc.cancelAt == "after results" && update != nil && update.Role == message.RoleTool {
+							stop()
+						}
+					}
+					if len(wantErrors) == 0 && runErr != nil {
+						t.Errorf("unexpected run error: %v", runErr)
+					}
+					if len(tc.toolErrors) > 0 && len(wantErrors) == 1 && runErr != wantErrors[0] {
+						t.Errorf("run error = %v, want original error %v unchanged", runErr, wantErrors[0])
+					}
+					for _, wantErr := range wantErrors {
+						if !errors.Is(runErr, wantErr) {
+							t.Errorf("run error = %v, missing error %v", runErr, wantErr)
+						}
+					}
+					if got := toolCalls.Load(); got != tc.wantTools {
+						t.Errorf("tool calls = %d, want %d", got, tc.wantTools)
+					}
+					if providerCalls != wantProviders {
+						t.Errorf("provider calls = %d, want %d", providerCalls, wantProviders)
+					}
+				})
+			})
+		}
+	}
 }

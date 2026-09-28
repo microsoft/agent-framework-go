@@ -156,6 +156,67 @@ func TestFileSource_WithRunner_ScriptsCanRun(t *testing.T) {
 	}
 }
 
+func TestFileSource_ScriptExecution_RevalidatesParentDirectoriesBeforeRun(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, filepath.Join(root, "trusted"), "exec-skill", "Executor test", "Body.")
+	createRelativeFile(t, filepath.Join(root, "trusted", "exec-skill"), "scripts/test.py", "print('trusted')")
+	createSkillDir(t, filepath.Join(root, "outside", "trusted"), "exec-skill", "Executor test", "Body.")
+	createRelativeFile(t, filepath.Join(root, "outside", "trusted", "exec-skill"), "scripts/test.py", "print('outside')")
+
+	runnerCalled := false
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ []string) (any, error) {
+		runnerCalled = true
+		return "executed", nil
+	}}, os.DirFS(root))
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || len(loaded[0].Scripts) != 1 {
+		t.Fatalf("expected one skill with one script, got %d skills and %d scripts", len(loaded), len(loaded[0].Scripts))
+	}
+
+	if err := os.Rename(filepath.Join(root, "trusted"), filepath.Join(root, "trusted-real")); err != nil {
+		t.Fatal(err)
+	}
+	createSymlink(t, filepath.Join(root, "trusted"), filepath.Join(root, "outside", "trusted"))
+
+	_, err = loaded[0].Scripts[0].Run(t.Context(), loaded[0], nil)
+	if err == nil {
+		t.Fatal("expected script run to fail after the discovered path was replaced with a symlink")
+	}
+	if runnerCalled {
+		t.Fatal("expected script runner not to be called after path revalidation failed")
+	}
+}
+
+func TestFileSource_ScriptExecution_FailsWithoutLinkInspection(t *testing.T) {
+	runnerCalled := false
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ []string) (any, error) {
+		runnerCalled = true
+		return "executed", nil
+	}}, fsWithoutLinkInspection{fstest.MapFS{
+		"exec-skill/SKILL.md":        {Data: []byte("---\nname: exec-skill\ndescription: A skill\n---\nBody.")},
+		"exec-skill/scripts/test.py": {Data: []byte("print('test')")},
+	}})
+
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || len(loaded[0].Scripts) != 1 {
+		t.Fatalf("expected one skill with one script, got %d skills and %d scripts", len(loaded), len(loaded[0].Scripts))
+	}
+
+	if _, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], nil); err == nil {
+		t.Fatal("expected script run to fail when the filesystem does not support link inspection")
+	}
+	if runnerCalled {
+		t.Fatal("expected script runner not to be called when link inspection is unavailable")
+	}
+}
+
 func TestFileSource_NullRunner_DoesNotPanic(t *testing.T) {
 	_ = fsskills.NewSource(os.DirFS(t.TempDir()))
 }

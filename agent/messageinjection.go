@@ -38,30 +38,81 @@ func (m *MessageInjector) run(next RunFunc, ctx context.Context, messages []*mes
 			return
 		}
 
+		stream, _ := GetOption(options, Stream)
+		var priorUsage message.UsageDetails
+		var hasPriorUsage bool
 		for {
 			hasActionableFunctionCall := false
+			var conversationID *string
+			var response Response
 			for update, runErr := range next(ctx, currentMessages, options...) {
-				if update != nil && containsActionableFunctionCall(update.Contents) {
-					hasActionableFunctionCall = true
+				if update != nil {
+					if update.ConversationID != nil {
+						conversationID = update.ConversationID
+					}
+					if containsActionableFunctionCall(update.Contents) {
+						hasActionableFunctionCall = true
+					}
 				}
-				if !yield(update, runErr) || runErr != nil {
+				if stream {
+					if !yield(update, runErr) || runErr != nil {
+						return
+					}
+				} else {
+					if runErr != nil {
+						yield(nil, runErr)
+						return
+					}
+					response.Update(update)
+				}
+			}
+
+			var injected []*message.Message
+			if !hasActionableFunctionCall {
+				injected, err = m.drain(session)
+				if err != nil {
+					yield(nil, err)
 					return
 				}
 			}
-
-			if hasActionableFunctionCall {
+			if hasActionableFunctionCall || len(injected) == 0 {
+				if !stream {
+					// Non-streaming injection returns the final service response,
+					// with usage from earlier calls but without their messages or IDs.
+					if hasPriorUsage {
+						if len(response.Messages) == 0 {
+							response.Messages = append(response.Messages, &message.Message{Role: message.RoleAssistant})
+						}
+						last := response.Messages[len(response.Messages)-1]
+						last.Contents = append(last.Contents, &message.UsageContent{Details: priorUsage})
+					}
+					response.Coalesce()
+					for _, update := range response.ToUpdates() {
+						if !yield(update, nil) {
+							return
+						}
+					}
+				}
 				return
 			}
-
-			injected, err := m.drain(session)
-			if err != nil {
-				yield(nil, err)
-				return
+			if !stream {
+				for content := range response.Contents() {
+					if usage, ok := content.(*message.UsageContent); ok {
+						priorUsage.Add(usage.Details)
+						hasPriorUsage = true
+					}
+				}
 			}
-			if len(injected) == 0 {
-				return
+			// Each provider call supplies the history handle for the next call;
+			// an absent handle clears the previous request's ID.
+			var serviceID string
+			if conversationID != nil {
+				serviceID = *conversationID
 			}
-			currentMessages = slices.Concat(currentMessages, injected)
+			if currentID, _ := GetOption(options, WithServiceID); currentID != serviceID {
+				options = append(slices.Clone(options), WithServiceID(serviceID))
+			}
+			currentMessages = injected
 		}
 	}
 }

@@ -223,6 +223,12 @@ func updatesToAGUIEvents(
 					if !closeReasoning() {
 						return
 					}
+					// Close any open text message before emitting non-text events
+					// (e.g. a tool call) so their AG-UI lifecycles stay disjoint
+					// rather than nesting the tool call inside an unclosed message.
+					if !closeText() {
+						return
+					}
 				}
 				for _, e := range events {
 					if !yield(e, nil) {
@@ -290,8 +296,15 @@ func contentToEvents(content message.Content, messageID string) ([]aguiEvents.Ev
 		if args == "" {
 			args = "{}"
 		}
+		// Associate the tool call with its assistant message so the client does
+		// not create a separate assistant message per tool call (see the
+		// coalescing workaround in toAgentMessages). Matches the Python host.
+		var startOpts []aguiEvents.ToolCallStartOption
+		if messageID != "" {
+			startOpts = append(startOpts, aguiEvents.WithParentMessageID(messageID))
+		}
 		return []aguiEvents.Event{
-			aguiEvents.NewToolCallStartEvent(callID, c.Name),
+			aguiEvents.NewToolCallStartEvent(callID, c.Name, startOpts...),
 			aguiEvents.NewToolCallArgsEvent(callID, args),
 			aguiEvents.NewToolCallEndEvent(callID),
 		}, nil
@@ -319,6 +332,10 @@ func contentToEvents(content message.Content, messageID string) ([]aguiEvents.Ev
 		return []aguiEvents.Event{aguiEvents.NewTextMessageContentEvent(messageID, c.URI)}, nil
 	case *message.DataContent:
 		return dataContentToEvents(c, messageID)
+	case *message.UsageContent:
+		// Surface usage as a "usage" CUSTOM event rather than dropping it,
+		// matching the Python host which emits CustomEvent(name="usage").
+		return []aguiEvents.Event{aguiEvents.NewCustomEvent("usage", aguiEvents.WithValue(c.Details))}, nil
 	default:
 		return nil, nil
 	}

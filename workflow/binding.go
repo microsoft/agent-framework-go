@@ -34,7 +34,7 @@ type ExecutorBinding struct {
 
 	// SharedInstance reports whether [NewExecutorFunc] returns a shared executor
 	// instance rather than creating an independent instance for each session.
-	// Shared instances participate in workflow reset checks through [Reset]. Keep
+	// Shared instances participate in workflow reset checks through [ExecutorBinding.TryReset]. Keep
 	// this value consistent with [NewExecutorFunc]; setting it to false for a
 	// shared executor opts out of reset checks.
 	SharedInstance bool
@@ -84,7 +84,7 @@ func (eb ExecutorBinding) isPlaceholder() bool {
 
 // TryReset resets this binding if it wraps a shared executor instance.
 // Non-shared bindings are already isolated per session and therefore report
-// success without invoking [ExecutorBinding.Reset].
+// success without invoking the [ExecutorBinding.ResetFunc] callback.
 func (eb ExecutorBinding) TryReset() bool {
 	if !eb.SharedInstance {
 		// Non-shared instances do not need resetting

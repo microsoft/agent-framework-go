@@ -92,10 +92,14 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 		var usage message.UsageDetails
 		var errorType string
 		var responseID string
+		var finishReason string
 		defer func() {
 			end := time.Now()
 			if responseID != "" {
 				span.SetAttributes(semconv.GenAIResponseID(responseID))
+			}
+			if finishReason != "" {
+				span.SetAttributes(semconv.GenAIResponseFinishReasons(finishReason))
 			}
 			setUsage(span, usage)
 			m.recordOperationDuration(ctx, a, end.Sub(start), errorType)
@@ -112,6 +116,9 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 			}
 			if update != nil && update.ResponseID != "" {
 				responseID = update.ResponseID
+			}
+			if update != nil && update.FinishReason != "" {
+				finishReason = update.FinishReason
 			}
 			// update.Usage() sums this update's UsageContent (nil-safe), so accumulate
 			// its total into the run rather than iterating Contents by hand.

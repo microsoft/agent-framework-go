@@ -148,14 +148,17 @@ func (p *Provider) RemainingTodos(session *agent.Session) []Item {
 }
 
 func (p *Provider) loadState(session *agent.Session) *state {
+	// A fresh session starts numbering todos at 1, matching the .NET and Python
+	// harnesses (both seed NextId to 1); the first todo added would otherwise get
+	// the model-facing id 0.
 	if session == nil {
-		return &state{}
+		return &state{NextID: 1}
 	}
 	var s state
 	if found, _ := session.Get(stateKey, &s); found {
 		return &s
 	}
-	return &state{}
+	return &state{NextID: 1}
 }
 
 func (p *Provider) saveState(session *agent.Session, s *state) {

@@ -71,6 +71,9 @@ func NewAgent(aclient *a2aclient.Client, config AgentConfig) *agent.Agent {
 
 func (a *a2aProvider) createSession(ctx context.Context, session *agent.Session, options ...agent.Option) error {
 	contextID := session.ServiceID()
+	if contextID == "" {
+		contextID, _ = agent.GetOption(options, agent.WithServiceID)
+	}
 	if contextID != "" && strings.TrimSpace(contextID) == "" {
 		return errors.New("a2aprovider: context ID cannot be blank")
 	}
@@ -92,13 +95,17 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		session, _ := agent.GetOption(options, agent.WithSession)
 		stream, _ := agent.GetOption(options, agent.Stream)
+		contextID, ok := agent.GetOption(options, agent.WithServiceID)
+		if !ok {
+			contextID = getContextID(session)
+		}
 		if token, ok := agent.GetOption(options, agent.WithContinuationToken); ok && token != "" {
 			if len(messages) > 0 {
 				yield(nil, errors.New("messages are not allowed when continuing a background response using a continuation token"))
 				return
 			}
 			if stream {
-				sendMsg(session, a.subscribeToTaskWithFallback(ctx, a2a.TaskID(token)), true, yield)
+				sendMsg(session, contextID, a.subscribeToTaskWithFallback(ctx, a2a.TaskID(token)), true, yield)
 				return
 			}
 			task, err := a.client.GetTask(ctx, &a2a.GetTaskRequest{ID: a2a.TaskID(token)})
@@ -106,11 +113,9 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 				yield(nil, err)
 				return
 			}
-			if err := updateSessionContextID(session, task.ContextID, string(task.ID), task.Status.State); err != nil {
-				yield(nil, err)
-				return
-			}
-			yieldTask(yield, task, true)
+			sendMsg(session, contextID, func(yield func(a2a.Event, error) bool) {
+				yield(task, nil)
+			}, false, yield)
 			return
 		}
 		if len(messages) == 0 {
@@ -146,6 +151,7 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 		// issues exactly one request.
 		combined := &message.Message{ID: msgID, AdditionalProperties: metadata}
 		userMsg := createA2AMessage(session, combined, parts)
+		userMsg.ContextID = contextID
 
 		params := &a2a.SendMessageRequest{Message: userMsg}
 		if metadata, ok := agent.GetOption(options, WithMetadata); ok {
@@ -163,7 +169,7 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 				yield(resp, err)
 			}
 		}
-		sendMsg(session, seq, stream, yield)
+		sendMsg(session, contextID, seq, stream, yield)
 	}
 }
 
@@ -220,8 +226,8 @@ func (a *a2aProvider) subscribeToTaskWithFallback(ctx context.Context, taskID a2
 	}
 }
 
-func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], stream bool, yield func(*agent.ResponseUpdate, error) bool) {
-	var contextID, taskID string
+func sendMsg(session *agent.Session, contextID string, seq iter.Seq2[a2a.Event, error], stream bool, yield func(*agent.ResponseUpdate, error) bool) {
+	var taskID string
 	var taskState a2a.TaskState
 	for e, err := range seq {
 		if err != nil {
@@ -229,12 +235,18 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], stream boo
 			return
 		}
 		taskInfo := e.TaskInfo()
-		if err := validateSessionContextID(session, taskInfo.ContextID); err != nil {
+		if err := validateContextID(contextID, taskInfo.ContextID); err != nil {
 			yield(nil, err)
 			return
 		}
 		if taskInfo.ContextID != "" {
 			contextID = taskInfo.ContextID
+		}
+		forward := func(update *agent.ResponseUpdate, err error) bool {
+			if update != nil && contextID != "" {
+				update.ConversationID = new(contextID)
+			}
+			return yield(update, err)
 		}
 		switch evt := e.(type) {
 		case *a2a.Task:
@@ -251,7 +263,7 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], stream boo
 		}
 		switch e := e.(type) {
 		case *a2a.Task:
-			if ok := yieldTask(yield, e, !stream); !ok {
+			if ok := yieldTask(forward, e, !stream); !ok {
 				return
 			}
 		case *a2a.TaskStatusUpdateEvent:
@@ -272,7 +284,7 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], stream boo
 			}
 			update := newResponseUpdate(e, e.Metadata, string(e.TaskID), messageID, message.RoleAssistant, contents)
 			update.FinishReason = finishReasonForTaskState(e.Status.State)
-			if !yield(update, nil) {
+			if !forward(update, nil) {
 				return
 			}
 		case *a2a.TaskArtifactUpdateEvent:
@@ -282,7 +294,7 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], stream boo
 				return
 			}
 			update := newResponseUpdate(e, cloneMetadata(e.Metadata), string(e.TaskID), string(e.Artifact.ID), message.RoleAssistant, contents)
-			if !yield(update, nil) {
+			if !forward(update, nil) {
 				return
 			}
 		case *a2a.Message:
@@ -293,7 +305,7 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], stream boo
 			}
 			update := newResponseUpdate(e, e.Metadata, e.ID, e.ID, message.RoleAssistant, contents)
 			update.FinishReason = "stop"
-			if !yield(update, nil) {
+			if !forward(update, nil) {
 				return
 			}
 		default:
@@ -301,9 +313,11 @@ func sendMsg(session *agent.Session, seq iter.Seq2[a2a.Event, error], stream boo
 			return
 		}
 	}
-	if err := updateSessionContextID(session, contextID, taskID, taskState); err != nil {
-		yield(nil, err)
-	}
+	// Each event was validated against the effective request context. The
+	// session can still carry a framework-local history handle at this point.
+	setContextID(session, contextID)
+	setTaskID(session, taskID)
+	setLastTaskState(session, taskState)
 }
 
 func newResponseUpdate(raw any, additionalProperties map[string]any, responseID, messageID string, role message.Role, contents message.Contents) *agent.ResponseUpdate {
@@ -420,29 +434,10 @@ func finishReasonForTaskState(state a2a.TaskState) string {
 	return ""
 }
 
-func validateSessionContextID(session *agent.Session, contextID string) error {
-	if session == nil {
-		return nil
-	}
-	currentContextID := getContextID(session)
+func validateContextID(currentContextID, contextID string) error {
 	if currentContextID != "" && contextID != "" && currentContextID != contextID {
-		return fmt.Errorf("mismatched context ID: session has %q but A2A response has %q", currentContextID, contextID)
+		return fmt.Errorf("mismatched context ID: expected %q but A2A response has %q", currentContextID, contextID)
 	}
-	return nil
-}
-
-func updateSessionContextID(session *agent.Session, contextID, taskID string, taskState a2a.TaskState) error {
-	if session == nil {
-		return nil
-	}
-	// Surface cases where the A2A agent responds with a response that
-	// has a different context ID than the session's context ID.
-	if err := validateSessionContextID(session, contextID); err != nil {
-		return err
-	}
-	setContextID(session, contextID)
-	setTaskID(session, taskID)
-	setLastTaskState(session, taskState)
 	return nil
 }
 

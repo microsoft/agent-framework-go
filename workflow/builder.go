@@ -616,8 +616,8 @@ func (wb *Builder) AddSwitch(source ExecutorBinding) *SwitchBuilder {
 	}
 }
 
-// AddCase adds a case branch matching messages of type T satisfying the
-// predicate. The matched message is routed to all bindings in targets.
+// AddCase adds a case branch matching messages for which the predicate returns
+// true. The matched message is routed to all bindings in targets.
 func (s *SwitchBuilder) AddCase(predicate func(msg any) bool, targets ...ExecutorBinding) *SwitchBuilder {
 	if predicate == nil {
 		panic("workflow: switch case predicate cannot be nil")

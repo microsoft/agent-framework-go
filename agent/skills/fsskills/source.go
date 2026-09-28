@@ -35,10 +35,18 @@ var (
 )
 
 var (
+	knownFrontmatterFields = map[string]string{
+		"name":          "name",
+		"description":   "description",
+		"license":       "license",
+		"compatibility": "compatibility",
+		"metadata":      "metadata",
+		"allowed-tools": "allowed-tools",
+	}
 	frontmatterRegex          = regexp.MustCompile(`(?ms)\A^---\s*$(.+?)^---\s*$`)
-	yamlKeyValueRegex         = regexp.MustCompile(`(?m)^([\w-]+)\s*:\s*(?:["'](.+?)["']|(.+?))\s*$`)
-	yamlMetadataBlockRegex    = regexp.MustCompile(`(?m)^metadata\s*:\s*$\n((?:[ \t]+\S.*\n?)+)`)
-	yamlIndentedKeyValueRegex = regexp.MustCompile(`(?m)^\s+([\w-]+)\s*:\s*(?:["'](.+?)["']|(.+?))\s*$`)
+	yamlKeyValueRegex         = regexp.MustCompile(`(?m)^([\w-]+|["'][\w-]+["'])[ \t]*:[ \t]*(?:["'](.*?)["']|([^\r\n]*?))[ \t]*\r?$`)
+	yamlMetadataBlockRegex    = regexp.MustCompile(`(?m)^(?:metadata|"metadata"|'metadata')\s*:\s*$\r?\n((?:[ \t]+\S.*\n?|[ \t]*\r?\n)+)`)
+	yamlIndentedKeyValueRegex = regexp.MustCompile(`(?m)^[ \t]+([\w-]+)[ \t]*:[ \t]*(?:["'](.+?)["']|(.+?))[ \t]*\r?$`)
 )
 
 // FilterContext provides contextual information about a discovered file to the
@@ -189,7 +197,7 @@ func (s *Source) Skills(ctx context.Context) ([]*skills.Skill, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		skill := s.parseSkillDirectory(directory.fsys, directory.path)
+		skill := s.parseSkillDirectory(directory)
 		if skill == nil {
 			continue
 		}
@@ -237,7 +245,7 @@ func searchForSkills(filesystem fs.FS, dir string, logger *slog.Logger, results 
 			sub, subErr = fs.Sub(filesystem, dir)
 		}
 		if subErr == nil {
-			*results = append(*results, discoveredSkillDir{fsys: sub, path: dir})
+			*results = append(*results, discoveredSkillDir{rootFS: filesystem, skillFS: sub, path: dir})
 		}
 		return
 	}
@@ -258,7 +266,10 @@ func searchForSkills(filesystem fs.FS, dir string, logger *slog.Logger, results 
 	}
 }
 
-func (s *Source) parseSkillDirectory(skillFS fs.FS, logPath string) *skills.Skill {
+func (s *Source) parseSkillDirectory(directory discoveredSkillDir) *skills.Skill {
+	scope := newSkillPathScope(directory.rootFS, directory.path)
+	skillFS := directory.skillFS
+	logPath := directory.path
 	data, err := fs.ReadFile(skillFS, skillFileName)
 	if err != nil {
 		s.logger.Error("Failed to read SKILL.md", "path", logPath, "error", err)
@@ -271,8 +282,8 @@ func (s *Source) parseSkillDirectory(skillFS fs.FS, logPath string) *skills.Skil
 		return nil
 	}
 
-	resources := s.discoverResourceFiles(skillFS, frontmatter.Name)
-	scripts := s.discoverScriptFiles(skillFS, frontmatter.Name)
+	resources := s.discoverResourceFiles(skillFS, scope, frontmatter.Name)
+	scripts := s.discoverScriptFiles(skillFS, scope, frontmatter.Name)
 	var (
 		contentOnce   sync.Once
 		cachedContent string
@@ -312,16 +323,30 @@ func (s *Source) tryParseFrontmatter(content, skillFilePath string) (skills.Fron
 
 	yamlContent := strings.TrimSpace(contentForParsing[match[2]:match[3]])
 	frontmatter := skills.Frontmatter{}
+	seenFields := make(map[string]struct{}, len(knownFrontmatterFields))
 
 	for _, kv := range yamlKeyValueRegex.FindAllStringSubmatchIndex(yamlContent, -1) {
-		key := yamlContent[kv[2]:kv[3]]
-		value := ""
-		if kv[4] >= 0 {
-			value = yamlContent[kv[4]:kv[5]]
-		} else if kv[6] >= 0 {
-			value = parseYamlScalarValue(yamlContent, kv)
+		key := normalizeFrontmatterKey(yamlContent[kv[2]:kv[3]])
+		canonicalKey, recognized := knownFrontmatterFields[strings.ToLower(key)]
+		if !recognized {
+			continue
 		}
-		switch strings.ToLower(key) {
+		if key != canonicalKey {
+			s.logger.Error("SKILL.md uses incorrectly cased frontmatter field", "skillFilePath", skillFilePath, "fieldName", key, "expectedFieldName", canonicalKey)
+			return skills.Frontmatter{}, false
+		}
+		if _, duplicated := seenFields[canonicalKey]; duplicated {
+			s.logger.Error("SKILL.md contains duplicate frontmatter field", "skillFilePath", skillFilePath, "fieldName", canonicalKey)
+			return skills.Frontmatter{}, false
+		}
+		seenFields[canonicalKey] = struct{}{}
+
+		value, hasValue := parseYamlValue(yamlContent, kv)
+		if !hasValue && canonicalKey != "name" && canonicalKey != "description" {
+			continue
+		}
+
+		switch canonicalKey {
 		case "name":
 			frontmatter.Name = value
 		case "description":
@@ -337,11 +362,18 @@ func (s *Source) tryParseFrontmatter(content, skillFilePath string) (skills.Fron
 
 	if metadataMatch := yamlMetadataBlockRegex.FindStringSubmatch(yamlContent); len(metadataMatch) == 2 {
 		metadata := make(map[string]any)
+		seenMetadataKeys := make(map[string]struct{})
 		for _, kv := range yamlIndentedKeyValueRegex.FindAllStringSubmatch(metadataMatch[1], -1) {
 			value := kv[2]
 			if value == "" {
 				value = kv[3]
 			}
+			lowerKey := strings.ToLower(kv[1])
+			if _, duplicated := seenMetadataKeys[lowerKey]; duplicated {
+				s.logger.Warn("SKILL.md contains duplicate metadata key; keeping the first value", "skillFilePath", skillFilePath, "key", kv[1])
+				continue
+			}
+			seenMetadataKeys[lowerKey] = struct{}{}
 			metadata[kv[1]] = value
 		}
 		if len(metadata) > 0 {
@@ -365,17 +397,83 @@ func (s *Source) tryParseFrontmatter(content, skillFilePath string) (skills.Fron
 	return frontmatter, true
 }
 
+func normalizeFrontmatterKey(key string) string {
+	if len(key) >= 2 && (key[0] == '"' || key[0] == '\'') && key[len(key)-1] == key[0] {
+		return key[1 : len(key)-1]
+	}
+	return key
+}
+
+func parseYamlValue(yamlContent string, kv []int) (string, bool) {
+	if kv[4] >= 0 {
+		return yamlContent[kv[4]:kv[5]], true
+	}
+
+	if kv[6] < kv[7] {
+		return parseYamlScalarValue(yamlContent, kv), true
+	}
+
+	return parseYamlIndentedValue(yamlContent, kv)
+}
+
 func parseYamlScalarValue(yamlContent string, kv []int) string {
 	value := yamlContent[kv[6]:kv[7]]
 	if value == "" || (value[0] != '|' && value[0] != '>') {
 		return value
 	}
 
-	scalarStyle := value[0]
-	keepTrailingNewline := len(value) > 1 && value[1] == '+'
+	blockLines, ok := collectIndentedBlockLines(yamlContent, kv)
+	if !ok {
+		return ""
+	}
+
+	return foldYamlBlockScalar(value, blockLines)
+}
+
+func parseYamlIndentedValue(yamlContent string, kv []int) (string, bool) {
+	blockLines, ok := collectIndentedBlockLines(yamlContent, kv)
+	if !ok {
+		return "", false
+	}
+
+	if len(blockLines) > 0 {
+		if indicator := strings.TrimSpace(blockLines[0]); indicator != "" && (indicator[0] == '|' || indicator[0] == '>') {
+			return foldYamlBlockScalar(indicator, blockLines[1:]), true
+		}
+	}
+
+	value := strings.TrimSpace(strings.Join(normalizeIndentedLines(blockLines), "\n"))
+	if value == "" {
+		return "", false
+	}
+
+	return normalizeFrontmatterKey(value), true
+}
+
+// foldYamlBlockScalar folds blockLines according to the YAML block scalar
+// indicator (e.g. "|", "|-", "|+", ">", ">-", ">+") given in indicator.
+func foldYamlBlockScalar(indicator string, blockLines []string) string {
+	scalarStyle := indicator[0]
+	keepTrailingNewline := len(indicator) > 1 && indicator[1] == '+'
+	normalizedLines := normalizeIndentedLines(blockLines)
+
+	var parsedValue string
+	if scalarStyle == '|' {
+		parsedValue = strings.Join(normalizedLines, "\n")
+	} else {
+		parsedValue = foldYamlLines(normalizedLines)
+	}
+
+	if keepTrailingNewline {
+		return parsedValue + "\n"
+	}
+	return parsedValue
+}
+
+func collectIndentedBlockLines(yamlContent string, kv []int) ([]string, bool) {
 	lineBreak := strings.IndexByte(yamlContent[kv[1]:], '\n')
 	if lineBreak < 0 {
-		return value
+		return nil, false
 	}
 
 	remaining := yamlContent[kv[1]+lineBreak+1:]
@@ -397,9 +495,13 @@ func parseYamlScalarValue(yamlContent string, kv []int) string {
 	}
 
 	if len(blockLines) == 0 {
-		return ""
+		return nil, false
 	}
 
+	return blockLines, true
+}
+
+func normalizeIndentedLines(blockLines []string) []string {
 	commonIndent := -1
 	for _, line := range blockLines {
 		if line == "" {
@@ -424,17 +526,7 @@ func parseYamlScalarValue(yamlContent string, kv []int) string {
 		}
 	}
 
-	var parsedValue string
-	if scalarStyle == '|' {
-		parsedValue = strings.Join(normalizedLines, "\n")
-	} else {
-		parsedValue = foldYamlLines(normalizedLines)
-	}
-
-	if keepTrailingNewline {
-		return parsedValue + "\n"
-	}
-	return parsedValue
+	return normalizedLines
 }
 
 func foldYamlLines(lines []string) string {
@@ -467,7 +559,7 @@ func leadingWhitespaceCount(line string) int {
 	return count
 }
 
-func (s *Source) discoverResourceFiles(skillFS fs.FS, skillName string) []skills.Resource {
+func (s *Source) discoverResourceFiles(skillFS fs.FS, scope skillPathScope, skillName string) []skills.Resource {
 	seen := make(map[string]bool)
 	var resources []skills.Resource
 	s.scanForFiles(skillFS, ".", skillName, 1, s.allowedResourceExtensions, s.resourceFilter, "resource", func(filePath string) {
@@ -482,7 +574,11 @@ func (s *Source) discoverResourceFiles(skillFS fs.FS, skillName string) []skills
 		resources = append(resources, skills.Resource{
 			Name: filePath,
 			Read: func(context.Context) (any, error) {
-				data, err := fs.ReadFile(skillFS, filePath)
+				validatedPath, err := scope.validateDiscoveredPathForUse(filePath, "resource")
+				if err != nil {
+					return nil, err
+				}
+				data, err := fs.ReadFile(scope.rootFS, validatedPath)
 				if err != nil {
 					return nil, err
 				}
@@ -493,7 +589,7 @@ func (s *Source) discoverResourceFiles(skillFS fs.FS, skillName string) []skills
 	return resources
 }
 
-func (s *Source) discoverScriptFiles(skillFS fs.FS, skillName string) []skills.Script {
+func (s *Source) discoverScriptFiles(skillFS fs.FS, scope skillPathScope, skillName string) []skills.Script {
 	seen := make(map[string]bool)
 	var scripts []skills.Script
 	s.scanForFiles(skillFS, ".", skillName, 1, s.allowedScriptExtensions, s.scriptFilter, "script", func(filePath string) {
@@ -504,7 +600,7 @@ func (s *Source) discoverScriptFiles(skillFS fs.FS, skillName string) []skills.S
 			return
 		}
 		seen[filePath] = true
-		scripts = append(scripts, newScript(filePath, skillFS, s.scriptRunner))
+		scripts = append(scripts, newScript(filePath, skillFS, scope, s.scriptRunner))
 	})
 	return scripts
 }
@@ -609,25 +705,28 @@ func validateExtensions(extensions []string) {
 	}
 }
 
-func newScript(name string, fsys fs.FS, runner skills.ScriptRunner) skills.Script {
+func newScript(name string, fsys fs.FS, scope skillPathScope, runner skills.ScriptRunner) skills.Script {
 	additionalProperties := map[string]any{
 		"fsskills.scriptFS": fsys,
 	}
 	return skills.Script{
 		Name:                 name,
 		ParametersSchema:     defaultFileScriptSchema,
-		Run:                  newFileScriptRunFunc(name, runner, additionalProperties),
+		Run:                  newFileScriptRunFunc(name, scope, runner, additionalProperties),
 		AdditionalProperties: additionalProperties,
 	}
 }
 
-func newFileScriptRunFunc(name string, runner skills.ScriptRunner, additionalProperties map[string]any) func(context.Context, *skills.Skill, []string) (any, error) {
+func newFileScriptRunFunc(name string, scope skillPathScope, runner skills.ScriptRunner, additionalProperties map[string]any) func(context.Context, *skills.Skill, []string) (any, error) {
 	return func(ctx context.Context, owner *skills.Skill, arguments []string) (any, error) {
 		if err := requireFileSkill(name, owner); err != nil {
 			return nil, err
 		}
 		if runner == nil {
 			return nil, fmt.Errorf("script %q cannot be executed because no file script runner was provided", name)
+		}
+		if _, err := scope.validateDiscoveredPathForUse(name, "script"); err != nil {
+			return nil, err
 		}
 		// Hand the runner a script carrying the same metadata the discovered
 		// Script exposes (parameters schema and the backing fs.FS), so runners
@@ -650,8 +749,9 @@ func requireFileSkill(scriptName string, skill *skills.Skill) error {
 }
 
 type discoveredSkillDir struct {
-	fsys fs.FS
-	path string
+	rootFS  fs.FS
+	skillFS fs.FS
+	path    string
 }
 
 func buildAvailableResourcesBlock(resources []skills.Resource) string {

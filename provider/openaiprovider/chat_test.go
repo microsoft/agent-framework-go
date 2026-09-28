@@ -27,6 +27,123 @@ import (
 	"github.com/openai/openai-go/v3/option"
 )
 
+func TestChatToolCallsWithServiceIDDoNotClaimStoredHistory(t *testing.T) {
+	requests := make(chan []byte, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		requests <- body
+		w.Header().Set("Content-Type", "application/json")
+		if len(requests) == 1 {
+			_, _ = io.WriteString(w, `{"id":"chatcmpl-tools","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`)
+		} else {
+			_, _ = io.WriteString(w, `{"id":"chatcmpl-done","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`)
+		}
+	}))
+	defer server.Close()
+	a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL)), openaiprovider.AgentConfig{Model: "test-model"})
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("thread-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn := functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) { return "found", nil })
+	_, err = a.RunText(t.Context(), "lookup order", agent.WithSession(session), agent.WithTool(fn)).Collect()
+	if err == nil || !strings.Contains(err.Error(), "did not return a valid conversation ID") {
+		t.Fatalf("error = %v, want missing conversation ID", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(requests))
+	}
+	<-requests
+	var followup struct {
+		Messages json.RawMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(<-requests, &followup); err != nil {
+		t.Fatal(err)
+	}
+	const want = `[{"role":"user","content":"lookup order"},{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call_1","content":"found"}]`
+	bodyEqual(t, string(followup.Messages), want)
+	if session.ServiceID() != "thread-1" {
+		t.Errorf("failed run changed session ID to %q", session.ServiceID())
+	}
+}
+
+func TestChatCompletionsAgent_FunctionInvocationMiddleware(t *testing.T) {
+	for _, source := range []string{"configured", "context provider", "additional"} {
+		for _, block := range []bool{false, true} {
+			name := source + "/allow"
+			if block {
+				name = source + "/block"
+			}
+			t.Run(name, func(t *testing.T) {
+				var requests atomic.Int32
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					if requests.Add(1)%2 == 1 {
+						_, _ = io.WriteString(w, `{"id":"chatcmpl-tools","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`)
+					} else {
+						_, _ = io.WriteString(w, `{"id":"chatcmpl-done","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`)
+					}
+				}))
+				t.Cleanup(server.Close)
+				var toolCalls, middlewareCalls int
+				fn := functool.MustNew(functool.Config{Name: "lookup", Description: "Look up a value"}, func(context.Context, struct{}) (string, error) {
+					toolCalls++
+					return "found", nil
+				})
+				middleware := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+					middlewareCalls++
+					if invocation.Function != fn || invocation.CallID != "call-1" {
+						t.Errorf("unexpected invocation: %#v", invocation)
+					}
+					if block {
+						return "blocked", nil
+					}
+					return next(ctx, invocation)
+				})
+				cfg := agent.Config{FunctionMiddlewares: []agent.FunctionInvocationMiddleware{middleware}}
+				autoCall := &toolautocall.Config{}
+				switch source {
+				case "configured":
+					cfg.Tools = []tool.Tool{fn}
+				case "additional":
+					autoCall.AdditionalTools = []tool.Tool{fn}
+				case "context provider":
+					cfg.ContextProviders = []agent.ContextProvider{agent.NewContextProvider(agent.ContextProviderConfig{
+						SourceID: "tools",
+						Provide: func(context.Context, agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+							return nil, []agent.Option{agent.WithTool(fn)}, nil
+						},
+					})}
+				}
+				a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL)), openaiprovider.AgentConfig{
+					Config:       cfg,
+					Model:        "test-model",
+					ToolAutoCall: autoCall,
+				})
+				for range 2 {
+					if _, err := a.RunText(t.Context(), "lookup").Collect(); err != nil {
+						t.Fatal(err)
+					}
+				}
+				if middlewareCalls != 2 {
+					t.Errorf("middleware calls = %d, want 2", middlewareCalls)
+				}
+				wantToolCalls := 2
+				if block {
+					wantToolCalls = 0
+				}
+				if toolCalls != wantToolCalls {
+					t.Errorf("tool calls = %d, want %d", toolCalls, wantToolCalls)
+				}
+			})
+		}
+	}
+}
+
 func bodyEqual(t *testing.T, got string, want string) {
 	t.Helper()
 	var gotObj any
@@ -425,6 +542,53 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 	raw, ok := resp.RawRepresentation.(*openai.ChatCompletion)
 	if !ok || raw.ID != resp.ID {
 		t.Fatalf("RawRepresentation = %#v, want native ChatCompletion for %q", resp.RawRepresentation, resp.ID)
+	}
+}
+
+// Some OpenAI-compatible endpoints still emit the deprecated "function_call"
+// finish reason; it must be normalized to the canonical "tool_calls", matching
+// the Python client.
+func TestChatLegacyFunctionCallFinishReasonNormalized(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-fc","object":"chat.completion","created":1727888631,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"function_call"}]}`)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(server).RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if resp.FinishReason != "tool_calls" {
+		t.Errorf("FinishReason = %q, want %q", resp.FinishReason, "tool_calls")
+	}
+}
+
+// The streaming path must normalize the legacy "function_call" finish reason too.
+func TestChatLegacyFunctionCallFinishReasonNormalized_Streaming(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":\"function_call\"}]}\n\n")
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	var reasons []string
+	for update, err := range newTestClient(server).RunText(t.Context(), "hi", agent.Stream(true)) {
+		if err != nil {
+			t.Fatalf("error = %v", err)
+		}
+		if update.FinishReason != "" {
+			reasons = append(reasons, update.FinishReason)
+		}
+	}
+	for _, r := range reasons {
+		if r == "function_call" {
+			t.Errorf("streaming FinishReason = %q, want it normalized to tool_calls", r)
+		}
+	}
+	if len(reasons) == 0 || reasons[len(reasons)-1] != "tool_calls" {
+		t.Errorf("streaming finish reasons = %v, want a terminal tool_calls", reasons)
 	}
 }
 

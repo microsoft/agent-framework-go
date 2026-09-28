@@ -110,24 +110,18 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		stream, _ := agent.GetOption(options, agent.Stream)
 
-		// Get session for conversation ID management
-		var session *agent.Session
-		var keepConversationID bool // true if we should keep the conversation ID unchanged (it's a "conv_" ID)
-		if t, ok := agent.GetOption(options, agent.WithSession); ok && t != nil {
-			session = t
-			keepConversationID = session.ServiceID() != "" && strings.HasPrefix(session.ServiceID(), "conv_")
+		body, err := responsesBuildCompletionParams(a.config, messages, options)
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		requestConversationID := ""
+		if body.Conversation.OfConversationObject != nil {
+			requestConversationID = body.Conversation.OfConversationObject.ID
+		} else {
+			requestConversationID = body.Conversation.OfString.Or("")
 		}
 		disableStoreOutput := responsesDisableStoreOutput(a.config, options)
-
-		// Helper to update conversation ID after response completes
-		updateConversationID := func(responseID string) {
-			if disableStoreOutput {
-				return
-			}
-			if session != nil && !keepConversationID && responseID != "" {
-				session.SetServiceID(responseID)
-			}
-		}
 
 		// Handle continuation token for resuming background responses
 		if token, ok := agent.GetOption(options, agent.WithContinuationToken); ok && token != "" {
@@ -148,15 +142,24 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 				}, telemetryRequestOption)
 				defer func() { _ = streamResp.Close() }()
 				streamState := &responsesStreamState{}
-				// Update conversation ID when resuming
-				updateConversationID(ct.ResponseID)
+				storeDisabled := disableStoreOutput
+				var conversationID *string
+				if !storeDisabled {
+					conversationID = new(cmp.Or(requestConversationID, ct.ResponseID))
+				}
 				for streamResp.Next() {
-					update, err := responsesProcessStreamingUpdate(streamResp.Current(), ct.ResponseID, true, streamState)
+					event := streamResp.Current()
+					update, err := responsesProcessStreamingUpdate(event, ct.ResponseID, true, streamState)
 					if err != nil {
 						yield(nil, err)
 						return
 					}
+					if resp := responsesEventResponse(event); resp != nil {
+						storeDisabled = storeDisabled || resp.JSON.ExtraFields["store"].Raw() == "false"
+						conversationID = responsesConversationID(resp, requestConversationID, storeDisabled)
+					}
 					if update != nil {
+						update.ConversationID = conversationID
 						if !yield(update, nil) {
 							return
 						}
@@ -172,17 +175,14 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 					yield(nil, err)
 					return
 				}
-				// Update conversation ID when resuming
-				updateConversationID(ct.ResponseID)
-				responsesProcessResponse(resp, ct.SequenceNumber, yield)
+				conversationID := responsesConversationID(resp, requestConversationID, disableStoreOutput)
+				responsesProcessResponse(resp, ct.SequenceNumber, func(update *agent.ResponseUpdate, err error) bool {
+					if update != nil {
+						update.ConversationID = conversationID
+					}
+					return yield(update, err)
+				})
 			}
-			return
-		}
-
-		// Build request parameters
-		body, err := responsesBuildCompletionParams(a.config, messages, options)
-		if err != nil {
-			yield(nil, err)
 			return
 		}
 
@@ -194,19 +194,25 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 			createdAt := time.Time{}
 			isBackground, _ := agent.GetOption(options, agent.AllowBackgroundResponses)
 			streamState := &responsesStreamState{}
+			storeDisabled := disableStoreOutput
+			var conversationID *string
 			for streamResp.Next() {
-				update, err := responsesProcessStreamingUpdate(streamResp.Current(), responseID, isBackground, streamState)
+				event := streamResp.Current()
+				update, err := responsesProcessStreamingUpdate(event, responseID, isBackground, streamState)
 				if err != nil {
 					yield(nil, err)
 					return
+				}
+				if resp := responsesEventResponse(event); resp != nil {
+					storeDisabled = storeDisabled || resp.JSON.ExtraFields["store"].Raw() == "false"
+					conversationID = responsesConversationID(resp, requestConversationID, storeDisabled)
 				}
 				if update != nil {
 					// Capture responseID and createdAt from the first event
 					if responseID == "" && update.ResponseID != "" {
 						responseID = update.ResponseID
-						// Update conversation ID when we get the response ID
-						updateConversationID(responseID)
 					}
+					update.ConversationID = conversationID
 					if createdAt.IsZero() && !update.CreatedAt.IsZero() {
 						createdAt = update.CreatedAt
 					}
@@ -232,14 +238,18 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 				yield(nil, err)
 				return
 			}
-			// Update conversation ID with the response ID
-			updateConversationID(resp.ID)
-			responsesProcessResponse(resp, 0, yield)
+			conversationID := responsesConversationID(resp, requestConversationID, disableStoreOutput)
+			responsesProcessResponse(resp, 0, func(update *agent.ResponseUpdate, err error) bool {
+				if update != nil {
+					update.ConversationID = conversationID
+				}
+				return yield(update, err)
+			})
 		}
 	}
 }
 
-// buildCompletionParams constructs the parameters for the OpenAI chat completion API.
+// responsesBuildCompletionParams constructs the parameters for the OpenAI Responses API.
 func responsesBuildCompletionParams(config AgentConfig, messages []*message.Message, opts []agent.Option) (responses.ResponseNewParams, error) {
 	var params responses.ResponseNewParams
 	if p, ok := agent.GetOption(opts, ResponsesNewParams); ok {
@@ -265,17 +275,15 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 	if v, ok := agent.GetOption(opts, agent.AllowBackgroundResponses); ok {
 		params.Background = openai.Bool(v)
 	}
-	if session, ok := agent.GetOption(opts, agent.WithSession); ok && session != nil {
-		if session.ServiceID() != "" {
-			// Technically, OpenAI's IDs are opaque. However, by convention conversation IDs start with "conv_" and
-			// we can use that to disambiguate whether we're looking at a conversation ID or a response ID.
-			if strings.HasPrefix(session.ServiceID(), "conv_") {
-				params.Conversation = responses.ResponseNewParamsConversationUnion{
-					OfString: openai.String(session.ServiceID()),
-				}
-			} else {
-				params.PreviousResponseID = openai.String(session.ServiceID())
+	if serviceID := responsesServiceID(opts); serviceID != "" && param.IsOmitted(params.PreviousResponseID) && param.IsOmitted(params.Conversation) {
+		// Technically, OpenAI's IDs are opaque. However, by convention conversation IDs start with "conv_" and
+		// we can use that to disambiguate whether we're looking at a conversation ID or a response ID.
+		if strings.HasPrefix(serviceID, "conv_") {
+			params.Conversation = responses.ResponseNewParamsConversationUnion{
+				OfString: openai.String(serviceID),
 			}
+		} else {
+			params.PreviousResponseID = openai.String(serviceID)
 		}
 	}
 
@@ -432,17 +440,10 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 		case *hostedtool.MCPServer:
 			var variant responses.ToolMcpParam
 			variant.ServerLabel = tl.ServerName
-			// The Responses API accepts either a server_url (a full HTTP(S)
-			// endpoint) or a connector_id (a bare service-connector identifier
-			// such as "connector_googledrive"); the two are mutually exclusive.
-			// url.Parse only errors on control-char/malformed input, so it
-			// cannot distinguish the two. Discriminate on an actual URL scheme
-			// instead, routing scheme-bearing addresses to server_url and bare
-			// connector IDs to connector_id.
+			// url.Parse only errors on control-char/malformed input, so only
+			// treat scheme-bearing HTTP(S) addresses as server_url values.
 			if u, err := url.Parse(tl.ServerAddress); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
 				variant.ServerURL = openai.String(tl.ServerAddress)
-			} else {
-				variant.ConnectorID = tl.ServerAddress
 			}
 			if tl.ServerDescription != "" {
 				variant.ServerDescription = openai.String(tl.ServerDescription)
@@ -472,6 +473,45 @@ func responsesDisableStoreOutput(config AgentConfig, opts []agent.Option) bool {
 		return !p.Store.Or(true)
 	}
 	return config.DisableStoreOutput
+}
+
+func responsesServiceID(opts []agent.Option) string {
+	if id, ok := agent.GetOption(opts, agent.WithServiceID); ok {
+		return id
+	}
+	if session, ok := agent.GetOption(opts, agent.WithSession); ok {
+		return session.ServiceID()
+	}
+	return ""
+}
+
+func responsesConversationID(resp *responses.Response, requestConversationID string, storeDisabled bool) *string {
+	if storeDisabled || resp.JSON.ExtraFields["store"].Raw() == "false" {
+		return nil
+	}
+	id := cmp.Or(requestConversationID, resp.Conversation.ID, resp.ID)
+	if id == "" {
+		return nil
+	}
+	return &id
+}
+
+func responsesEventResponse(event responses.ResponseStreamEventUnion) *responses.Response {
+	switch event := event.AsAny().(type) {
+	case responses.ResponseCreatedEvent:
+		return &event.Response
+	case responses.ResponseQueuedEvent:
+		return &event.Response
+	case responses.ResponseInProgressEvent:
+		return &event.Response
+	case responses.ResponseCompletedEvent:
+		return &event.Response
+	case responses.ResponseIncompleteEvent:
+		return &event.Response
+	case responses.ResponseFailedEvent:
+		return &event.Response
+	}
+	return nil
 }
 
 func responseInputItemParamOfFunctionCallOutput[T string | responses.ResponseFunctionCallOutputItemListParam](callID string, output T) responses.ResponseInputItemUnionParam {
@@ -1064,12 +1104,25 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 		}
 	}
 
+	// The Responses API reports status "completed" even for turns that only
+	// emitted function calls, so synthesize the tool_calls finish reason when
+	// the output contains a function call - mirroring the streaming path (and
+	// the Chat provider, which reports tool_calls natively).
+	finishReason := responsesFinishReason(resp)
+	for _, out := range resp.Output {
+		if _, ok := out.AsAny().(responses.ResponseFunctionToolCall); ok {
+			if finishReason == "stop" {
+				finishReason = "tool_calls"
+			}
+			break
+		}
+	}
+
 	currentUpdate := &agent.ResponseUpdate{
-		ResponseID:           resp.ID,
-		FinishReason:         responsesFinishReason(resp),
-		CreatedAt:            time.Unix(int64(resp.CreatedAt), 0),
-		Role:                 message.RoleAssistant,
-		AdditionalProperties: responsesPopulateAdditionalProperties(resp),
+		ResponseID:   resp.ID,
+		FinishReason: finishReason,
+		CreatedAt:    time.Unix(int64(resp.CreatedAt), 0),
+		Role:         message.RoleAssistant,
 	}
 	// Only set ContinuationToken if it's not empty
 	if contToken != "" {
@@ -1084,16 +1137,11 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 				if !yield(currentUpdate, nil) {
 					return
 				}
-				// Reset for the next message, carrying the response-level
-				// properties forward so the second and later messages keep
-				// AdditionalProperties (e.g. EndUserId).
-				currentUpdate = &agent.ResponseUpdate{
-					AdditionalProperties: responsesPopulateAdditionalProperties(resp),
-				}
+				currentUpdate = &agent.ResponseUpdate{}
 			}
 			currentUpdate.MessageID = out.ID
 			currentUpdate.ResponseID = resp.ID
-			currentUpdate.FinishReason = responsesFinishReason(resp)
+			currentUpdate.FinishReason = finishReason
 			// Only set ContinuationToken if it's not empty
 			if contToken != "" {
 				currentUpdate.ContinuationToken = contToken
@@ -1214,6 +1262,20 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 	}
 	if failure := responsesFailureContent(resp); failure != nil {
 		currentUpdate.Contents = append(currentUpdate.Contents, failure)
+	}
+	if properties := responsesPopulateAdditionalProperties(resp); len(properties) > 0 {
+		if currentUpdate.MessageID != "" {
+			if !yield(currentUpdate, nil) {
+				return
+			}
+			// Response properties must not inherit the last output message's ID.
+			currentUpdate = &agent.ResponseUpdate{
+				ResponseID:        resp.ID,
+				ContinuationToken: contToken,
+				CreatedAt:         time.Unix(int64(resp.CreatedAt), 0),
+			}
+		}
+		currentUpdate.AdditionalProperties = properties
 	}
 	yield(currentUpdate, nil)
 }
@@ -1357,6 +1419,10 @@ type responsesStreamState struct {
 	messageID           string
 	role                message.Role
 	anyFunctions        bool
+	// imagePartialsSeen records image-generation item IDs that emitted a
+	// partial_image event, so the output_item.done handler does not emit a
+	// duplicate final image for them.
+	imagePartialsSeen map[string]bool
 }
 
 // responsesProcessStreamingUpdate processes a streaming update from the Responses API.
@@ -1375,11 +1441,13 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		return u
 	}
 
-	// Handle different event types using AsAny()
+	// Lifecycle metadata belongs to the response, not the active message.
+	// Omit its MessageID without resetting the state used by content updates.
 	var u *agent.ResponseUpdate
 	switch event := update.AsAny().(type) {
 	case responses.ResponseCreatedEvent:
 		u = createUpdate(message.RoleAssistant, nil)
+		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
@@ -1389,6 +1457,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 
 	case responses.ResponseQueuedEvent:
 		u = createUpdate(message.RoleAssistant, nil)
+		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
@@ -1398,6 +1467,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 
 	case responses.ResponseInProgressEvent:
 		u = createUpdate(message.RoleAssistant, nil)
+		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
@@ -1424,6 +1494,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 
 	case responses.ResponseCompletedEvent:
 		u = createUpdate(message.RoleAssistant, nil)
+		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
 		u.FinishReason = responsesFinishReason(&event.Response)
@@ -1438,6 +1509,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 
 	case responses.ResponseIncompleteEvent:
 		u = createUpdate(message.RoleAssistant, nil)
+		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
 		u.FinishReason = responsesFinishReason(&event.Response)
@@ -1448,6 +1520,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 
 	case responses.ResponseFailedEvent:
 		u = createUpdate(message.RoleAssistant, nil)
+		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
@@ -1532,6 +1605,10 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		}
 
 	case responses.ResponseImageGenCallPartialImageEvent:
+		if state.imagePartialsSeen == nil {
+			state.imagePartialsSeen = map[string]bool{}
+		}
+		state.imagePartialsSeen[event.ItemID] = true
 		result := imageGenerationResult(event.ItemID, event.PartialImageB64, cmp.Or(event.OutputFormat, "png"), event)
 		result.Outputs[0].Header().AdditionalProperties = map[string]any{
 			"ItemId":            event.ItemID,
@@ -1626,7 +1703,16 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		case responses.ResponseFunctionWebSearch:
 			u.Contents = webSearchContents(item)
 		case responses.ResponseOutputItemImageGenerationCall:
-			// Dedicated image-generation events emit the call and partial results.
+			// The dedicated partial_image events emit the image incrementally, but
+			// they are only sent when partial_images > 0. In the default case no
+			// partial event arrives and the finished image lives on the done item,
+			// so emit it here unless a partial was already seen for this item.
+			if !state.imagePartialsSeen[item.ID] {
+				// The in-progress event already emitted the ImageGenerationToolCallContent
+				// for this item, so emit only the finished result here to avoid a
+				// duplicate tool call.
+				u.Contents = []message.Content{imageGenerationResult(item.ID, item.Result, cmp.Or(item.OutputFormat, "png"), item)}
+			}
 		case responses.ResponseReasoningItem:
 			// Carry the completed reasoning item's encrypted content so it can be
 			// replayed on the next turn when store=false (reasoning delta events only
@@ -1789,7 +1875,7 @@ func mcpToolCallErrorMessage(err responses.McpToolCallErrorUnion) string {
 func imageGenerationContents(item responses.ResponseOutputItemImageGenerationCall) message.Contents {
 	return message.Contents{
 		&message.ImageGenerationToolCallContent{CallID: item.ID},
-		imageGenerationResult(item.ID, item.Result, "png", item),
+		imageGenerationResult(item.ID, item.Result, cmp.Or(item.OutputFormat, "png"), item),
 	}
 }
 

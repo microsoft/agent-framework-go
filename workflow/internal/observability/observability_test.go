@@ -101,6 +101,14 @@ func TestCaptureErrorShortTypeName(t *testing.T) {
 	if got := attributeValue(t, span.attrs, observability.TagErrorType); got != "errorString" {
 		t.Errorf("captured error.type = %q, want %q", got, "errorString")
 	}
+	// error.message must NOT be a span attribute: the message is captured on the
+	// exception event by RecordError, and .NET sets error.message only on error
+	// events, not spans.
+	for _, attr := range span.attrs {
+		if attr.Key == observability.TagErrorMessage {
+			t.Errorf("span carries %q attribute %v, want it only on error events", observability.TagErrorMessage, attr.Value)
+		}
+	}
 }
 
 func TestStartExecutorProcessEmitsExecutorType(t *testing.T) {

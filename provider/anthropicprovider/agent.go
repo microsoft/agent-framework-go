@@ -555,17 +555,32 @@ func citationAnnotations(citations []anthropic.TextCitationUnion) []message.Anno
 	var annotations []message.Annotation
 	for _, citation := range citations {
 		var regions message.AnnotatedRegions
-		if citation.Type == "char_location" {
+		// Anthropic reports the cited span differently per location type:
+		// character offsets, PDF page numbers, or content-block indices. Map
+		// each to a text-span region, matching the Python client.
+		switch citation.Type {
+		case "char_location":
 			startIndex, endIndex := int(citation.StartCharIndex), int(citation.EndCharIndex)
+			regions = message.AnnotatedRegions{
+				&message.TextSpanAnnotatedRegion{StartIndex: &startIndex, EndIndex: &endIndex},
+			}
+		case "page_location":
+			startIndex, endIndex := int(citation.StartPageNumber), int(citation.EndPageNumber)
+			regions = message.AnnotatedRegions{
+				&message.TextSpanAnnotatedRegion{StartIndex: &startIndex, EndIndex: &endIndex},
+			}
+		case "content_block_location", "search_result_location":
+			startIndex, endIndex := int(citation.StartBlockIndex), int(citation.EndBlockIndex)
 			regions = message.AnnotatedRegions{
 				&message.TextSpanAnnotatedRegion{StartIndex: &startIndex, EndIndex: &endIndex},
 			}
 		}
 		annotations = append(annotations, &message.CitationAnnotation{
-			FileID:            citation.FileID,
-			Snippet:           citation.CitedText,
-			Title:             cmp.Or(citation.DocumentTitle, citation.Title),
-			URL:               citation.URL,
+			FileID:  citation.FileID,
+			Snippet: citation.CitedText,
+			Title:   cmp.Or(citation.DocumentTitle, citation.Title),
+			// search_result_location carries its link in Source rather than URL.
+			URL:               cmp.Or(citation.URL, citation.Source),
 			AnnotatedRegions:  regions,
 			RawRepresentation: citation,
 		})
@@ -876,7 +891,11 @@ func buildMessageParam(msg *message.Message) (anthropic.MessageParam, error) {
 	for _, c := range msg.Contents {
 		switch c := c.(type) {
 		case *message.TextContent:
-			content = append(content, anthropic.NewTextBlock(c.Text))
+			// Anthropic rejects empty text blocks, so skip them (the system
+			// path applies the same guard).
+			if c.Text != "" {
+				content = append(content, anthropic.NewTextBlock(c.Text))
+			}
 		case *message.TextReasoningContent:
 			// Replay a prior assistant thinking block so its signature travels
 			// back with the request (Anthropic emits reasoning before the rest of

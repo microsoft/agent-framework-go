@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 
 	"github.com/google/uuid"
+	"github.com/microsoft/agent-framework-go/internal/agentopts"
+	"github.com/microsoft/agent-framework-go/internal/toolmiddleware"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -32,6 +34,13 @@ type ProviderConfig struct {
 	// Middlewares wrap Run after agent history and context providers.
 	Middlewares []Middleware
 
+	// ManagesToolExecution indicates that Run invokes function tools supplied through
+	// [WithTool], rather than only returning function call requests. When true,
+	// [New] applies [Config.FunctionMiddlewares] to those tools immediately before
+	// Run, after provider middleware. Run must use the tools in its options, not
+	// retained originals. The provider remains responsible for execution and approvals.
+	ManagesToolExecution bool
+
 	// Format creates a provider response format for a structured output value.
 	Format func(v any) (ResponseFormat, error)
 
@@ -41,14 +50,6 @@ type ProviderConfig struct {
 	// CreateSession configures a provider-specific session. Implementations must
 	// treat options as read-only and clone the slice before making changes.
 	CreateSession func(ctx context.Context, session *Session, options ...Option) error
-
-	// ServiceDoesNotManageHistory indicates that this provider never manages
-	// conversation history server-side, even when a ServiceID is set on the
-	// session. When true, the agent's HistoryProvider is always preserved
-	// regardless of session service ID. Use this for providers like AGUI that
-	// require the caller to supply the full conversation history on every turn
-	// even after the service assigns a session or thread identifier.
-	ServiceDoesNotManageHistory bool
 }
 
 // Config configures an Agent instance.
@@ -60,9 +61,22 @@ type Config struct {
 	// Description describes the agent's purpose.
 	Description string
 
-	// HistoryProvider injects and persists conversation history around each agent run.
+	// HistoryProvider injects and persists conversation history around each agent run,
+	// or each provider call when RequirePerServiceCallHistoryPersistence is true.
 	// When nil, New uses a default in-memory history provider for local sessions.
 	HistoryProvider HistoryProvider
+
+	// RequirePerServiceCallHistoryPersistence loads history before each provider
+	// call and persists new messages and session IDs after each successful call.
+	// Context providers still supply context once per run but receive completion
+	// notifications for each provider call. The default is false.
+	//
+	// Local history uses an internal conversation ID, stripped before the provider
+	// is called, to prevent middleware from replaying already persisted messages.
+	// Background and continuation requests skip local history simulation and update
+	// session IDs at run completion. History and context providers are still notified
+	// per call, and again after successful run completion.
+	RequirePerServiceCallHistoryPersistence bool
 
 	// ThrowOnHistoryProviderConflict controls whether a configured
 	// HistoryProvider conflicting with service-managed history returns an error.
@@ -79,7 +93,8 @@ type Config struct {
 	// Returning an error takes precedence. The default is true.
 	ClearOnHistoryProviderConflict *bool
 
-	// ContextProviders inject and persist context around each agent run.
+	// ContextProviders inject context before each agent run and receive completion
+	// notifications at the configured history persistence boundary.
 	ContextProviders []ContextProvider
 
 	// Logger receives run, middleware, and provider diagnostics.
@@ -94,8 +109,15 @@ type Config struct {
 	// Middlewares wrap the agent lifecycle before history and context providers.
 	Middlewares []Middleware
 
+	// FunctionMiddlewares intercept individual function calls in registration order,
+	// with the first outermost. They apply to tools supplied by context providers
+	// and additional tools configured on automatic tool execution, as well as Tools.
+	FunctionMiddlewares []FunctionInvocationMiddleware
+
 	// MessageInjector configures mid-run message injection. Call its
 	// EnqueueMessages method to queue messages. Nil disables message injection.
+	// Enable RequirePerServiceCallHistoryPersistence to retain injected messages
+	// and earlier responses between provider calls when the service is stateless.
 	MessageInjector *MessageInjector
 
 	// Tools are added to every run.
@@ -116,6 +138,12 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 	}
 
 	cfg.RunOptions = slices.Clone(cfg.RunOptions)
+	functionMiddlewares := slices.DeleteFunc(slices.Clone(cfg.FunctionMiddlewares), func(mf FunctionInvocationMiddleware) bool { return mf == nil })
+	if len(functionMiddlewares) > 0 {
+		cfg.RunOptions = append(cfg.RunOptions, toolmiddleware.Wrapper(func(fn tool.FuncTool) tool.FuncTool {
+			return &functionInvocationTool{FuncTool: fn, middlewares: functionMiddlewares}
+		}))
+	}
 	for _, tool := range cfg.Tools {
 		if tool != nil {
 			cfg.RunOptions = append(cfg.RunOptions, WithTool(tool))
@@ -125,16 +153,10 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 	if cfg.Logger != nil && !cfg.DisableRunLogs {
 		agentMiddlewares = append([]Middleware{newRunLoggerMiddleware(cfg.Logger, cfg.LogSensitiveData)}, agentMiddlewares...)
 	}
-	providerMiddlewares := make([]Middleware, 0, len(prov.Middlewares)+2)
+	providerMiddlewares := make([]Middleware, 0, len(prov.Middlewares)+3)
 	providerMiddlewares = append(providerMiddlewares, prov.Middlewares...)
 	if cfg.MessageInjector != nil {
 		providerMiddlewares = append(providerMiddlewares, MiddlewareFunc(cfg.MessageInjector.run))
-	}
-	if prov.Format != nil || prov.Unmarshal != nil {
-		providerMiddlewares = append(providerMiddlewares, &structuredOutputMiddleware{
-			format:    prov.Format,
-			unmarshal: prov.Unmarshal,
-		})
 	}
 	contextProviders := make([]ContextProvider, 0, len(cfg.ContextProviders))
 	for _, provider := range cfg.ContextProviders {
@@ -149,25 +171,38 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		hasDefaultHistoryProvider = true
 	}
 	a := &Agent{
-		id:                           cfg.ID,
-		name:                         cfg.Name,
-		description:                  cfg.Description,
-		provider:                     prov,
-		runOptions:                   cfg.RunOptions,
-		logger:                       cfg.Logger,
-		historyProvider:              historyProvider,
-		hasConfiguredHistory:         cfg.HistoryProvider != nil,
-		hasDefaultHistoryProvider:    hasDefaultHistoryProvider,
-		throwOnHistoryConflict:       cfg.ThrowOnHistoryProviderConflict == nil || *cfg.ThrowOnHistoryProviderConflict,
-		warnOnHistoryConflict:        cfg.WarnOnHistoryProviderConflict == nil || *cfg.WarnOnHistoryProviderConflict,
-		clearOnHistoryConflict:       cfg.ClearOnHistoryProviderConflict == nil || *cfg.ClearOnHistoryProviderConflict,
-		providerDoesNotManageHistory: prov.ServiceDoesNotManageHistory,
-		contextProviders:             contextProviders,
+		id:                               cfg.ID,
+		name:                             cfg.Name,
+		description:                      cfg.Description,
+		provider:                         prov,
+		runOptions:                       cfg.RunOptions,
+		logger:                           cfg.Logger,
+		historyProvider:                  historyProvider,
+		perServiceCallHistoryPersistence: cfg.RequirePerServiceCallHistoryPersistence,
+		hasConfiguredHistory:             cfg.HistoryProvider != nil,
+		hasDefaultHistoryProvider:        hasDefaultHistoryProvider,
+		throwOnHistoryConflict:           cfg.ThrowOnHistoryProviderConflict == nil || *cfg.ThrowOnHistoryProviderConflict,
+		warnOnHistoryConflict:            cfg.WarnOnHistoryProviderConflict == nil || *cfg.WarnOnHistoryProviderConflict,
+		clearOnHistoryConflict:           cfg.ClearOnHistoryProviderConflict == nil || *cfg.ClearOnHistoryProviderConflict,
+		contextProviders:                 contextProviders,
+	}
+	if a.perServiceCallHistoryPersistence {
+		providerMiddlewares = append(providerMiddlewares, MiddlewareFunc(a.persistServiceCallHistory))
+	}
+	if prov.Format != nil || prov.Unmarshal != nil {
+		providerMiddlewares = append(providerMiddlewares, &structuredOutputMiddleware{
+			format:    prov.Format,
+			unmarshal: prov.Unmarshal,
+		})
+	}
+	providerRun := prov.Run
+	if prov.ManagesToolExecution {
+		providerRun = wrapFuncTools(providerRun)
 	}
 	if len(providerMiddlewares) == 0 {
-		a.providerPipeline = prov.Run
+		a.providerPipeline = providerRun
 	} else {
-		a.providerPipeline = compileRunChain(prov.Run, providerMiddlewares)
+		a.providerPipeline = compileRunChain(providerRun, providerMiddlewares)
 	}
 	a.runPipeline = compileRunChain(a.invoke, agentMiddlewares)
 	return a
@@ -185,7 +220,8 @@ type Agent struct {
 	runOptions []Option
 	logger     *slog.Logger
 
-	historyProvider HistoryProvider
+	historyProvider                  HistoryProvider
+	perServiceCallHistoryPersistence bool
 	// historyCleared records that a run promoted its session to service-managed
 	// history and cleared the configured provider globally (matching the .NET
 	// clear-on-conflict semantics). It is set instead of mutating historyProvider
@@ -196,12 +232,11 @@ type Agent struct {
 	// history provider because Config.HistoryProvider was nil. The synthesized
 	// provider is a local-session convenience and backs off for implicit per-run
 	// sessions and service-managed sessions.
-	hasDefaultHistoryProvider    bool
-	throwOnHistoryConflict       bool
-	warnOnHistoryConflict        bool
-	clearOnHistoryConflict       bool
-	providerDoesNotManageHistory bool
-	contextProviders             []ContextProvider
+	hasDefaultHistoryProvider bool
+	throwOnHistoryConflict    bool
+	warnOnHistoryConflict     bool
+	clearOnHistoryConflict    bool
+	contextProviders          []ContextProvider
 }
 
 // ID returns the agent's unique identifier.
@@ -283,6 +318,18 @@ func errorResponseStream(err error) ResponseStream {
 func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
 	return func(yield func(*ResponseUpdate, error) bool) {
 		session, _ := GetOption(options, WithSession)
+		// Resolve the current session on every invocation, including re-entry
+		// from agent middleware. Request options never seed an existing session.
+		serviceID, _ := GetOption(options, WithServiceID)
+		if sessionID := session.ServiceID(); strings.TrimSpace(sessionID) != "" {
+			if strings.TrimSpace(serviceID) != "" && serviceID != sessionID {
+				yield(nil, errors.New("the service ID in the session differs from the service ID in the run options"))
+				return
+			}
+			if serviceID != sessionID {
+				options = append(slices.Clone(options), WithServiceID(sessionID))
+			}
+		}
 		rawContinuationToken, _ := GetOption(options, WithContinuationToken)
 		continuationState, err := parseContinuationToken(rawContinuationToken)
 		if err != nil {
@@ -295,12 +342,17 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 		}
 		noSession, _ := GetOption(options, noSessionProvided)
 		stream, _ := GetOption(options, Stream)
+		allowBackground, _ := GetOption(options, AllowBackgroundResponses)
+		notifyAtEnd := !a.perServiceCallHistoryPersistence || continuationToken != "" || allowBackground
 		inputMessages := messages
 		lifecycleOptions := withoutContinuationToken(options)
 
-		historyProvider := a.historyProviderForRun(session, continuationToken, noSession)
+		historyProvider := a.historyProviderForRun(session, options, continuationToken, noSession)
+		if !notifyAtEnd {
+			historyProvider = nil
+		}
 		runContextProviders := continuationToken == "" && len(a.contextProviders) > 0
-		if historyProvider != nil {
+		if historyProvider != nil && !a.perServiceCallHistoryPersistence {
 			var err error
 			messages, err = historyProvider.Invoking(ctx, InvokingContext{Messages: messages, Options: lifecycleOptions})
 			if err != nil {
@@ -334,13 +386,14 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			contextResponse     *Response
 			historyResponse     *Response
 			continuationUpdates []*ResponseUpdate
+			conversationID      *string
 			runErr              error
 			stopped             bool
 		}
 		if historyProvider != nil {
 			state.historyResponse = new(Response)
 		}
-		if runContextProviders {
+		if runContextProviders && notifyAtEnd {
 			state.contextResponse = new(Response)
 		}
 		if trackContinuationUpdates {
@@ -350,13 +403,16 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 		for update, err := range a.providerPipeline(ctx, messages, options...) {
 			if update != nil {
 				a.setAuthor(update)
+				if update.ConversationID != nil {
+					state.conversationID = update.ConversationID
+				}
 				if trackContinuationUpdates {
 					state.continuationUpdates = append(state.continuationUpdates, cloneResponseUpdate(update))
 				}
 				if historyProvider != nil {
 					state.historyResponse.Update(update)
 				}
-				if runContextProviders {
+				if state.contextResponse != nil {
 					state.contextResponse.Update(update)
 				}
 				if update.ContinuationToken != "" {
@@ -385,6 +441,17 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 		if state.stopped && state.runErr == nil {
 			return
 		}
+		// Per-call failures have already been reported, including failures from
+		// background and continuation requests that also notify on run completion.
+		if !notifyAtEnd || a.perServiceCallHistoryPersistence && state.runErr != nil {
+			return
+		}
+		if state.runErr == nil {
+			if err := a.updateSessionConversationID(ctx, session, state.conversationID); err != nil {
+				yield(nil, err)
+				return
+			}
+		}
 
 		historyStoreProvider := historyProvider
 		var storeResponseMessages []*message.Message
@@ -392,7 +459,7 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			storeResponseMessages = state.historyResponse.Messages
 		}
 		if continuationToken != "" {
-			historyStoreProvider = a.historyProviderForContinuationStore(session, noSession)
+			historyStoreProvider = a.historyProviderForSession(session, options, noSession)
 			requestMessages = inputMessagesForContinuation(nil, continuationState)
 			continuationResponse := responseFromUpdates(state.continuationUpdates)
 			storeResponseMessages = continuationResponse.Messages
@@ -400,17 +467,6 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 
 		if historyStoreProvider != nil {
 			storeHistory := a.shouldStoreHistoryProvider(historyStoreProvider, session)
-			if state.runErr == nil {
-				var err error
-				storeHistory, err = a.handleHistoryProviderConflict(ctx, historyStoreProvider, session)
-				if err != nil {
-					if !state.stopped {
-						yield(nil, err)
-					}
-					return
-				}
-				storeHistory = storeHistory && a.shouldStoreHistoryProvider(historyStoreProvider, session)
-			}
 			if storeHistory {
 				if continuationToken == "" {
 					state.historyResponse.Coalesce()
@@ -446,6 +502,22 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 	}
 }
 
+func (a *Agent) updateSessionConversationID(ctx context.Context, session *Session, conversationID *string) error {
+	if conversationID == nil || strings.TrimSpace(*conversationID) == "" {
+		if strings.TrimSpace(session.ServiceID()) != "" {
+			return errors.New("service did not return a valid conversation ID when using a session with provider-managed history")
+		}
+		return nil
+	}
+	if err := a.handleHistoryProviderConflict(ctx, session, *conversationID); err != nil {
+		return err
+	}
+	if session != nil {
+		session.SetServiceID(*conversationID)
+	}
+	return nil
+}
+
 func (a *Agent) setAuthor(update *ResponseUpdate) {
 	if update == nil {
 		return
@@ -471,34 +543,26 @@ func withoutContinuationToken(options []Option) []Option {
 	})
 }
 
-func (a *Agent) historyProviderForRun(session *Session, continuationToken string, noSession bool) HistoryProvider {
+func (a *Agent) historyProviderForRun(session *Session, options []Option, continuationToken string, noSession bool) HistoryProvider {
 	if continuationToken != "" {
 		return nil
 	}
-	return a.historyProviderForSession(session, noSession)
+	return a.historyProviderForSession(session, options, noSession)
 }
 
-func (a *Agent) historyProviderForContinuationStore(session *Session, noSession bool) HistoryProvider {
-	return a.historyProviderForSession(session, noSession)
-}
-
-func (a *Agent) historyProviderForSession(session *Session, noSession bool) HistoryProvider {
+func (a *Agent) historyProviderForSession(session *Session, options []Option, noSession bool) HistoryProvider {
 	if a.historyProvider == nil || session == nil || a.historyCleared.Load() {
 		return nil
 	}
-	if !a.hasDefaultHistoryProvider {
-		if session.ServiceID() != "" && !a.providerDoesNotManageHistory {
-			return nil
-		}
-		return a.historyProvider
+	serviceID, _ := GetOption(options, WithServiceID)
+	if !a.perServiceCallHistoryPersistence && (strings.TrimSpace(serviceID) != "" || strings.TrimSpace(session.ServiceID()) != "") {
+		return nil
 	}
 
 	// The default in-memory provider only owns caller-provided local sessions.
 	// Auto-created sessions are per-run and cannot preserve history across calls;
 	// service-managed sessions use the provider service as the source of history.
-	// Providers that never manage history server-side (e.g. AGUI) set
-	// providerDoesNotManageHistory so the in-memory provider is kept regardless.
-	if noSession || (session.ServiceID() != "" && !a.providerDoesNotManageHistory) {
+	if noSession && a.hasDefaultHistoryProvider && !a.perServiceCallHistoryPersistence {
 		return nil
 	}
 	return a.historyProvider
@@ -508,8 +572,7 @@ func (a *Agent) shouldStoreHistoryProvider(provider HistoryProvider, session *Se
 	if provider == nil {
 		return false
 	}
-	if a.providerDoesNotManageHistory {
-		// Provider never uses server-side history; always persist locally.
+	if a.perServiceCallHistoryPersistence {
 		return true
 	}
 	if session != nil && session.ServiceID() != "" {
@@ -527,22 +590,21 @@ func (a *Agent) shouldStoreHistoryProvider(provider HistoryProvider, session *Se
 	return session != nil
 }
 
-func (a *Agent) handleHistoryProviderConflict(ctx context.Context, provider HistoryProvider, session *Session) (bool, error) {
-	if provider == nil || !a.hasConfiguredHistory || session == nil || session.ServiceID() == "" || a.providerDoesNotManageHistory {
-		return true, nil
+func (a *Agent) handleHistoryProviderConflict(ctx context.Context, session *Session, conversationID string) error {
+	if !a.hasConfiguredHistory || session == nil || conversationID == "" {
+		return nil
 	}
 
 	if a.warnOnHistoryConflict && a.logger != nil {
-		a.logger.WarnContext(ctx, "history provider conflicts with service-managed history", slog.String("service_id", session.ServiceID()))
+		a.logger.WarnContext(ctx, "history provider conflicts with service-managed history", slog.String("service_id", conversationID))
 	}
 	if a.throwOnHistoryConflict {
-		return false, errors.New("only Session.ServiceID or HistoryProvider may be used, but not both; the service returned an ID indicating service-managed history while the agent has a HistoryProvider configured")
+		return errors.New("only Session.ServiceID or HistoryProvider may be used, but not both; the service returned an ID indicating service-managed history while the agent has a HistoryProvider configured")
 	}
 	if a.clearOnHistoryConflict {
 		a.historyCleared.Store(true)
-		return false, nil
 	}
-	return true, nil
+	return nil
 }
 
 func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, options []Option) (context.Context, []*message.Message, []Option, error) {
@@ -561,10 +623,13 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 			// caller experience between initial and follow-up runs.
 			return nil, nil, nil, errors.New("a session must be provided when AllowBackgroundResponses is enabled")
 		}
-		// Ensure a session is provided in the options.
-		session, err := a.CreateSession(ctx, options...)
-		if err != nil {
-			return nil, nil, nil, err
+		// A per-run ID belongs to the request until returned by the provider.
+		// Only an explicit CreateSession call seeds a service ID on a session.
+		session := &Session{}
+		if a.provider.CreateSession != nil {
+			if err := a.provider.CreateSession(ctx, session, options...); err != nil {
+				return nil, nil, nil, err
+			}
 		}
 		if !optionsOwned {
 			cloned := make([]Option, len(options), len(options)+2)
@@ -572,6 +637,9 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 			options = cloned
 		}
 		options = append(options, WithSession(session), noSessionProvided(true))
+		if a.hasDefaultHistoryProvider && !a.perServiceCallHistoryPersistence {
+			options = append(options, agentopts.SessionlessHistory{})
+		}
 	}
 
 	continuationToken, _ := GetOption(options, WithContinuationToken)

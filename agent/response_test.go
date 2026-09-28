@@ -3,6 +3,8 @@
 package agent_test
 
 import (
+	"encoding/json"
+	"maps"
 	"reflect"
 	"testing"
 	"time"
@@ -410,6 +412,35 @@ func TestResponse_Update_FinishReason(t *testing.T) {
 	}
 }
 
+func TestResponse_ConversationIDTracksLatestProviderResponse(t *testing.T) {
+	var resp agent.Response
+	resp.Update(&agent.ResponseUpdate{ResponseID: "response-1", ConversationID: new("conversation-1")})
+	resp.Update(&agent.ResponseUpdate{ResponseID: "response-1", Contents: message.Contents{&message.TextContent{Text: "first"}}})
+	if resp.ConversationID == nil || *resp.ConversationID != "conversation-1" {
+		t.Fatalf("conversation ID after first response = %v, want conversation-1", resp.ConversationID)
+	}
+
+	resp.Update(&agent.ResponseUpdate{Contents: message.Contents{&message.TextContent{Text: "second"}}})
+	if resp.ConversationID == nil || *resp.ConversationID != "conversation-1" {
+		t.Fatalf("an update without metadata erased conversation-1: %v", resp.ConversationID)
+	}
+	resp.Update(&agent.ResponseUpdate{ResponseID: "response-3", ConversationID: new("conversation-3")})
+	if resp.ConversationID == nil || *resp.ConversationID != "conversation-3" {
+		t.Fatalf("conversation ID after third response = %v, want conversation-3", resp.ConversationID)
+	}
+
+	var collected agent.Response
+	for _, update := range resp.ToUpdates() {
+		if update.ConversationID == nil || *update.ConversationID != "conversation-3" {
+			t.Fatalf("response-to-update conversation ID = %v, want conversation-3", update.ConversationID)
+		}
+		collected.Update(update)
+	}
+	if collected.ConversationID == nil || *collected.ConversationID != "conversation-3" {
+		t.Fatalf("collected conversation ID = %v, want conversation-3", collected.ConversationID)
+	}
+}
+
 func TestResponse_CreatedAt(t *testing.T) {
 	resp := &agent.Response{}
 
@@ -495,6 +526,21 @@ func TestResponse_Update_AdditionalProperties(t *testing.T) {
 	}
 	if resp.Messages[0].AdditionalProperties["key3"] != "value3" {
 		t.Errorf("expected key3 'value3', got %v", resp.Messages[0].AdditionalProperties["key3"])
+	}
+	if resp.AdditionalProperties != nil {
+		t.Errorf("message properties leaked into the response: %v", resp.AdditionalProperties)
+	}
+
+	// An update without a message ID carries response properties, even when
+	// it follows a message update and uses the same property names.
+	responseProperties := map[string]any{"key2": "response-value", "response-only": true}
+	resp.Update(&agent.ResponseUpdate{AdditionalProperties: responseProperties})
+	if !reflect.DeepEqual(resp.AdditionalProperties, responseProperties) {
+		t.Errorf("response properties = %v, want %v", resp.AdditionalProperties, responseProperties)
+	}
+	wantMessageProperties := map[string]any{"key1": "value1", "key2": 456, "key3": "value3"}
+	if !reflect.DeepEqual(resp.Messages[0].AdditionalProperties, wantMessageProperties) {
+		t.Errorf("response properties changed message properties: %v", resp.Messages[0].AdditionalProperties)
 	}
 }
 
@@ -588,6 +634,73 @@ func TestResponse_ToUpdates_RoundTripPreservesRawRepresentationWithContinuationT
 	}
 	if collected.ContinuationToken != "token-123" {
 		t.Errorf("expected ContinuationToken 'token-123', got %q", collected.ContinuationToken)
+	}
+}
+
+func TestResponse_ToUpdates_PreservesPropertyScopes(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		properties map[string]any
+	}{
+		{name: "message properties only"},
+		{name: "separate response properties", properties: map[string]any{"response-only": true, "shared": "response"}},
+	} {
+		for _, encoding := range []string{"direct", "JSON"} {
+			t.Run(tc.name+"/"+encoding, func(t *testing.T) {
+				messageProperties := []map[string]any{
+					{"first-only": "first-value", "shared": "first"},
+					{"second-only": "second-value", "shared": "second"},
+				}
+				original := &agent.Response{
+					ID: "response-1", ConversationID: new("conversation-1"), ContinuationToken: "continuation-1",
+					AdditionalProperties: maps.Clone(tc.properties),
+					Messages: []*message.Message{
+						{ID: "message-1", Role: message.RoleAssistant, AdditionalProperties: maps.Clone(messageProperties[0]), Contents: message.Contents{&message.TextContent{Text: "first"}}},
+						{ID: "message-2", Role: message.RoleAssistant, AdditionalProperties: maps.Clone(messageProperties[1]), Contents: message.Contents{&message.TextContent{Text: "second"}}},
+					},
+				}
+				current := original
+				for range 2 {
+					updates := current.ToUpdates()
+					if encoding == "JSON" {
+						data, err := json.Marshal(updates)
+						if err != nil {
+							t.Fatal(err)
+						}
+						updates = nil
+						if err := json.Unmarshal(data, &updates); err != nil {
+							t.Fatal(err)
+						}
+					}
+					current = new(agent.Response)
+					for _, update := range updates {
+						current.Update(update)
+					}
+					if len(current.Messages) != len(messageProperties) {
+						t.Fatalf("message count = %d, want 2", len(current.Messages))
+					}
+					for i, msg := range current.Messages {
+						if !reflect.DeepEqual(msg.AdditionalProperties, messageProperties[i]) {
+							t.Errorf("message %d properties = %v, want %v", i, msg.AdditionalProperties, messageProperties[i])
+						}
+					}
+					if !reflect.DeepEqual(current.AdditionalProperties, tc.properties) {
+						t.Errorf("response properties = %v, want %v", current.AdditionalProperties, tc.properties)
+					}
+					if current.ID != original.ID || current.ConversationID == nil || *current.ConversationID != *original.ConversationID || current.ContinuationToken != original.ContinuationToken {
+						t.Fatal("round trip lost response IDs or the continuation token")
+					}
+				}
+				if !reflect.DeepEqual(original.AdditionalProperties, tc.properties) {
+					t.Fatal("conversion mutated the source response properties")
+				}
+				for i, msg := range original.Messages {
+					if !reflect.DeepEqual(msg.AdditionalProperties, messageProperties[i]) {
+						t.Fatal("conversion mutated the source message properties")
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -860,6 +973,19 @@ func TestResponse_ToUpdates_WithNoMessagesProducesEmptySlice(t *testing.T) {
 
 	if len(updates) != 0 {
 		t.Fatalf("expected no updates, got %d", len(updates))
+	}
+}
+
+func TestResponse_ToUpdates_ConversationIDOnMetadataUpdate(t *testing.T) {
+	resp := &agent.Response{ID: "response-1", ConversationID: new("conversation-1"), AdditionalProperties: map[string]any{"source": "provider"}}
+	updates := resp.ToUpdates()
+	if len(updates) != 1 || updates[0].ConversationID == nil || *updates[0].ConversationID != "conversation-1" {
+		t.Fatalf("conversation-only response updates = %+v", updates)
+	}
+	var restored agent.Response
+	restored.Update(updates[0])
+	if restored.ConversationID == nil || *restored.ConversationID != "conversation-1" {
+		t.Errorf("restored conversation ID = %v, want conversation-1", restored.ConversationID)
 	}
 }
 

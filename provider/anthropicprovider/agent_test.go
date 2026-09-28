@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -29,6 +30,64 @@ import (
 type testOutput struct {
 	Name string `json:"name"`
 	Age  int    `json:"age"`
+}
+
+func TestToolCallsWithServiceIDDoNotClaimStoredHistory(t *testing.T) {
+	requests := make(chan []byte, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		requests <- body
+		w.Header().Set("Content-Type", "application/json")
+		if len(requests) == 1 {
+			_, _ = io.WriteString(w, `{"id":"msg_call","type":"message","role":"assistant","model":"test-model","content":[{"type":"tool_use","id":"call_1","name":"lookup","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}`)
+		} else {
+			_, _ = io.WriteString(w, minimalMessageResponse("done"))
+		}
+	}))
+	defer server.Close()
+	a := anthropicprovider.NewAgent(anthropic.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL)), anthropicprovider.AgentConfig{Model: "test-model"})
+	fn := functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) { return "found", nil })
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("thread-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = a.RunText(t.Context(), "lookup order", agent.WithSession(session), agent.WithTool(fn)).Collect()
+	if err == nil || !strings.Contains(err.Error(), "did not return a valid conversation ID") {
+		t.Fatalf("error = %v, want missing conversation ID", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(requests))
+	}
+	<-requests
+	var followup struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type      string `json:"type"`
+				ID        string `json:"id"`
+				ToolUseID string `json:"tool_use_id"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(<-requests, &followup); err != nil {
+		t.Fatal(err)
+	}
+	roles := make([]string, len(followup.Messages))
+	for i, m := range followup.Messages {
+		roles[i] = m.Role
+	}
+	if !slices.Equal(roles, []string{"user", "assistant", "user"}) ||
+		len(followup.Messages[1].Content) != 1 || followup.Messages[1].Content[0].ID != "call_1" ||
+		len(followup.Messages[2].Content) != 1 || followup.Messages[2].Content[0].ToolUseID != "call_1" {
+		t.Fatalf("stateless follow-up omitted the user/call/result exchange: %+v", followup.Messages)
+	}
+	if session.ServiceID() != "thread-1" {
+		t.Errorf("failed run changed session ID to %q", session.ServiceID())
+	}
 }
 
 func TestAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {
@@ -527,6 +586,136 @@ func TestCharacterLocationCitationsBecomeAnnotatedRegions(t *testing.T) {
 	span, ok := citation.AnnotatedRegions[0].(*message.TextSpanAnnotatedRegion)
 	if !ok || span.StartIndex == nil || *span.StartIndex != 4 || span.EndIndex == nil || *span.EndIndex != 12 {
 		t.Fatalf("annotated region = %#v, want [4, 12)", citation.AnnotatedRegions[0])
+	}
+}
+
+// citationRegionFromResponse runs the agent against a server returning a single
+// text block whose citation is the given JSON object, then returns the decoded
+// text-span region of that citation.
+func citationRegionFromResponse(t *testing.T, citationJSON string) *message.TextSpanAnnotatedRegion {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"msg_region_citation",
+			"type":"message",
+			"role":"assistant",
+			"model":"claude-3-5-sonnet-20241022",
+			"stop_reason":"end_turn",
+			"content":[{
+				"type":"text",
+				"text":"The answer cites a document.",
+				"citations":[`+citationJSON+`]
+			}],
+			"usage":{"input_tokens":10,"output_tokens":5}
+		}`)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "cite something").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var citation *message.CitationAnnotation
+	for content := range resp.Contents() {
+		if text, ok := content.(*message.TextContent); ok && len(text.Annotations) > 0 {
+			citation, _ = text.Annotations[0].(*message.CitationAnnotation)
+		}
+	}
+	if citation == nil || len(citation.AnnotatedRegions) != 1 {
+		t.Fatalf("citation = %#v", citation)
+	}
+	span, ok := citation.AnnotatedRegions[0].(*message.TextSpanAnnotatedRegion)
+	if !ok {
+		t.Fatalf("annotated region = %#v, want a text span", citation.AnnotatedRegions[0])
+	}
+	return span
+}
+
+// Page-location citations carry PDF page numbers rather than character offsets;
+// they must still surface as a text-span region, matching the Python client.
+func TestPageLocationCitationsBecomeAnnotatedRegions(t *testing.T) {
+	span := citationRegionFromResponse(t, `{
+		"type":"page_location",
+		"cited_text":"page excerpt",
+		"document_index":0,
+		"document_title":"Document",
+		"start_page_number":3,
+		"end_page_number":5
+	}`)
+	if span.StartIndex == nil || *span.StartIndex != 3 || span.EndIndex == nil || *span.EndIndex != 5 {
+		t.Fatalf("annotated region = %#v, want [3, 5)", span)
+	}
+}
+
+// Content-block-location citations carry block indices; they must also surface
+// as a text-span region.
+func TestContentBlockLocationCitationsBecomeAnnotatedRegions(t *testing.T) {
+	span := citationRegionFromResponse(t, `{
+		"type":"content_block_location",
+		"cited_text":"block excerpt",
+		"document_index":0,
+		"document_title":"Document",
+		"start_block_index":1,
+		"end_block_index":4
+	}`)
+	if span.StartIndex == nil || *span.StartIndex != 1 || span.EndIndex == nil || *span.EndIndex != 4 {
+		t.Fatalf("annotated region = %#v, want [1, 4)", span)
+	}
+}
+
+// search_result_location citations carry a block-index region and put their
+// link in the source field (not url); both must be surfaced, matching Python.
+func TestSearchResultLocationCitationsSurfaceRegionAndSource(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"id":"msg_search_citation",
+			"type":"message",
+			"role":"assistant",
+			"model":"claude-3-5-sonnet-20241022",
+			"stop_reason":"end_turn",
+			"content":[{
+				"type":"text",
+				"text":"The answer cites a search result.",
+				"citations":[{
+					"type":"search_result_location",
+					"cited_text":"search excerpt",
+					"title":"Result",
+					"source":"https://example.com/result",
+					"start_block_index":1,
+					"end_block_index":3
+				}]
+			}],
+			"usage":{"input_tokens":10,"output_tokens":5}
+		}`)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "cite something").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var citation *message.CitationAnnotation
+	for content := range resp.Contents() {
+		if text, ok := content.(*message.TextContent); ok && len(text.Annotations) > 0 {
+			citation, _ = text.Annotations[0].(*message.CitationAnnotation)
+		}
+	}
+	if citation == nil {
+		t.Fatal("no citation annotation surfaced")
+	}
+	if citation.URL != "https://example.com/result" {
+		t.Errorf("URL = %q, want the source link", citation.URL)
+	}
+	if len(citation.AnnotatedRegions) != 1 {
+		t.Fatalf("regions = %#v, want one text-span region", citation.AnnotatedRegions)
+	}
+	span, ok := citation.AnnotatedRegions[0].(*message.TextSpanAnnotatedRegion)
+	if !ok || span.StartIndex == nil || *span.StartIndex != 1 || span.EndIndex == nil || *span.EndIndex != 3 {
+		t.Fatalf("annotated region = %#v, want [1, 3)", citation.AnnotatedRegions[0])
 	}
 }
 
@@ -1165,6 +1354,27 @@ func TestAssistantUnsignedReasoningIsSkipped(t *testing.T) {
 	}
 	if blocks[0]["type"] != "text" {
 		t.Errorf("block type = %v, want %q", blocks[0]["type"], "text")
+	}
+}
+
+// Anthropic rejects empty text blocks, so a TextContent with no text must not be
+// forwarded. The system path already guards this; the message path must too,
+// matching the Python client which skips empty text blocks.
+func TestEmptyTextContentIsSkipped(t *testing.T) {
+	msgs := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{&message.TextContent{Text: "hi"}}},
+		{Role: message.RoleAssistant, Contents: message.Contents{
+			&message.TextContent{Text: ""},
+			&message.TextContent{Text: "hello"},
+		}},
+	}
+
+	blocks := assistantBlocksFromRequest(t, msgs)
+	if len(blocks) != 1 {
+		t.Fatalf("assistant content blocks = %d, want 1 (empty text block should be skipped) (%#v)", len(blocks), blocks)
+	}
+	if blocks[0]["type"] != "text" || blocks[0]["text"] != "hello" {
+		t.Errorf("block = %#v, want a text block %q", blocks[0], "hello")
 	}
 }
 

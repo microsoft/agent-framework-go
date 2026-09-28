@@ -18,11 +18,9 @@ import (
 
 const sessionStateKey = "workflowprovider_state"
 
-// providerServiceID marks sessions managed by this provider. Setting a
-// non-empty ServiceID on the session opts out of the agent package's
-// default history provider on subsequent calls. Explicitly configured
-// history providers still run. The workflow itself owns conversational
-// state across turns.
+// providerServiceID marks conversations managed by the workflow. The workflow
+// stores its history in the agent session and reports this ID on each response
+// so the agent does not replay history from a separate history provider.
 const providerServiceID = "workflowprovider"
 
 type sessionCheckpointEntry struct {
