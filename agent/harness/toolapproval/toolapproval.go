@@ -199,7 +199,7 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 						yield(nil, err)
 						return
 					}
-					if !cfg.DisableApprovalResponseBinding && update != nil {
+					if update != nil {
 						for _, content := range update.Contents {
 							if req, ok := content.(*message.ToolApprovalRequestContent); ok {
 								recordSurfacedApprovalRequests(&st, req)
