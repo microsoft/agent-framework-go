@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -29,6 +30,64 @@ import (
 type testOutput struct {
 	Name string `json:"name"`
 	Age  int    `json:"age"`
+}
+
+func TestToolCallsWithServiceIDDoNotClaimStoredHistory(t *testing.T) {
+	requests := make(chan []byte, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		requests <- body
+		w.Header().Set("Content-Type", "application/json")
+		if len(requests) == 1 {
+			_, _ = io.WriteString(w, `{"id":"msg_call","type":"message","role":"assistant","model":"test-model","content":[{"type":"tool_use","id":"call_1","name":"lookup","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}`)
+		} else {
+			_, _ = io.WriteString(w, minimalMessageResponse("done"))
+		}
+	}))
+	defer server.Close()
+	a := anthropicprovider.NewAgent(anthropic.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL)), anthropicprovider.AgentConfig{Model: "test-model"})
+	fn := functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) { return "found", nil })
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("thread-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = a.RunText(t.Context(), "lookup order", agent.WithSession(session), agent.WithTool(fn)).Collect()
+	if err == nil || !strings.Contains(err.Error(), "did not return a valid conversation ID") {
+		t.Fatalf("error = %v, want missing conversation ID", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(requests))
+	}
+	<-requests
+	var followup struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type      string `json:"type"`
+				ID        string `json:"id"`
+				ToolUseID string `json:"tool_use_id"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal(<-requests, &followup); err != nil {
+		t.Fatal(err)
+	}
+	roles := make([]string, len(followup.Messages))
+	for i, m := range followup.Messages {
+		roles[i] = m.Role
+	}
+	if !slices.Equal(roles, []string{"user", "assistant", "user"}) ||
+		len(followup.Messages[1].Content) != 1 || followup.Messages[1].Content[0].ID != "call_1" ||
+		len(followup.Messages[2].Content) != 1 || followup.Messages[2].Content[0].ToolUseID != "call_1" {
+		t.Fatalf("stateless follow-up omitted the user/call/result exchange: %+v", followup.Messages)
+	}
+	if session.ServiceID() != "thread-1" {
+		t.Errorf("failed run changed session ID to %q", session.ServiceID())
+	}
 }
 
 func TestAgent_UnsupportedMessageRoleReturnsError(t *testing.T) {

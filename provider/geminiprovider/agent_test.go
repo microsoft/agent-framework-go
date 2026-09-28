@@ -31,6 +31,75 @@ type testOutput struct {
 	Age  int    `json:"age"`
 }
 
+func TestToolCallsWithServiceIDDoNotClaimStoredHistory(t *testing.T) {
+	requests := make(chan []byte, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		requests <- body
+		w.Header().Set("Content-Type", "application/json")
+		if len(requests) == 1 {
+			_, _ = io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"call_1","name":"lookup","args":{}}}]},"finishReason":"STOP"}]}`)
+		} else {
+			_, _ = io.WriteString(w, minimalTextResponse("done"))
+		}
+	}))
+	defer server.Close()
+	client, err := genai.NewClient(t.Context(), &genai.ClientConfig{
+		Backend:     genai.BackendGeminiAPI,
+		APIKey:      "test",
+		HTTPOptions: genai.HTTPOptions{BaseURL: server.URL},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := geminiprovider.NewAgent(client, geminiprovider.AgentConfig{Model: testModel})
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("thread-1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fn := functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) { return "found", nil })
+	_, err = a.RunText(t.Context(), "lookup order", agent.WithSession(session), agent.WithTool(fn)).Collect()
+	if err == nil || !strings.Contains(err.Error(), "did not return a valid conversation ID") {
+		t.Fatalf("error = %v, want missing conversation ID", err)
+	}
+	if len(requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(requests))
+	}
+	<-requests
+	var followup struct {
+		Contents []struct {
+			Role  string `json:"role"`
+			Parts []struct {
+				FunctionCall *struct {
+					ID string `json:"id"`
+				} `json:"functionCall"`
+				FunctionResponse *struct {
+					ID string `json:"id"`
+				} `json:"functionResponse"`
+			} `json:"parts"`
+		} `json:"contents"`
+	}
+	if err := json.Unmarshal(<-requests, &followup); err != nil {
+		t.Fatal(err)
+	}
+	roles := make([]string, len(followup.Contents))
+	for i, content := range followup.Contents {
+		roles[i] = content.Role
+	}
+	if !slices.Equal(roles, []string{"user", "model", "user"}) ||
+		len(followup.Contents[1].Parts) != 1 || followup.Contents[1].Parts[0].FunctionCall == nil || followup.Contents[1].Parts[0].FunctionCall.ID != "call_1" ||
+		len(followup.Contents[2].Parts) != 1 || followup.Contents[2].Parts[0].FunctionResponse == nil || followup.Contents[2].Parts[0].FunctionResponse.ID != "call_1" {
+		t.Fatalf("stateless follow-up omitted the user/call/result exchange: %+v", followup.Contents)
+	}
+	if session.ServiceID() != "thread-1" {
+		t.Errorf("failed run changed session ID to %q", session.ServiceID())
+	}
+}
+
 func TestNewAgent_PanicsWithNilClient(t *testing.T) {
 	defer func() {
 		if recover() == nil {

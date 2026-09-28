@@ -72,6 +72,8 @@ func (s *Session) Delete(key string) {
 }
 
 // ServiceID returns the provider-specific identifier associated with the session.
+// When [Config.RequirePerServiceCallHistoryPersistence] is enabled, it may instead
+// identify history managed locally by the agent.
 func (s *Session) ServiceID() string {
 	if s == nil {
 		return ""

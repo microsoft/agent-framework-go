@@ -174,11 +174,10 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 		initialMessages := cloneMessages(messages)
 		currentMessages := cloneMessages(messages)
 		currentOpts := slices.Clone(opts)
-		var retainHistory, serviceDoesNotManageHistory bool
+		var retainHistory bool
 		for _, opt := range opts {
-			if history, ok := opt.(agentopts.SessionlessHistory); ok {
+			if _, ok := opt.(agentopts.SessionlessHistory); ok {
 				retainHistory = !cfg.FreshContextPerIteration
-				serviceDoesNotManageHistory = history.ServiceDoesNotManageHistory
 			}
 		}
 		var historyMessages []*message.Message
@@ -205,7 +204,8 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			var iterationUpdates []*agent.ResponseUpdate
 			messagesToSend := currentMessages
 			activeSession, _ := agent.GetOption(currentOpts, agent.WithSession)
-			if retainHistory && (activeSession.ServiceID() == "" || serviceDoesNotManageHistory) {
+			serviceID, _ := agent.GetOption(currentOpts, agent.WithServiceID)
+			if retainHistory && activeSession.ServiceID() == "" && serviceID == "" {
 				messagesToSend = make([]*message.Message, 0, len(historyMessages)+len(currentMessages))
 				source := message.Source{Type: agent.SourceTypeHistoryProvider, ID: "loop"}
 				for _, msg := range historyMessages {

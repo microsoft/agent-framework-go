@@ -300,6 +300,9 @@ func TestRun_SurfacesLifecycleEventEmittedDuringSessionResume(t *testing.T) {
 	if !hasRawEventOfType(response, "session.start") {
 		t.Fatal("lifecycle event emitted before the session.resume response was dropped; OnEvent must be registered before the RPC")
 	}
+	if response.ConversationID == nil || *response.ConversationID != "existing-session" {
+		t.Errorf("conversation ID = %v, want existing-session", response.ConversationID)
+	}
 }
 
 func TestRun_PreservesUserSuppliedOnEventHandler(t *testing.T) {

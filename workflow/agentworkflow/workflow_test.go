@@ -244,9 +244,16 @@ func TestNew_StreamsResponseUpdates(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	resp, err := ag.RunText(t.Context(), "ping").Collect()
+	session, err := ag.CreateSession(t.Context())
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	resp, err := ag.RunText(t.Context(), "ping", agent.WithSession(session)).Collect()
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
+	}
+	if resp.ConversationID == nil || *resp.ConversationID != session.ServiceID() {
+		t.Fatalf("workflow response conversation ID = %v, want session ID %q", resp.ConversationID, session.ServiceID())
 	}
 
 	if len(resp.Messages) == 0 {
@@ -1169,11 +1176,15 @@ func TestNew_EmptyFirstTurnEnqueuesMessageBatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := ag.Run(t.Context(), nil, agent.WithSession(session)).Collect(); err != nil {
+	resp, err := ag.Run(t.Context(), nil, agent.WithSession(session)).Collect()
+	if err != nil {
 		t.Fatal(err)
 	}
 	if !batchHandled {
 		t.Fatal("empty initial message batch was not handled")
+	}
+	if resp.ConversationID == nil || *resp.ConversationID != session.ServiceID() {
+		t.Fatalf("empty workflow turn conversation ID = %v, want session ID %q", resp.ConversationID, session.ServiceID())
 	}
 }
 

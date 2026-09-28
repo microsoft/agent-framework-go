@@ -347,7 +347,7 @@ func TestMessageMerger_MergesReasoningAndTextIntoSingleMessageWhenReasoningLacks
 	assertTextContent(t, msg.Contents[1], "Here is the answer.")
 }
 
-func TestMessageMerger_FoldsIdentifierlessReasoningMergesAdditionalProperties(t *testing.T) {
+func TestMessageMerger_FoldsIdentifierlessReasoningPreservesPropertyScopes(t *testing.T) {
 	const (
 		responseID = "response"
 		messageID  = "msg-answer"
@@ -374,8 +374,14 @@ func TestMessageMerger_FoldsIdentifierlessReasoningMergesAdditionalProperties(t 
 		t.Fatalf("message count = %d, want 1", len(response.Messages))
 	}
 	msg := response.Messages[0]
-	if msg.AdditionalProperties["reasoning_key"] != "reasoning" {
-		t.Fatalf("reasoning additional property = %v, want reasoning", msg.AdditionalProperties["reasoning_key"])
+	if response.AdditionalProperties["reasoning_key"] != "reasoning" || response.AdditionalProperties["shared"] != "reasoning" {
+		t.Fatalf("identifierless update lost response properties: %v", response.AdditionalProperties)
+	}
+	if _, ok := msg.AdditionalProperties["reasoning_key"]; ok {
+		t.Fatal("response-level reasoning property leaked into message properties")
+	}
+	if _, ok := response.AdditionalProperties["answer_key"]; ok {
+		t.Fatal("message-level answer property leaked into response properties")
 	}
 	if msg.AdditionalProperties["answer_key"] != "answer" {
 		t.Fatalf("answer additional property = %v, want answer", msg.AdditionalProperties["answer_key"])

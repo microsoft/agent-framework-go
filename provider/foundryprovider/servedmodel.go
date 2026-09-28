@@ -21,7 +21,8 @@ const (
 type servedModelContextKey struct{}
 
 type servedModelBox struct {
-	value string
+	value        string
+	metadataSent bool
 }
 
 type servedModelMiddleware struct{}
@@ -32,10 +33,24 @@ func (servedModelMiddleware) Run(next agent.RunFunc, ctx context.Context, messag
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		for update, err := range next(ctx, messages, options...) {
 			if update != nil && box.value != "" {
-				if update.AdditionalProperties == nil {
-					update.AdditionalProperties = make(map[string]any, 1)
+				if update.MessageID == "" {
+					if update.AdditionalProperties == nil {
+						update.AdditionalProperties = make(map[string]any, 1)
+					}
+					update.AdditionalProperties[servedModelAdditionalProperty] = box.value
+					box.metadataSent = true
+				} else if !box.metadataSent {
+					// The served model belongs to the response, not this message.
+					box.metadataSent = true
+					if !yield(&agent.ResponseUpdate{
+						ResponseID:           update.ResponseID,
+						ConversationID:       update.ConversationID,
+						CreatedAt:            update.CreatedAt,
+						AdditionalProperties: map[string]any{servedModelAdditionalProperty: box.value},
+					}, nil) {
+						return
+					}
 				}
-				update.AdditionalProperties[servedModelAdditionalProperty] = box.value
 			}
 			if !yield(update, err) {
 				return
@@ -53,6 +68,7 @@ func servedModelRequestOption() option.RequestOption {
 		servedModel := strings.TrimSpace(resp.Header.Get(servedModelHeader))
 		if box, ok := req.Context().Value(servedModelContextKey{}).(*servedModelBox); ok {
 			box.value = servedModel
+			box.metadataSent = false
 		}
 		return resp, nil
 	})

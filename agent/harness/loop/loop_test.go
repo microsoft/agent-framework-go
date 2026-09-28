@@ -82,36 +82,30 @@ func TestLoop_ContinuesUntilEvaluatorStops(t *testing.T) {
 
 func TestLoop_DefaultHistoryWithoutExplicitSession(t *testing.T) {
 	for _, tc := range []struct {
-		name                        string
-		stream                      bool
-		serviceID                   string
-		assignServiceID             bool
-		serviceDoesNotManageHistory bool
-		historyProvider             agent.HistoryProvider
+		name            string
+		stream          bool
+		serviceID       string
+		assignServiceID bool
+		historyProvider agent.HistoryProvider
 	}{
 		{name: "local history"},
 		{name: "streaming local history", stream: true},
 		{name: "service history", serviceID: "conversation-1"},
 		{name: "service history assigned during run", assignServiceID: true},
-		{name: "local history with service ID", serviceID: "thread-1", serviceDoesNotManageHistory: true},
 		{name: "configured history", historyProvider: agent.NewInMemoryHistoryProvider(agent.InMemoryHistoryProviderConfig{})},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			capture := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
-				return textUpdates("draft")
+				updates := textUpdates("draft")
+				if tc.serviceID != "" {
+					updates[0].ConversationID = new(tc.serviceID)
+				}
+				if tc.assignServiceID {
+					updates[0].ConversationID = new("conversation-1")
+				}
+				return updates
 			})
 			provider := capture.provider()
-			provider.ServiceDoesNotManageHistory = tc.serviceDoesNotManageHistory
-			if tc.assignServiceID {
-				run := provider.Run
-				provider.Run = func(ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
-					session, _ := agent.GetOption(opts, agent.WithSession)
-					if session.ServiceID() == "" {
-						session.SetServiceID("conversation-1")
-					}
-					return run(ctx, messages, opts...)
-				}
-			}
 			a := agent.New(provider, agent.Config{
 				HistoryProvider: tc.historyProvider,
 				Middlewares: []agent.Middleware{loop.New(loop.Config{
@@ -135,12 +129,43 @@ func TestLoop_DefaultHistoryWithoutExplicitSession(t *testing.T) {
 					t.Fatalf("first input = %v, want [%s]", got, prompt)
 				}
 				want := []string{prompt, "draft", "make it shorter"}
-				if (tc.serviceID != "" || tc.assignServiceID) && !tc.serviceDoesNotManageHistory {
+				if tc.serviceID != "" || tc.assignServiceID {
 					want = []string{"make it shorter"}
 				}
 				if got := messageTexts(capture.messagesPerCall[1]); !slices.Equal(got, want) {
 					t.Fatalf("second input = %v, want %v", got, want)
 				}
+			}
+		})
+	}
+}
+
+func TestLoop_RefreshesConversationIDAfterEachInvocation(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run("stream="+strconv.FormatBool(stream), func(t *testing.T) {
+			var receivedIDs []string
+			a := agent.New(agent.ProviderConfig{Run: func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				return func(yield func(*agent.ResponseUpdate, error) bool) {
+					id, _ := agent.GetOption(opts, agent.WithServiceID)
+					receivedIDs = append(receivedIDs, id)
+					nextID := "conversation-" + strconv.Itoa(len(receivedIDs))
+					yield(&agent.ResponseUpdate{ConversationID: &nextID, Contents: message.Contents{&message.TextContent{Text: "draft"}}}, nil)
+				}
+			}}, agent.Config{Middlewares: []agent.Middleware{loop.New(loop.Config{
+				Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+					if ctx.Iteration == 1 {
+						return loop.Continue("refine"), nil
+					}
+					return loop.Stop(), nil
+				})},
+			})}})
+			session := &agent.Session{}
+			session.SetServiceID("conversation-0")
+			if _, err := a.RunText(t.Context(), "hello", agent.WithSession(session), agent.Stream(stream)).Collect(); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(receivedIDs, []string{"conversation-0", "conversation-1"}) || session.ServiceID() != "conversation-2" {
+				t.Fatalf("provider IDs = %v, session ID = %q", receivedIDs, session.ServiceID())
 			}
 		})
 	}

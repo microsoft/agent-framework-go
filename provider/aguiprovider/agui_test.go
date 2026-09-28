@@ -243,18 +243,18 @@ func TestAGUIAgentRun_WithEmptyEventStream_EmitsMetadataUpdate(t *testing.T) {
 	}
 }
 
-func TestAGUIAgentCreateSession_UsesServiceIDAsThreadID(t *testing.T) {
+func TestAGUIAgentCreateSession_ThreadIDIsNotManagedHistory(t *testing.T) {
 	a := aguiprovider.NewAgent(newTestClient("http://localhost"), aguiprovider.AgentConfig{})
-	s, err := a.CreateSession(context.Background(), agent.WithServiceID("thread-existing"))
+	s, err := a.CreateSession(context.Background(), aguiprovider.WithThreadID("thread-existing"))
 	if err != nil {
 		t.Fatalf("create session error: %v", err)
 	}
-	if got := s.ServiceID(); got != "thread-existing" {
-		t.Fatalf("session.ServiceID = %q, want %q", got, "thread-existing")
+	if got := s.ServiceID(); got != "" {
+		t.Fatalf("session.ServiceID = %q, want no stored-history ID", got)
 	}
 }
 
-func TestAGUIAgentRun_UsesExistingSessionServiceIDAsThreadID(t *testing.T) {
+func TestAGUIAgentRun_UsesRestoredThreadID(t *testing.T) {
 	var mu sync.Mutex
 	var capturedThreadID string
 
@@ -274,10 +274,19 @@ func TestAGUIAgentRun_UsesExistingSessionServiceIDAsThreadID(t *testing.T) {
 	defer server.Close()
 
 	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
-	session, err := a.CreateSession(context.Background(), agent.WithServiceID("thread-existing"))
+	session, err := a.CreateSession(context.Background(), aguiprovider.WithThreadID("thread-existing"))
 	if err != nil {
 		t.Fatalf("create session error: %v", err)
 	}
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+	session = &restored
 	_, err = a.RunText(context.Background(), "hi", agent.WithSession(session)).Collect()
 	if err != nil {
 		t.Fatalf("run error: %v", err)
@@ -333,9 +342,7 @@ func TestAGUIAgentRun_GeneratesUniqueRunIDPerInvocation(t *testing.T) {
 // TestAGUIAgentRun_WithSession_PreservesHistoryAcrossMultipleTurns verifies
 // that subsequent runs with the same session include the full conversation
 // history, even after the provider assigns a thread ID to the session on the
-// first run. This mirrors the .NET fix in ChatClientAgent (PR #5904) that
-// ensures the ChatHistoryProvider is not discarded when a ConversationId
-// (thread ID) is present for an AGUI provider.
+// first run. An AG-UI thread ID is routing state, not an ID for stored history.
 func TestAGUIAgentRun_WithSession_PreservesHistoryAcrossMultipleTurns(t *testing.T) {
 	var mu sync.Mutex
 	var captured []aguiTypes.RunAgentInput
@@ -697,15 +704,14 @@ func TestAGUIAgentRun_SurfacesMessagesSnapshotEvent(t *testing.T) {
 		t.Fatalf("run error: %v", err)
 	}
 
-	var snapshot any
+	snapshot := resp.AdditionalProperties["agui_messages_snapshot"]
 	for _, msg := range resp.Messages {
-		if v, ok := msg.AdditionalProperties["agui_messages_snapshot"]; ok {
-			snapshot = v
-			break
+		if _, ok := msg.AdditionalProperties["agui_messages_snapshot"]; ok {
+			t.Fatal("response-level snapshot leaked into message metadata")
 		}
 	}
 	if snapshot == nil {
-		t.Fatal("expected agui_messages_snapshot in message metadata")
+		t.Fatal("expected agui_messages_snapshot in response metadata")
 	}
 	messages, ok := snapshot.([]aguiTypes.Message)
 	if !ok {
