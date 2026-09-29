@@ -24,6 +24,13 @@
       "go_commit": "92aec43f5e5995627b06cced822e7197b63733a8",
       "inventory_sha256": "734ff2c4037aa311de95912a256bb7e223ab3fa81a699835a21d27bab90f53ab",
       "scope": "Rechecked AgentModeProvider mode accessors and AgentModeProviderOptions.Modes against pinned .NET source and Go after the agentmode API changes. Only leaves referencing this review were inspected."
+    },
+    "history-persistence-go-2026-09-29": {
+      "checked_at": "2026-09-29",
+      "dotnet_commit": "0c9944cc9f577d51277ac7c55dbc388b60a577af",
+      "go_commit": "2b10117e67ea22a730c176567117537b720f45e0",
+      "inventory_sha256": "734ff2c4037aa311de95912a256bb7e223ab3fa81a699835a21d27bab90f53ab",
+      "scope": "Source-inspected ChatClientAgentOptions.RequirePerServiceCallChatHistoryPersistence against pinned .NET source and current Go per-service-call history persistence after the recent history contract changes. Only leaves referencing this review were inspected."
     }
   },
   "go_only": {},
@@ -1781,6 +1788,12 @@
             "go_symbols": ["agent.Config.Name"],
             "status": "mapped",
             "note": "Construction-time display name."
+          },
+          "RequirePerServiceCallChatHistoryPersistence": {
+            "go_symbols": ["agent.Config.RequirePerServiceCallHistoryPersistence"],
+            "status": "mapped",
+            "note": "Configures per-service-call history persistence. Provider and workflow AgentConfig structs expose this through embedded agent.Config and forward it to agent.New; provider-specific constructor and AsAIAgent mappings do not need separate entries for the promoted field.",
+            "review": "history-persistence-go-2026-09-29"
           },
           "ThrowOnChatHistoryProviderConflict": {
             "go_symbols": ["agent.Config.ThrowOnHistoryProviderConflict"],
