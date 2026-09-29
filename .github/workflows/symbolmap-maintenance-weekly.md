@@ -5,6 +5,9 @@ intent: Keep recorded .NET-to-Go mappings accurate as the Go SDK evolves, withou
 tracker-id: symbolmap-maintenance-weekly
 strict: true
 model: "gpt-5.5"
+sandbox:
+   agent:
+      version: v0.28.25
 on:
    schedule: weekly on tuesday
    workflow_dispatch:
