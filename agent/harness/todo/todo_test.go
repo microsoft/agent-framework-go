@@ -613,7 +613,7 @@ func TestToolNames(t *testing.T) {
 	}
 }
 
-// Verify CompleteInput with reason is accepted and items are marked complete.
+// Verify completion input with a reason is accepted and items are marked complete.
 func TestCompleteTodos_WithReason(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()
