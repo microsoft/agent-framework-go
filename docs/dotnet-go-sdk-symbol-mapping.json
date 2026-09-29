@@ -24,6 +24,13 @@
       "go_commit": "92aec43f5e5995627b06cced822e7197b63733a8",
       "inventory_sha256": "734ff2c4037aa311de95912a256bb7e223ab3fa81a699835a21d27bab90f53ab",
       "scope": "Rechecked AgentModeProvider mode accessors and AgentModeProviderOptions.Modes against pinned .NET source and Go after the agentmode API changes. Only leaves referencing this review were inspected."
+    },
+    "symbolmap-maintenance-2026-09-29": {
+      "checked_at": "2026-09-29",
+      "dotnet_commit": "0c9944cc9f577d51277ac7c55dbc388b60a577af",
+      "go_commit": "762c68b6619824de65f6f2fce55fbdf298729073",
+      "inventory_sha256": "734ff2c4037aa311de95912a256bb7e223ab3fa81a699835a21d27bab90f53ab",
+      "scope": "Reviewed original assessed leaves and recent first-parent Go changes through 762c68b6619824de65f6f2fce55fbdf298729073. Updated only changed leaves: recent agentmode tool controls, stale mode accessor note, and compaction-backed history-provider declarations."
     }
   },
   "namespaces": {
@@ -747,6 +754,13 @@
             "status": "mapped",
             "note": "Synchronous validating setter; passing false queues a mode-change notification. Go returns an error for an invalid mode or nil session.",
             "review": "agentmode-go-2026-09-25"
+          },
+          "SetModeAsync(AgentSession, string, bool, CancellationToken)": {
+            "go": "provider.SetMode(session, \"plan\", true)",
+            "go_symbols": ["agent/harness/agentmode.Provider.SetMode"],
+            "status": "mapped",
+            "note": "Synchronous validating setter; the third argument suppresses the next mode-change notification and clears any pending one. Go returns an error for an invalid mode or nil session.",
+            "review": "symbolmap-maintenance-2026-09-29"
           }
         },
         "constructors": {
@@ -772,6 +786,18 @@
             "go_symbols": ["agent/harness/agentmode.Config.DefaultMode"],
             "status": "mapped",
             "note": "Nullable initial mode becomes *string; nil selects the first configured mode."
+          },
+          "DisableModeGetTool": {
+            "go_symbols": ["agent/harness/agentmode.Config.DisableModeGetTool"],
+            "status": "mapped",
+            "note": "Boolean config flag omits the built-in mode_get tool while preserving mode state and instructions.",
+            "review": "symbolmap-maintenance-2026-09-29"
+          },
+          "DisableModeSetTool": {
+            "go_symbols": ["agent/harness/agentmode.Config.DisableModeSetTool"],
+            "status": "mapped",
+            "note": "Boolean config flag omits the built-in mode_set tool while preserving mode state and instructions.",
+            "review": "symbolmap-maintenance-2026-09-29"
           },
           "Instructions": {
             "go_symbols": ["agent/harness/agentmode.Config.Instructions"],
@@ -2127,10 +2153,22 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "properties": {
+          "ChatReducer": {
+            "go_symbols": ["agent/compaction.HistoryProviderConfig.Strategy"],
+            "status": "adapted",
+            "note": "The reducer is supplied as the required compaction Strategy for compaction.NewHistoryProvider rather than on the basic in-memory history provider config.",
+            "review": "symbolmap-maintenance-2026-09-29"
+          },
           "ProvideOutputMessageFilter": {
             "go_symbols": ["agent.InMemoryHistoryProviderConfig.ProvideOutputMessageFilter"],
             "status": "adapted",
             "note": "Filters loaded history through a context-aware, error-returning Go callback; nil passes all loaded messages through."
+          },
+          "ReducerTriggerEvent": {
+            "go_symbols": ["agent/compaction.HistoryProviderConfig.TriggerEvent"],
+            "status": "adapted",
+            "note": "Trigger timing is configured on the compaction-backed history provider; zero defaults to before message retrieval.",
+            "review": "symbolmap-maintenance-2026-09-29"
           },
           "StateInitializer": {
             "go_symbols": ["agent.InMemoryHistoryProviderConfig.StateInitializer"],
@@ -2151,6 +2189,33 @@
             "go_symbols": ["agent.InMemoryHistoryProviderConfig.StoreInputResponseMessageFilter"],
             "status": "adapted",
             "note": "Go filter accepts context and returns messages/error; nil stores response messages without filtering."
+          }
+        }
+      },
+      "InMemoryChatHistoryProviderOptions.ChatReducerTriggerEvent": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI.Abstractions",
+        "mapping": {
+          "go": "var event compaction.HistoryProviderTriggerEvent",
+          "go_symbols": ["agent/compaction.HistoryProviderTriggerEvent"],
+          "status": "adapted",
+          "note": "Nested .NET enum becomes a package-level Go enum for compaction-backed history-provider trigger timing.",
+          "review": "symbolmap-maintenance-2026-09-29"
+        },
+        "constants": {
+          "AfterMessageAdded": {
+            "go": "compaction.HistoryProviderTriggerEventAfterMessageAdded",
+            "go_symbols": ["agent/compaction.HistoryProviderTriggerEventAfterMessageAdded"],
+            "status": "mapped",
+            "note": "Applies compaction after storing a request/response message batch.",
+            "review": "symbolmap-maintenance-2026-09-29"
+          },
+          "BeforeMessagesRetrieval": {
+            "go": "compaction.HistoryProviderTriggerEventBeforeMessagesRetrieval",
+            "go_symbols": ["agent/compaction.HistoryProviderTriggerEventBeforeMessagesRetrieval"],
+            "status": "mapped",
+            "note": "Applies compaction before returning loaded history; this is Go default zero value.",
+            "review": "symbolmap-maintenance-2026-09-29"
           }
         }
       },
@@ -2505,7 +2570,8 @@
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "note": "RemainingTodos and ModeForSession expose state, but no built-in Go evaluator combines them with continuation feedback."
+            "note": "RemainingTodos and Mode expose state, but no built-in Go evaluator combines them with continuation feedback.",
+            "review": "symbolmap-maintenance-2026-09-29"
           }
         },
         "constructors": {
