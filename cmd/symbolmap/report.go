@@ -147,6 +147,9 @@ func writeMappingReport(out io.Writer, report mappingsReport, filter reportFilte
 	if view == "summary" {
 		s := summarize(report)
 		table.printf("\n.NET symbols: %d; distinct Go symbols: %d. Counts are not a parity percentage.\n", s.DotnetSymbols, s.GoSymbols)
+		if s.GoOnlySymbols != 0 {
+			table.printf("Go-only assessments: %d (unfiltered; excluded from the mapping counts above).\n", s.GoOnlySymbols)
+		}
 		for _, group := range []struct {
 			name   string
 			values []string
@@ -255,6 +258,7 @@ type reconciliationSummary struct {
 	AssessedDeclarations  int                       `json:"assessed_declarations"`
 	Counts                map[string]int            `json:"counts"`
 	ByArea                map[string]map[string]int `json:"by_area"`
+	GoOnly                *goOnlyReconciliation     `json:"go_only,omitempty"`
 }
 
 func writeReconciliation(out io.Writer, report reconciliationReport, filter reportFilter, pageOptions pageOptions, asJSON, brief, check bool) error {
@@ -318,6 +322,7 @@ func writeReconciliation(out io.Writer, report reconciliationReport, filter repo
 				AssessedDeclarations:  report.AssessedDeclarations,
 				Counts:                report.Counts,
 				ByArea:                report.ByArea,
+				GoOnly:                report.GoOnly,
 			})
 		} else {
 			err = writeReportJSON(out, report)
@@ -327,6 +332,9 @@ func writeReconciliation(out io.Writer, report reconciliationReport, filter repo
 	}
 	if err != nil {
 		return err
+	}
+	if check && report.GoOnly != nil && len(report.GoOnly.InvalidGoTargets) != 0 {
+		return fmt.Errorf("reconciliation check failed: %d invalid Go-only targets; %d of %d unfiltered .NET rows need reconciliation or have invalid Go targets", len(report.GoOnly.InvalidGoTargets), failures, total)
 	}
 	if check && failures != 0 {
 		return fmt.Errorf("reconciliation check failed: %d of %d unfiltered rows need reconciliation or have invalid Go targets", failures, total)
@@ -368,6 +376,16 @@ func writeReconciliationText(out io.Writer, report reconciliationReport, brief b
 	}
 	fmt.Fprintf(&buffer, "\nInventory declarations: %d (unfiltered); selected rows: %d; selected assessments: %d.\n", report.InventoryDeclarations, selectedRows, report.AssessedDeclarations)
 	fmt.Fprintf(&buffer, "Go exported symbols: %d; indexed packages: %d (both unfiltered).\n", report.Go.ExportedSymbols, len(report.Go.Packages))
+	if report.GoOnly != nil {
+		fmt.Fprintf(&buffer, "Go-only assessments: %d; present: %d; invalid: %d; unindexed: %d (all unfiltered).\n",
+			report.GoOnly.Assessed, report.GoOnly.Present, len(report.GoOnly.InvalidGoTargets), len(report.GoOnly.UnindexedGoTargets))
+		if len(report.GoOnly.InvalidGoTargets) != 0 {
+			fmt.Fprintf(&buffer, "Invalid Go-only targets: %s.\n", reportCell(strings.Join(report.GoOnly.InvalidGoTargets, ", ")))
+		}
+		if len(report.GoOnly.UnindexedGoTargets) != 0 {
+			fmt.Fprintf(&buffer, "Unindexed Go-only targets: %s.\n", reportCell(strings.Join(report.GoOnly.UnindexedGoTargets, ", ")))
+		}
+	}
 	if report.Page != nil {
 		if err := writePageText(&buffer, *report.Page); err != nil {
 			return err

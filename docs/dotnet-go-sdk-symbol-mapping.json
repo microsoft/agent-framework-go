@@ -26,6 +26,7 @@
       "scope": "Rechecked AgentModeProvider mode accessors and AgentModeProviderOptions.Modes against pinned .NET source and Go after the agentmode API changes. Only leaves referencing this review were inspected."
     }
   },
+  "go_only": {},
   "namespaces": {
     "A2A": {
       "A2AAgentCardExtensions": {

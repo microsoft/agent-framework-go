@@ -44,6 +44,7 @@ type catalog struct {
 	SchemaVersion *int                              `json:"schema_version"`
 	Baseline      baseline                          `json:"baseline"`
 	Reviews       map[string]reviewBaseline         `json:"reviews,omitempty"`
+	GoOnly        map[string]goOnlyAssessment       `json:"go_only,omitempty"`
 	Namespaces    map[string]map[string]typeMapping `json:"namespaces"`
 }
 
@@ -105,10 +106,11 @@ type mappingRow struct {
 }
 
 type mappingsReport struct {
-	Baseline baseline                  `json:"baseline"`
-	Reviews  map[string]reviewBaseline `json:"reviews,omitempty"`
-	Mappings []mappingRow              `json:"mappings"`
-	Page     *pageInfo                 `json:"page,omitempty"`
+	Baseline baseline                    `json:"baseline"`
+	Reviews  map[string]reviewBaseline   `json:"reviews,omitempty"`
+	Mappings []mappingRow                `json:"mappings"`
+	Page     *pageInfo                   `json:"page,omitempty"`
+	GoOnly   map[string]goOnlyAssessment `json:"-"`
 }
 
 type summary struct {
@@ -116,17 +118,18 @@ type summary struct {
 	Reviews       map[string]reviewBaseline `json:"reviews,omitempty"`
 	DotnetSymbols int                       `json:"dotnet_symbols"`
 	GoSymbols     int                       `json:"go_symbols"`
+	GoOnlySymbols int                       `json:"go_only_symbols,omitempty"`
 	ByStatus      map[string]int            `json:"by_status"`
 	ByKind        map[string]int            `json:"by_kind"`
 	ByArea        map[string]int            `json:"by_area"`
 }
 
 type reportOptions struct {
-	file, inventoryFile, goRoot, tags string
-	filter                            reportFilter
-	page                              pageOptions
-	goPatterns                        []string
-	asJSON, brief, check              bool
+	file, inventoryFile, goRoot, oldRoot, tags string
+	filter                                     reportFilter
+	page                                       pageOptions
+	goPatterns                                 []string
+	asJSON, brief, check                       bool
 }
 
 func main() {
@@ -137,7 +140,7 @@ func main() {
 }
 
 func run(args []string, out, diagnostics io.Writer) error {
-	const usage = "Usage: symbolmap <mappings|gaps|go|reconcile> [flags]"
+	const usage = "Usage: symbolmap <mappings|gaps|go-only|go|changes|reconcile> [flags]"
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(diagnostics, usage); err != nil {
 			return err
@@ -150,7 +153,7 @@ func run(args []string, out, diagnostics io.Writer) error {
 		return err
 	}
 	switch command {
-	case "mappings", "gaps", "go", "reconcile":
+	case "mappings", "gaps", "go-only", "go", "changes", "reconcile":
 	default:
 		return fmt.Errorf("unknown subcommand %q", command)
 	}
@@ -160,6 +163,9 @@ func run(args []string, out, diagnostics io.Writer) error {
 	}
 	if err != nil {
 		return err
+	}
+	if command == "changes" {
+		return runGoChanges(out, options)
 	}
 	if command == "go" {
 		api, err := indexGo(options.goRoot, options.goPatterns, options.tags)
@@ -176,7 +182,10 @@ func run(args []string, out, diagnostics io.Writer) error {
 	if err != nil {
 		return err
 	}
-	report := mappingsReport{Baseline: c.Baseline, Reviews: c.Reviews, Mappings: rows}
+	report := mappingsReport{Baseline: c.Baseline, Reviews: c.Reviews, Mappings: rows, GoOnly: c.GoOnly}
+	if command == "go-only" {
+		return writeGoOnlyReport(out, report, options.filter.Symbol, options.page, options.asJSON)
+	}
 	if command == "reconcile" {
 		return runReconciliation(out, report, options)
 	}
@@ -197,6 +206,10 @@ func parseReportOptions(command string, args []string, diagnostics io.Writer) (r
 	case "go":
 		addIndexFlags(flags, &options)
 		flags.StringVar(&options.filter.Symbol, "symbol", "", "case-insensitive substring of a qualified Go symbol")
+	case "changes":
+		addIndexFlags(flags, &options)
+		flags.StringVar(&options.oldRoot, "old-root", "", "old Go module checkout (required; dependencies must already be local)")
+		flags.StringVar(&options.filter.Symbol, "symbol", "", "case-insensitive substring of an API change message")
 	case "reconcile":
 		addMappingFlags(flags, &options)
 		addIndexFlags(flags, &options)
@@ -208,12 +221,18 @@ func parseReportOptions(command string, args []string, diagnostics io.Writer) (r
 		flags.BoolVar(&options.brief, "summary", false, "show counts by status, kind, and area")
 	case "gaps":
 		addMappingFlags(flags, &options)
+	case "go-only":
+		flags.StringVar(&options.file, "file", "docs/dotnet-go-sdk-symbol-mapping.json", "catalog path (default is relative to repository root)")
+		flags.StringVar(&options.filter.Symbol, "symbol", "", "case-insensitive substring of a qualified Go symbol")
 	}
 	if err := flags.Parse(args); err != nil {
 		return options, err
 	}
 	if flags.NArg() != 0 {
 		return options, errors.New("unexpected positional arguments")
+	}
+	if command == "changes" && strings.TrimSpace(options.oldRoot) == "" {
+		return options, errors.New("changes requires -old-root")
 	}
 	if options.page.Limit < 0 || options.page.Offset < 0 {
 		return options, errors.New("-limit and -offset must be nonnegative")
@@ -295,7 +314,8 @@ func runReconciliation(out io.Writer, report mappingsReport, options reportOptio
 func summarize(report mappingsReport) summary {
 	r := summary{
 		Baseline: report.Baseline, Reviews: report.Reviews, DotnetSymbols: len(report.Mappings),
-		ByStatus: counts(statuses), ByKind: counts(kinds), ByArea: counts(areas),
+		GoOnlySymbols: len(report.GoOnly),
+		ByStatus:      counts(statuses), ByKind: counts(kinds), ByArea: counts(areas),
 	}
 	targets := make(map[string]bool)
 	for _, row := range report.Mappings {
@@ -395,6 +415,9 @@ func (c catalog) flatten() ([]mappingRow, error) {
 			return nil, fmt.Errorf("invalid review baseline %q", id)
 		}
 	}
+	if err := c.validateGoOnly(); err != nil {
+		return nil, err
+	}
 	if len(c.Namespaces) == 0 {
 		return nil, errors.New("namespaces must not be empty")
 	}
@@ -436,6 +459,11 @@ func (c catalog) flatten() ([]mappingRow, error) {
 			seenSymbols[identity] = true
 			if err := m.validate(symbol, kind); err != nil {
 				return err
+			}
+			for _, target := range m.GoSymbols {
+				if _, exists := c.GoOnly[target]; exists {
+					return fmt.Errorf("%s: Go symbol %q is also assessed as go_only", symbol, target)
+				}
 			}
 			if m.Review != "" {
 				if _, exists := c.Reviews[m.Review]; !exists {

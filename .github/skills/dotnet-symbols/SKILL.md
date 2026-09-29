@@ -16,12 +16,13 @@ Run from the repository root with its Go toolchain. Start with a filtered CLI qu
 | --- | --- |
 | Recorded Go counterpart for a .NET member | `go run ./cmd/symbolmap mappings -symbol AIAgent.RunAsync -limit 5` |
 | Recorded .NET counterparts for a Go symbol | `go run ./cmd/symbolmap mappings -symbol agent.Session.Get -limit 5` |
+| Recorded Go-specific APIs | `go run ./cmd/symbolmap go-only -symbol agent. -limit 5` |
 | Inventoried .NET methods, whether reviewed or not | `go run ./cmd/symbolmap reconcile -type AgentSession -kind method -limit 5` |
 | Current exported Go declarations and signatures | `go run ./cmd/symbolmap go -symbol agent.Session -limit 5` |
 | Unreviewed declarations for a specific type | `go run ./cmd/symbolmap reconcile -state unreviewed -type AgentSession -limit 5` |
 | Recorded partial or unmapped assessments | `go run ./cmd/symbolmap gaps -type AgentSession -limit 5` |
 
-`mappings` searches only assessed catalog entries. For declaration discovery, use `reconcile` **without status/state filters** so both reviewed and unreviewed APIs remain visible; use `-state unreviewed` only for the review queue. `go` reads the Go module independently of the catalog.
+`mappings` searches .NET assessments; `go-only` searches separately reviewed Go-specific APIs. For declaration discovery, use `reconcile` **without status/state filters** so both reviewed and unreviewed APIs remain visible; use `-state unreviewed` only for the review queue. `go` reads the Go module independently of the catalog. `changes -old-root <checkout>` compares structural Go APIs without changing either assessment section; retain compatible additions and review source diffs for behavior.
 
 For counts only, use `mappings -summary` or `reconcile -summary`. There is no standalone `summary` command. Flags follow the subcommand; use its `-help` to check supported options.
 
@@ -29,13 +30,14 @@ For counts only, use `mappings -summary` or `reconcile -summary`. There is no st
 
 - `-namespace`, `-type`, and `-symbol` are case-insensitive **substring** filters, not exact matches. Combine them with `-kind` when needed, quote names containing generics or spaces, and inspect the returned declaring namespace and full overload. `-symbol` also searches Go snippets and targets. Inherited members belong to their declaring base type.
 - JSON is the default: read `mappings` for catalog results, `rows` for reconciliation, and `symbols` for the Go index. Pages default to 20 rows; the examples request five. Follow `page.next_offset` with the same filters and limit while inputs remain unchanged. Stop when the requested declaration is resolved; traverse all pages only for an exhaustive request. Use `-limit=0` only for a requested full export. Summary counts cover all filtered matches and reject paging flags.
-- If a mapping query has `page.total: 0`, try `reconcile` for the containing type without status/state filters, then broaden the type/member query and check declaring ownership. An empty page with a nonzero total can mean the offset is past the end; retry at offset zero. Neither case proves an API is absent from Go.
+- If a mapping query has `page.total: 0`, check `go-only` for a Go symbol and `reconcile` for the containing .NET type without status/state filters, then broaden the query and check declaring ownership. An empty page with a nonzero total can mean the offset is past the end; retry at offset zero. Neither case proves an API is absent from Go.
 - Treat command failure separately from zero matches: inspect stderr and the exit status. `go` and `reconcile` index offline and require cached dependencies. If indexing is unavailable, use scoped source/data reads and label what remains unvalidated; do not alter dependencies or regenerate the inventory merely to answer a lookup.
 
 ## 3. Verify evidence and answer
 
 - Read `status` and `note` for the exact leaf. `go_symbols` records counterparts; `go` is illustrative code, not a standalone program. Free variables are allowed and their receiver/argument types are not fully checked. Verify Go signatures and actual callers before using a snippet in an implementation. Properties intentionally have no example.
 - Reconciliation `state` is not mapping `status`: `linked` means references resolve, not behavioral parity; `unreviewed` means no assessment, not `unmapped`. `suggested_go` is only a name-based search hint. A mapped type does not cover all its members.
+- `go_only` records source-reviewed Go-specific APIs, not unmatched names or missing inventory coverage. Read each entry's `note` and required named `review`; a type entry does not cover its members. Reconciliation checks these Go targets separately without adding .NET rows or certifying absence of a counterpart.
 - The generated inventory covers three core .NET packages, not every integration or external dependency. `outside-inventory-scope` is not evidence of removal. `go-outside-scope` means a target package was not indexed. Go results cover the reported build configuration, not every platform. An unresolved identity or unvalidated target is not a confirmed implementation gap.
 - For a behavioral claim, inspect .NET source at the applicable recorded revision and compare the Go implementation, callers, and tests. A leaf's `review` selects `reviews[review]`; absence selects `baseline`, not the containing type's review. Check inventory/build provenance, `review_source_changed`, `review_go_changed`, and Go dirty state before presenting an old assessment as current. Missing change flags are unknown, not proof of an unchanged revision.
 
@@ -46,6 +48,7 @@ Answer concisely with the exact .NET declaration, recorded Go counterpart(s), an
 - Change only the assessed leaf under its declaring namespace/type and exact overload. Keep `go_symbols`, `status`, and a concrete `note`; do not promote a name suggestion into a mapping without source evidence.
 - Non-property `go` examples use minimal calls or literals, conventional variables, and `new(value)` for pointers—not synthetic outer functions or unrelated fields. Real callbacks may remain. Property leaves omit `go` entirely.
 - Preserve existing reviews and baselines; record newly inspected work in a separate review batch. Never hand-edit the generated inventory or maintain a second mapping in the skill.
+- For a confirmed Go-specific API, use a canonical Go symbol key under `go_only` with `note` and `review`, not an invented .NET leaf. Use `adapted` for equivalent Go composition. Go-only entries cannot also be recorded counterparts; remove an entry when its API is deleted or a .NET counterpart is verified, with evidence in the PR.
 
 After mapping-only changes, run `go run ./cmd/symbolmap reconcile -summary -check`. Run `go test ./cmd/symbolmap` and `go vet ./cmd/symbolmap` when changing the command's Go code, not for catalog-only edits. Strict checks inspect the whole unfiltered report; a paged result or zero exit status does not establish behavioral parity or complete package coverage.
 

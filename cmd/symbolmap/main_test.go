@@ -43,6 +43,7 @@ type reportedSummary struct {
 	Reviews       map[string]any `json:"reviews,omitempty"`
 	DotnetSymbols int            `json:"dotnet_symbols"`
 	GoSymbols     int            `json:"go_symbols"`
+	GoOnlySymbols int            `json:"go_only_symbols,omitempty"`
 	ByStatus      map[string]int `json:"by_status"`
 	ByKind        map[string]int `json:"by_kind"`
 	ByArea        map[string]int `json:"by_area"`
@@ -315,6 +316,168 @@ func TestGoInventoryPages(t *testing.T) {
 	}
 }
 
+func TestGoChanges(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+	oldRoot := writeGoCheckout(t, "example.org/sdk", map[string]string{
+		"agent/agent.go": `package agent
+import "example.org/sdk/internal/helper"
+type Config struct { Name string }
+type ConfigAlias = Config
+type ProviderConfig struct { ServiceDoesNotManageHistory bool }
+type Response struct{}
+type ResponseUpdate struct{}
+type Box[T any] struct { Value T }
+const Default = 1
+func Run(int) {}
+func Behavior() int { return helper.Value }
+func init() { panic("indexing must not execute initializers") }
+`,
+		"internal/helper/helper.go": "package helper\nconst Value = 1\n",
+		"tool/removed/tool.go":      "package removed\nfunc OldTool() {}\n",
+		"agent/cmd/main.go":         "package main\nfunc main() {}\nfunc OldCommand() {}\n",
+	})
+	newRoot := writeGoCheckout(t, "example.org/sdk", map[string]string{
+		"agent/agent.go": `package agent
+import "example.org/sdk/internal/helper"
+type Config struct {
+	Name string
+	RequirePerServiceCallHistoryPersistence bool
+}
+type ConfigAlias = Config
+type ProviderConfig struct{}
+type Response struct { ConversationID *string }
+type ResponseUpdate struct { ConversationID *string }
+type Box[T any] struct { Value T }
+const Default = 2
+func Run(string) {}
+func (Config) Enabled() bool { return true }
+func Behavior() int { return helper.Value }
+func init() { panic("indexing must not execute initializers") }
+`,
+		"internal/helper/helper.go": "package helper\nconst Value = 2\nfunc NewInternal() {}\n",
+		"tool/added/tool.go":        "package added\nfunc NewTool() {}\n",
+		"agent/cmd/main.go":         "package main\nfunc main() {}\nfunc NewCommand() {}\n",
+	})
+	// No catalog or .NET inventory exists here: candidate generation is independent.
+	t.Chdir(t.TempDir())
+	args := []string{"changes", "-old-root", oldRoot, "-go-root", newRoot, "-go-package", "./..."}
+	fullArgs := append(append([]string{}, args...), "-limit=0")
+	output := commandOutput(t, fullArgs...)
+	var got goChangesReport
+	decodeOutput(t, output, &got)
+	if got.Old.Module != "example.org/sdk" || got.New.Module != got.Old.Module || got.Old.GOOS == "" || got.New.GOOS != got.Old.GOOS {
+		t.Fatalf("missing comparison provenance: %+v", got.goChangesSummary)
+	}
+	if !reflect.DeepEqual(got.Old.Packages, []string{"agent", "tool/removed"}) || !reflect.DeepEqual(got.New.Packages, []string{"agent", "tool/added"}) {
+		t.Fatalf("unexpected comparison packages: old=%v new=%v", got.Old.Packages, got.New.Packages)
+	}
+	for _, want := range []struct {
+		message    string
+		compatible bool
+	}{
+		{"Config.RequirePerServiceCallHistoryPersistence: added", true},
+		{"Response.ConversationID: added", true},
+		{"ResponseUpdate.ConversationID: added", true},
+		{"ProviderConfig.ServiceDoesNotManageHistory: removed", false},
+		{"Config.Enabled: added", true},
+		{"Run: changed", false},
+		{"Default: value changed", false},
+		{"package example.org/sdk/tool/added: added", true},
+		{"package example.org/sdk/tool/removed: removed", false},
+	} {
+		found := false
+		for _, change := range got.Changes {
+			if strings.Contains(change.Message, want.message) {
+				found = true
+				if change.Compatible != want.compatible {
+					t.Errorf("change %q compatible=%v, want %v", change.Message, change.Compatible, want.compatible)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("missing API change %q: %s", want.message, output)
+		}
+	}
+	for _, change := range got.Changes {
+		for _, excluded := range []string{"internal/", "OldCommand", "NewCommand", "Behavior", "Box"} {
+			if strings.Contains(change.Message, excluded) {
+				t.Errorf("unexpected API change: %+v", change)
+			}
+		}
+	}
+	if got.Compatible == 0 || got.Incompatible == 0 || got.Compatible+got.Incompatible != len(got.Changes) || got.Page.Total != len(got.Changes) {
+		t.Fatalf("incorrect change counts: %+v", got)
+	}
+	if next := commandOutput(t, fullArgs...); next != output {
+		t.Fatal("API change output is not deterministic")
+	}
+	var page goChangesReport
+	decodeOutput(t, commandOutput(t, append(args, "-limit=1", "-offset=1")...), &page)
+	if page.Page.Total != len(got.Changes) || page.Page.Returned != 1 || !reflect.DeepEqual(page.Changes, got.Changes[1:2]) || page.Compatible != got.Compatible || page.Incompatible != got.Incompatible {
+		t.Fatalf("paging changed coverage counts or order: %+v", page)
+	}
+	decodeOutput(t, commandOutput(t, append(args, "-symbol", "REQUIREPERSERVICECALLHISTORYPERSISTENCE", "-limit=0")...), &page)
+	if page.Page.Total == 0 || page.Incompatible != 0 || page.Compatible != len(page.Changes) {
+		t.Fatalf("compatible additions disappeared from filtered output: %+v", page)
+	}
+	var summary goChangesSummary
+	decodeOutput(t, commandOutput(t, append(args, "-summary")...), &summary)
+	if !reflect.DeepEqual(summary, got.goChangesSummary) {
+		t.Fatalf("summary changed counts or provenance: %+v", summary)
+	}
+	text := commandOutput(t, append(fullArgs, "-json=false")...)
+	for _, want := range []string{"Structural API changes only", "compatible:", "incompatible:", "RequirePerServiceCallHistoryPersistence"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text output missing %q: %s", want, text)
+		}
+	}
+}
+
+func TestGoChangesScopeAndLimits(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+	oldRoot := writeGoCheckout(t, "example.org/sdk", map[string]string{
+		"agent/agent.go":  "package agent\n// Config is the original configuration.\ntype Config struct { Value string `json:\"old\"` }\nfunc Value() int { return 1 }\n",
+		"agent/tagged.go": "//go:build api_extra\n\npackage agent\ntype Extra struct{}\n",
+	})
+	newRoot := writeGoCheckout(t, "example.org/sdk", map[string]string{
+		"agent/agent.go":  "package agent\n// Config has updated documentation.\ntype Config struct { Value string `json:\"new\"` }\nfunc Value() int { return 2 }\n",
+		"agent/tagged.go": "//go:build api_extra\n\npackage agent\ntype Extra struct { Enabled bool }\n",
+	})
+	args := []string{"changes", "-old-root", oldRoot, "-go-root", newRoot, "-go-package", "./agent"}
+	var got goChangesReport
+	decodeOutput(t, commandOutput(t, args...), &got)
+	if got.Changes == nil || len(got.Changes) != 0 || got.Page.Total != 0 || got.Compatible != 0 || got.Incompatible != 0 {
+		t.Fatalf("body/doc/tag-only changes must not appear as structural API changes: %+v", got)
+	}
+	decodeOutput(t, commandOutput(t, append(args, "-tags", "api_extra")...), &got)
+	if got.Old.BuildTags != "api_extra" || got.New.BuildTags != "api_extra" || len(got.Changes) != 1 || !strings.Contains(got.Changes[0].Message, "Extra.Enabled: added") {
+		t.Fatalf("build tags were not applied to both snapshots: %+v", got)
+	}
+}
+
+func TestGoChangesInputErrors(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+	valid := writeGoCheckout(t, "example.org/sdk", map[string]string{"agent.go": "package agent\ntype Config struct{}\n"})
+	broken := writeGoCheckout(t, "example.org/sdk", map[string]string{"agent.go": "package agent\nvar Broken MissingType\n"})
+	other := writeGoCheckout(t, "example.org/other", map[string]string{"agent.go": "package agent\ntype Config struct{}\n"})
+	for _, test := range []struct {
+		name, old, new, want string
+	}{
+		{"old load", broken, valid, "index old Go API"},
+		{"new load", valid, broken, "index new Go API"},
+		{"module mismatch", valid, other, "different Go modules"},
+		{"missing checkout", filepath.Join(t.TempDir(), "missing"), valid, "index old Go API"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var out, diagnostics bytes.Buffer
+			err := run([]string{"changes", "-old-root", test.old, "-go-root", test.new, "-go-package", "./..."}, &out, &diagnostics)
+			if err == nil || !strings.Contains(err.Error(), test.want) || out.Len() != 0 {
+				t.Fatalf("incomplete comparison must fail without a report: %v, %q", err, out.String())
+			}
+		})
+	}
+}
+
 func TestSummary(t *testing.T) {
 	file := writeCatalog(t, sampleCatalogJSON)
 	var got reportedSummary
@@ -348,6 +511,132 @@ func TestSummary(t *testing.T) {
 				t.Errorf("empty summary has %s count %d", key, count)
 			}
 		}
+	}
+}
+
+func TestGoOnlyReports(t *testing.T) {
+	data := catalogWithGoOnly(sampleCatalogJSON, `{
+		"agent.LocalOptions": {"note":"Go-specific configuration.","review":"go-specific"},
+		"agent.OnlyInGo": {"note":"Go-specific helper.","review":"go-specific"},
+		"provider/other.Extra": {"note":"Go-specific provider helper.","review":"go-specific"}
+	}`)
+	file := writeCatalog(t, data)
+	read := func(args ...string) goOnlyReport {
+		var report goOnlyReport
+		decodeOutput(t, commandOutput(t, append([]string{"go-only", "-file", file}, args...)...), &report)
+		return report
+	}
+	got := read("-symbol", "AGENT.", "-limit", "1")
+	if got.Page.Total != 2 || got.Page.Returned != 1 || got.Page.NextOffset == nil || *got.Page.NextOffset != 1 || got.GoOnly["agent.LocalOptions"].Review != "go-specific" {
+		t.Fatalf("unexpected Go-only first page: %+v", got)
+	}
+	if len(got.Reviews) != 1 || got.GoOnly["agent.LocalOptions"].Note == "" {
+		t.Fatalf("missing review evidence: %+v", got)
+	}
+	got = read("-symbol", "agent.", "-limit", "1", "-offset", "1")
+	if got.Page.Total != 2 || got.Page.NextOffset != nil || got.GoOnly["agent.OnlyInGo"].Note != "Go-specific helper." {
+		t.Fatalf("unexpected Go-only next page: %+v", got)
+	}
+	got = read("-limit", "0")
+	if got.Page.Total != 3 || len(got.GoOnly) != 3 {
+		t.Fatalf("incomplete Go-only export: %+v", got)
+	}
+	got = read("-symbol", "not-present")
+	if got.GoOnly == nil || len(got.GoOnly) != 0 || got.Page.Total != 0 {
+		t.Fatalf("empty query must return an empty object: %+v", got)
+	}
+	var summary reportedSummary
+	decodeOutput(t, commandOutput(t, "mappings", "-summary", "-file", file), &summary)
+	if summary.DotnetSymbols != 15 || summary.GoSymbols != 13 || summary.GoOnlySymbols != 3 {
+		t.Fatalf("Go-only assessments changed .NET mapping counts: %+v", summary)
+	}
+	decodeOutput(t, commandOutput(t, "mappings", "-summary", "-file", file, "-symbol", "not-present"), &summary)
+	if summary.DotnetSymbols != 0 || summary.GoSymbols != 0 || summary.GoOnlySymbols != 3 {
+		t.Fatalf("Go-only catalog count must remain separate and unfiltered: %+v", summary)
+	}
+	if mappings := readMappings(t, "-file", file, "-limit", "0"); !reflect.DeepEqual(mappings.Mappings, expectedMappings()) {
+		t.Fatal("Go-only entries changed the .NET mapping rows")
+	}
+	text := commandOutput(t, "go-only", "-file", file, "-json=false")
+	for _, want := range []string{"Go-only assessments", "agent.OnlyInGo", "go-specific", "Go-specific helper."} {
+		if !strings.Contains(text, want) {
+			t.Errorf("text output missing %q: %s", want, text)
+		}
+	}
+	got = read("-file", writeCatalog(t, sampleCatalogJSON))
+	if got.GoOnly == nil || len(got.GoOnly) != 0 || got.Page.Total != 0 {
+		t.Fatalf("catalog without optional section must report zero Go-only entries: %+v", got)
+	}
+}
+
+func TestInvalidGoOnlyAssessments(t *testing.T) {
+	for _, test := range []struct{ name, entries, want string }{
+		{"unqualified", `{"OnlyInGo":{"note":"Go helper.","review":"go-specific"}}`, "invalid qualified Go symbol"},
+		{"unexported", `{"agent.onlyInGo":{"note":"Go helper.","review":"go-specific"}}`, "invalid qualified Go symbol"},
+		{"empty note", `{"agent.OnlyInGo":{"note":" ","review":"go-specific"}}`, "note must not be empty"},
+		{"missing review", `{"agent.OnlyInGo":{"note":"Go helper."}}`, "existing review batch"},
+		{"unknown review", `{"agent.OnlyInGo":{"note":"Go helper.","review":"unknown"}}`, "existing review batch"},
+		{"no implicit baseline", `{"agent.OnlyInGo":{"note":"Go helper.","review":"baseline"}}`, "existing review batch"},
+		{"null entry", `{"agent.OnlyInGo":null}`, "note must not be empty"},
+		{"no mapping status", `{"agent.OnlyInGo":{"note":"Go helper.","review":"go-specific","status":"unmapped"}}`, "unknown field"},
+		{"mapped counterpart", `{"agent.Agent":{"note":"Go helper.","review":"go-specific"}}`, "also assessed as go_only"},
+		{"duplicate key", `{"agent.OnlyInGo":{"note":"Go helper.","review":"go-specific"},"agent.OnlyInGo":{"note":"Another note.","review":"go-specific"}}`, "duplicate JSON key"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			assertInvalidCatalog(t, catalogWithGoOnly(sampleCatalogJSON, test.entries), test.want)
+		})
+	}
+}
+
+func TestGoOnlyReconciliation(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+	root := writeGoCheckout(t, "example.org/sdk", map[string]string{
+		"agent/agent.go":          "package agent\nfunc OnlyInGo() {}\n",
+		"message/message.go":      "package message\n",
+		"tool/tool.go":            "package tool\n",
+		"workflow/workflow.go":    "package workflow\n",
+		"provider/other/other.go": "package other\nfunc Extra() {}\n",
+	})
+	minimal := `{"schema_version":0,"baseline":` + sampleBaselineJSON + `,"namespaces":{"Example":{"Placeholder":{"area":"agents","assembly":"Core","mapping":{"go":"","go_symbols":[],"status":"unmapped","note":"No counterpart found."}}}}}`
+	entries := `{"agent.OnlyInGo":{"note":"Go helper.","review":"go-specific"},"agent.Missing":{"note":"Removed Go helper.","review":"go-specific"},"provider/other.Extra":{"note":"Go provider helper.","review":"go-specific"}}`
+	file := writeCatalog(t, catalogWithGoOnly(minimal, entries))
+	inventory := writeCatalog(t, `{"schema_version":1,"identity_format":"ecma335-v1","assemblies":{"Core":{"informational_version":"1.0.0+1111111111111111111111111111111111111111"}},"types":{"Example.Placeholder":{"assembly":"Core","kind":"class"}}}`)
+	args := []string{"reconcile", "-file", file, "-inventory", inventory, "-go-root", root}
+	var report reconciliationReport
+	decodeOutput(t, commandOutput(t, args...), &report)
+	if report.InventoryDeclarations != 1 || report.AssessedDeclarations != 1 || len(report.Rows) != 1 || report.Counts["linked"] != 1 {
+		t.Fatalf("Go-only entries must not enter .NET row counts: %+v", report)
+	}
+	if report.GoOnly == nil || report.GoOnly.Assessed != 3 || report.GoOnly.Present != 2 || !reflect.DeepEqual(report.GoOnly.InvalidGoTargets, []string{"agent.Missing"}) || len(report.GoOnly.UnindexedGoTargets) != 0 {
+		t.Fatalf("incorrect Go-only reconciliation: %+v", report.GoOnly)
+	}
+	var out, diagnostics bytes.Buffer
+	err := run(append(args, "-symbol", "not-present", "-limit", "1", "-check"), &out, &diagnostics)
+	if err == nil || !strings.Contains(err.Error(), "invalid Go-only targets") {
+		t.Fatalf("hidden invalid Go-only target must fail strict checks: %v", err)
+	}
+	report = reconciliationReport{}
+	decodeOutput(t, out.String(), &report)
+	if len(report.Rows) != 0 || report.GoOnly.Assessed != 3 || len(report.GoOnly.InvalidGoTargets) != 1 {
+		t.Fatalf("filters hid Go-only validation results: %+v", report)
+	}
+	var summary reconciliationSummary
+	decodeOutput(t, commandOutput(t, append(args, "-summary", "-go-package", "./agent")...), &summary)
+	if summary.GoOnly.Present != 1 || !reflect.DeepEqual(summary.GoOnly.UnindexedGoTargets, []string{"provider/other.Extra"}) {
+		t.Fatalf("unindexed symbols were treated as missing or validated: %+v", summary.GoOnly)
+	}
+	validFile := writeCatalog(t, catalogWithGoOnly(minimal, `{"agent.OnlyInGo":{"note":"Go helper.","review":"go-specific"},"provider/other.Extra":{"note":"Go provider helper.","review":"go-specific"}}`))
+	validArgs := []string{"reconcile", "-file", validFile, "-inventory", inventory, "-go-root", root, "-check", "-summary"}
+	summary = reconciliationSummary{}
+	decodeOutput(t, commandOutput(t, validArgs...), &summary)
+	if summary.GoOnly.Assessed != 2 || summary.GoOnly.Present != 2 {
+		t.Fatalf("valid Go-only assessments rejected: %+v", summary.GoOnly)
+	}
+	// Like .NET target checks, an explicitly unindexed package is unknown, not invalid.
+	commandOutput(t, append(validArgs, "-go-package", "./agent")...)
+	text := commandOutput(t, append(args, "-json=false", "-summary")...)
+	if !strings.Contains(text, "Invalid Go-only targets: agent.Missing") || !strings.Contains(text, "Go-only assessments: 3") {
+		t.Fatalf("Go-only text diagnostics missing: %s", text)
 	}
 }
 
@@ -765,6 +1054,16 @@ func TestInvalidOptionsAndHelp(t *testing.T) {
 		{"go", "-inventory", "ignored.json"},
 		{"go", "-check"},
 		{"go", "-go-package", " "},
+		{"go-only", "-summary"},
+		{"go-only", "-go-root", "."},
+		{"go-only", "-type", "Agent"},
+		{"go-only", "-limit", "-1"},
+		{"changes"},
+		{"changes", "-old-root", " "},
+		{"changes", "-old-root", ".", "-limit", "-1"},
+		{"changes", "-old-root", ".", "-summary", "-limit", "0"},
+		{"changes", "-old-root", ".", "-file", "ignored.json"},
+		{"changes", "-old-root", ".", "-check"},
 		{"reconcile", "-state", "ready"},
 		{"mappings", "unexpected"},
 		{"mappings", "--", "unexpected"},
@@ -792,7 +1091,9 @@ func TestInvalidOptionsAndHelp(t *testing.T) {
 	}{
 		{"mappings", []string{"-file", "-area", "-kind", "-status", "-type", "-symbol", "-json", "-summary", "-limit", "-offset"}, []string{"-go-root", "-inventory", "-check"}},
 		{"gaps", []string{"-file", "-area", "-status", "-limit", "-offset"}, []string{"-go-root", "-summary"}},
+		{"go-only", []string{"-file", "-symbol", "-json", "-limit", "-offset"}, []string{"-go-root", "-summary", "-type", "-status"}},
 		{"go", []string{"-go-root", "-go-package", "-tags", "-summary", "-symbol", "-json", "-limit", "-offset"}, []string{"-file", "-area", "-inventory", "-check"}},
+		{"changes", []string{"-old-root", "-go-root", "-go-package", "-tags", "-summary", "-symbol", "-json", "-limit", "-offset"}, []string{"-file", "-inventory", "-check"}},
 		{"reconcile", []string{"-file", "-inventory", "-go-root", "-check", "-state", "-summary", "-limit", "-offset"}, nil},
 	} {
 		t.Run(command.name, func(t *testing.T) {
@@ -817,7 +1118,7 @@ func TestInvalidOptionsAndHelp(t *testing.T) {
 	if err := run([]string{"-help"}, &out, &help); err != nil || out.Len() != 0 {
 		t.Fatalf("root help must not load inputs: %v, %q", err, out.String())
 	}
-	for _, name := range []string{"symbolmap", "mappings", "gaps", "go", "reconcile"} {
+	for _, name := range []string{"symbolmap", "mappings", "gaps", "go-only", "go", "changes", "reconcile"} {
 		if !strings.Contains(help.String(), name) {
 			t.Errorf("root help is missing %q: %s", name, help.String())
 		}
@@ -939,6 +1240,29 @@ func assertInvalidCatalog(t *testing.T, data, want string) {
 			t.Fatalf("invalid catalog produced a successful-looking report: %s", out.String())
 		}
 	}
+}
+
+func catalogWithGoOnly(data, entries string) string {
+	const review = `{"checked_at":"2026-09-29","dotnet_commit":"1111111111111111111111111111111111111111","go_commit":"2222222222222222222222222222222222222222","inventory_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","scope":"Source-inspected Go-specific APIs."}`
+	return strings.Replace(data, `"namespaces":`, `"reviews":{"go-specific":`+review+`},"go_only":`+entries+`,"namespaces":`, 1)
+}
+
+func writeGoCheckout(t *testing.T, module string, files map[string]string) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module "+module+"\n\ngo 1.26.0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, contents := range files {
+		file := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, []byte(contents), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return root
 }
 
 func writeCatalog(t *testing.T, data string) string {

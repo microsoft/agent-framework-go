@@ -6,7 +6,7 @@ The comparison is maintained in [dotnet-go-sdk-symbol-mapping.json](dotnet-go-sd
 
 ## Structure
 
-The catalog uses schema 0, with a required `schema_version` field. It contains one original `baseline`, optional named `reviews`, and `namespaces`. Each namespace contains short declaring-type keys. For example, namespace `Microsoft.Agents.AI` contains `AgentResponse`, whose `properties.Text` maps to `agent.Response.String`.
+The catalog uses schema 0, with a required `schema_version` field. It contains one original `baseline`, optional named `reviews`, optional `go_only` assessments, and `namespaces`. Each namespace contains short declaring-type keys. For example, namespace `Microsoft.Agents.AI` contains `AgentResponse`, whose `properties.Text` maps to `agent.Response.String`.
 
 | Level | Fields | Meaning |
 | --- | --- | --- |
@@ -18,6 +18,7 @@ The catalog uses schema 0, with a required `schema_version` field. It contains o
 | Member key | Relative name or short overload signature | For example, `Text` or `RunAsync(string, AgentSession, AgentRunOptions, CancellationToken)`. Qualify parameter types only when their short names are ambiguous. |
 | Mapping leaf | `go_symbols`, `status`, `note`, optional `go` and `review` | `go_symbols` records counterparts for validation and search. Types, methods, constructors, fields, constants, and events also carry a minimal `go` example when mapped. Property leaves never carry examples. `review` selects a named review batch; nothing is inherited from the containing type. |
 | Review batch | Date, .NET/Go commits, inventory hash, scope | Records a newly inspected subset without advancing the baseline of old assessments. |
+| Go-only assessment | Canonical Go symbol key → `note`, `review` | Records a source-reviewed Go-specific API with no meaningful .NET counterpart in the reviewed scope. Both fields are required; the review must name an existing batch. |
 
 Go symbols combine the module-relative package and exported symbol: `agent.Agent`, `agent.Response.String`, or `workflow/inproc.ExecutionEnvironment.Run`. The module prefix is recorded once in `baseline.go_module`. One .NET declaration can reference several Go symbols. `go_symbols` is always an array; it is empty only for `unmapped` or `intentional` declarations.
 
@@ -44,9 +45,15 @@ For non-property declarations, `go` is a minimal Go snippet showing the correspo
 
 Status belongs to each mapping leaf. A mapped type can contain unmapped members, and a member-only type container makes no claim about a whole-type counterpart. Language-specific machinery such as DI, class inheritance, or serializer options is not automatically a defect.
 
+### Go-only assessments
+
+The top-level `go_only` object uses the same canonical Go symbol names as `go_symbols`. Each value has a concrete `note` explaining why the API is Go-specific and a required `review` reference pinning the inspected revisions and scope. There is no status, example, or inherited member coverage. An empty object is valid; missing mappings are never classified automatically.
+
+Use a normal `adapted` mapping when Go composition or a different API shape implements a .NET contract. Missing inventory coverage or unresolved evidence is not enough for `go_only`. A symbol cannot appear in both `go_only` and a .NET leaf's `go_symbols`. If a counterpart is later verified, remove the Go-only entry when adding the normal mapping. Remove entries for deleted Go APIs with source evidence; preserve review history. Re-review changed APIs or new evidence, without renewing unchanged assessments.
+
 ## Query the Mapping
 
-Run from the repository root with `go run ./cmd/symbolmap <subcommand> [flags]`. The [symbolmap command](../cmd/symbolmap/main.go) returns JSON by default and limits row-producing responses to 20 matches per page. Use filters before requesting more rows. `mappings` and `gaps` only read the catalog; `go` indexes the Go module without loading the catalog; `reconcile` reads the catalog and declaration inventory and indexes Go. Go indexing invokes the local toolchain and reads Git metadata. These subcommands never write the catalog or access the network themselves.
+Run from the repository root with `go run ./cmd/symbolmap <subcommand> [flags]`. The [symbolmap command](../cmd/symbolmap/main.go) returns JSON by default and limits row-producing responses to 20 matches per page. Use filters before requesting more rows. `mappings`, `gaps`, and `go-only` only read the catalog; `go` indexes one Go checkout and `changes` compares two, without loading the catalog; `reconcile` reads the catalog and declaration inventory and indexes Go. Go indexing invokes the local toolchain and reads Git metadata. These subcommands never write the catalog or access the network themselves.
 
 Agents can start with the short [symbol lookup skill](../.github/skills/dotnet-symbols/SKILL.md); this guide remains the detailed reference.
 
@@ -58,15 +65,18 @@ Agents can start with the short [symbol lookup skill](../.github/skills/dotnet-s
 | Restrict a namespace | `go run ./cmd/symbolmap mappings -namespace Compaction` |
 | Find the Go counterpart of a .NET symbol | `go run ./cmd/symbolmap mappings -symbol AIAgent.RunAsync` |
 | Find .NET symbols that use a Go counterpart | `go run ./cmd/symbolmap mappings -symbol agent.Session.Get` |
+| Read reviewed Go-specific APIs | `go run ./cmd/symbolmap go-only -symbol agent. -limit 5` |
 | List workflow gap candidates | `go run ./cmd/symbolmap gaps -area workflows` |
 | List declarations with no located counterpart | `go run ./cmd/symbolmap mappings -status unmapped` |
 | Inspect a type's mappings as JSON | `go run ./cmd/symbolmap mappings -type AgentRunOptions` |
 
 Flags follow the subcommand. Use `-help` on a subcommand for its supported flags. `mappings -summary` reports counts instead of declaration rows. Mapping filters intersect: `-area`, `-kind`, and `-status` use the documented values; `-namespace`, `-type`, and `-symbol` are case-insensitive substring searches. `-symbol` accepts short or namespace-qualified .NET names and combined Go names. The `gaps` subcommand selects only `partial` and `unmapped`, not `adapted` or `intentional`.
 
-JSON is the default for every subcommand; use `-json=false` for human-readable text. Row-producing JSON responses (`mappings`, `gaps`, `go`, and `reconcile` without `-summary`) include `page` with `total` matches after filtering, `offset`, `limit`, and `returned`. When `page.next_offset` is present, repeat the same filters with `-offset` set to that value; its absence means there are no more matches. `-limit` defaults to 20; use `-limit=0` explicitly to export every filtered match. `-limit` and `-offset` cannot be combined with `-summary`, whose counts always cover the entire filtered selection. Text reports show the same page information.
+JSON is the default for every subcommand; use `-json=false` for human-readable text. Row-producing JSON responses (`mappings`, `gaps`, `go-only`, `go`, `changes`, and `reconcile` without `-summary`) include `page` with `total` matches after filtering, `offset`, `limit`, and `returned`. When `page.next_offset` is present, repeat the same filters with `-offset` set to that value; its absence means there are no more matches. `-limit` defaults to 20; use `-limit=0` explicitly to export every filtered match. `-limit` and `-offset` cannot be combined with `-summary`, whose counts always cover the entire filtered selection. Text reports show the same page information.
 
 Mapping output includes the baseline, named reviews, and a flat `mappings` array with short `dotnet` labels, their `namespace`/`assembly`, and explicit assessments. The hierarchy remains the single maintained source. Summary counts include only explicit mappings, not grouping-only type containers, and deduplicate Go targets shared by several .NET declarations. Counts are not a parity percentage or a count of implementation tasks.
+
+The `go-only` view returns the baseline, reviews, and a paged `go_only` object. It supports `-file` and `-symbol`, not .NET filters. `mappings -summary` reports the separate, unfiltered `go_only_symbols` count when nonzero; these symbols do not enter .NET mapping/status/gap counts or the mapped `go_symbols` count.
 
 ## Extract the .NET Declaration Inventory
 
@@ -113,7 +123,17 @@ Indexing requires the local Go toolchain and cached dependencies. It disables mo
 
 `-check` checks the entire report, even when filters or pagination hide failing rows. It fails on unresolved .NET references or invalid Go targets, including invalid Go targets on out-of-scope .NET rows. Being unreviewed or outside the .NET inventory scope alone does not fail this reference check. The report is still emitted before the nonzero exit status. `-summary` omits rows but retains selection provenance; counts apply to the entire filtered selection, not just one page, while `inventory_declarations` records the complete input size.
 
+When Go-only assessments exist, reconciliation also includes an unfiltered `go_only` summary with `assessed_symbols`, `present_symbols`, and any `invalid_go_targets` or `unindexed_go_targets`. `-check` fails on invalid Go-only targets even if .NET filters hide all rows. Explicitly unindexed packages remain unknown, not invalid. Presence validates the Go declaration, not the assessment that no .NET counterpart exists.
+
 Existing reviews retain their baselines and the hashes of the snapshots originally inspected, even when a snapshot is reformatted or trimmed. A linked declaration can still have `review_source_changed` or `review_go_changed`; these compare commits, not behavior. A dirty Go checkout also prevents treating HEAD alone as an exact snapshot. Matching identities does not certify old assessments against a newer release.
+
+## Compare Go API Changes
+
+Use `go run ./cmd/symbolmap changes -old-root ../old-checkout -go-root . -limit=0` to compare two checkouts of the same Go module with the pinned [`golang.org/x/exp/apidiff`](https://pkg.go.dev/golang.org/x/exp/apidiff) package. Prepare both checkouts and their dependencies separately; the command neither checks out revisions nor downloads modules. It reuses the Go index's package selection and excludes main/internal packages and tests.
+
+The JSON report contains `old` and `new` build/commit metadata, compatible and incompatible counts, and a paged `changes` array of `{message, compatible}` diagnostics. Both classifications are included: an added exported struct field is normally a compatible change. `-symbol` filters diagnostic text case-insensitively, `-summary` omits the individual changes, and `-json=false` prints a text report. Finding incompatible changes does not cause a nonzero exit; input/load failures do. Package additions and removals are reported too; inspect members of newly added types and packages separately.
+
+The checkouts must have the same module path, platform, architecture, CGO setting, Go version, and build tags. `-go-package` and `-tags` apply to both. An incomplete load fails without a report. The comparison describes the net structural change between the two snapshots, not all intermediate commits or build configurations. Function bodies, documentation, defaults, and struct tags still need source-diff review. Diagnostic messages are review leads, not stable symbol identifiers or .NET mapping assessments.
 
 ## Derive and Maintain Work
 
@@ -131,6 +151,6 @@ Existing links to this guide remain valid. Porting workflows should update the r
 
 The [weekly workflow](../.github/workflows/symbolmap-maintenance-weekly.md) runs weekly and supports manual dispatch. Each run checks every existing assessed mapping for staleness from recent Go work or preexisting inaccuracies; it does not rotate through a subset. Revision or review-date changes alone do not establish staleness.
 
-Its draft PRs can change only the reviewed mapping catalog. The .NET declaration inventory is a read-only reference: the workflow does not regenerate it, query newer .NET releases, or assess whether it is stale. Inventory maintenance remains manual. SDK changes, package expansion, and filling the unreviewed declaration backlog are outside this workflow's scope. Open results do not prevent subsequent audits; duplicate corrections are skipped. A complete audit with no new substantiated correction reports a no-op; an unfinished audit reports itself as incomplete.
+Its draft PRs can change only the reviewed mapping catalog. The .NET declaration inventory is a read-only reference: the workflow does not regenerate it, query newer .NET releases, or assess whether it is stale. Inventory maintenance remains manual. New assessments must be tied to recent Go implementations; the unrelated unreviewed backlog, SDK changes, and package expansion remain outside its scope. Open results do not prevent subsequent audits; duplicate corrections are skipped. A complete audit with no new substantiated correction reports a no-op; an unfinished audit reports itself as incomplete.
 
-The workflow prepares Go dependencies and the full past-week SDK commit list before the agent runs. Source inspection uses recorded revisions when needed; no separate preparation command or .NET inventory update is involved.
+The workflow prepares the past-week SDK patch (including internal code and tests), both catalog assessment sections, and an API comparison between HEAD and its last first-parent ancestor before the review window. The baseline is a temporary detached worktree, removed after preparation. Behavioral review is required even when the API report is empty: internal-helper and dependency changes are traced to public contracts and existing assessments. Implementation PRs and relevant discussion can clarify intent, but source/tests at the inspected revisions establish behavior. Prior mapping/audit PRs are consulted only after independent discovery, for duplicate checks and maintainer feedback. Every API change needs a reviewed outcome, not a forced .NET mapping; confirmed Go-specific assessments can be recorded in `go_only`.

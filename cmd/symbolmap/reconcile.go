@@ -181,6 +181,7 @@ type reconciliationReport struct {
 	AssessedDeclarations  int                       `json:"assessed_declarations"`
 	Counts                map[string]int            `json:"counts"`
 	ByArea                map[string]map[string]int `json:"by_area"`
+	GoOnly                *goOnlyReconciliation     `json:"go_only,omitempty"`
 	Rows                  []reconciliationRow       `json:"rows"`
 	Page                  *pageInfo                 `json:"page,omitempty"`
 }
@@ -247,6 +248,7 @@ func reconcile(report mappingsReport, inv declarationInventory, goAPI goInventor
 	for _, pkg := range goAPI.Packages {
 		goPackages[pkg] = true
 	}
+	result.GoOnly = reconcileGoOnly(report.GoOnly, goAPI, goPackages, allGoPackages)
 	sourceCommits := make(map[string]string, len(inv.Assemblies))
 	for assembly := range inv.Assemblies {
 		sourceCommits[assembly] = declarationSourceCommit(inv, assembly)
