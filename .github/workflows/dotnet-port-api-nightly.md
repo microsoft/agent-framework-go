@@ -4,6 +4,9 @@ tracker-id: dotnet-port-api-nightly
 model: "gpt-5.4"
 engine:
    id: copilot
+sandbox:
+   agent:
+      version: v0.28.25
 max-ai-credits: 2000
 network:
    allowed:
