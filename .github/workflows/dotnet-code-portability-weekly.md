@@ -7,7 +7,7 @@ engine:
    id: copilot
 sandbox:
    agent:
-      version: v0.28.24
+      version: v0.28.25
 network:
    allowed:
       - defaults
