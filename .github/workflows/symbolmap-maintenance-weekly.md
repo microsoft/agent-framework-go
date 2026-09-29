@@ -70,7 +70,7 @@ steps:
         mkdir -p "$data"
         go run ./cmd/symbolmap mappings -limit=0 > "$data/assessed-mappings.json"
         go run ./cmd/symbolmap reconcile -limit=0 > "$data/reconcile.json"
-        git log --first-parent --since-as-filter='7 days ago' --format='%H' HEAD -- agent/ message/ tool/ provider/ workflow/ go.mod go.sum > "$data/recent-go-commits.txt"
+        git --no-pager log --first-parent --since-as-filter='7 days ago' --patch HEAD -- agent/ message/ tool/ provider/ workflow/ go.mod go.sum > "$data/recent-go-changes.patch"
         query='gh-aw-workflow-id symbolmap-maintenance-weekly'
         selector='map(select(.body | contains("gh-aw-workflow-id: symbolmap-maintenance-weekly")) | {number,title,url,state,updatedAt,body:(.body[:6000])})'
         gh search prs "$query" --match body --repo "$REPO" --limit 10 --sort updated --order desc \
@@ -108,7 +108,7 @@ Work in batches until finished or blocked. Finding a few corrections or having w
 
 ## Inputs and boundaries
 
-- Work from `${{ github.workspace }}`. Read `assessed-mappings.json`, `reconcile.json`, `recent-go-commits.txt`, `recent-prs.json`, and `recent-issues.json` under `/tmp/gh-aw/agent/symbolmap/`. The history covers first-parent SDK commits from the past seven days. Setup failures are blockers, not an empty queue.
+- Work from `${{ github.workspace }}`. Read `assessed-mappings.json`, `reconcile.json`, `recent-go-changes.patch`, `recent-prs.json`, and `recent-issues.json` under `/tmp/gh-aw/agent/symbolmap/`. The patch contains first-parent SDK commits from the past seven days with their full diffs. Setup failures are blockers, not an empty queue.
 - Treat `docs/dotnet-sdk-symbol-inventory.json` as read-only. Do not refresh it, audit its freshness, or query NuGet feeds, release lists, or newer .NET revisions.
 - Use .NET source at the exact commit in the assembly metadata or applicable review batch. Verify that revision; do not substitute upstream `main` or flag an old pin as a mapping defect.
 - Change only `docs/dotnet-go-sdk-symbol-mapping.json`. New assessments require an inventoried `unreviewed` declaration and a listed recent commit that implemented or materially completed its Go counterpart. Record that commit and verify the declaring type and source; names alone are not evidence. The total unreviewed backlog is **not** part of this audit. SDK code, tooling, dependencies, guides, workflows, and package-scope changes are out of scope.
@@ -124,10 +124,10 @@ Check open work and prior rejections, including porting workflows and tracking i
 
 1. Read recent maintenance results and maintainer feedback. Another open maintenance PR does not cancel this audit; check duplicates for each proposed change.
 2. Record the snapshot's original `page.total` and the UTC start time. Keep a run-local checklist by declaring type, split into small pages, with inspected, pending, and blocked identities. Count new assessments separately. Use short notes outside the repository and allowed tools such as `git` and `jq`.
-3. Review every recent commit first, including implementation and test diffs. Identify affected mappings and eligible new counterparts, including new fields/options that leave existing targets intact. Resolve these candidates before the remaining sweep. Inspect all assessed `needs-reconciliation` rows and nonempty `invalid_go_targets`, including rows marked `outside-inventory-scope`; that state alone is not a defect.
+3. Review every commit and changed file in `recent-go-changes.patch`, including implementation and tests. Page through the full file rather than truncating it. For each added, removed, or changed exported API, including fields/options and behavior changes, record affected assessments or a reason no catalog change is needed. Find new counterparts in the complete `reconcile.json`, not just existing mappings or `suggested_go`. Name searches are navigation aids, never a filter on the review scope. Resolve recent candidates before the remaining sweep. Inspect all assessed `needs-reconciliation` rows and nonempty `invalid_go_targets`, including `outside-inventory-scope` rows; that state alone is not a defect.
 4. Review **every original assessed leaf**, recent-change rows first, then the remaining batches. Check targets, examples, status, and notes against current Go implementation, callers, tests, and pinned .NET semantics as needed. After each batch, record conclusions, source/test evidence, inspected/total counts, and the next batch; then continue. Share related source reads, not conclusions. Listing or grepping rows is not a review, and a batch is not a run limit.
 5. Correct verified inaccuracies and add verified recent counterparts not already tracked. Preserve unrelated leaves, the baseline, and existing reviews. Assign only changed/added leaves to a new review batch with the UTC date, inspected commits, and unchanged inventory hash. Do not renew unchanged reviews, add property examples, invent intentional omissions, or treat a type mapping as member coverage. Do not delete assessments, relabel them out of scope, or weaken validation to pass checks.
-6. Compare the checklist with the original snapshot. If pending work remains without a concrete blocker, return to step 4. Do not reuse a previous run's inspections or keep a persistent cursor. Publish only after every original leaf and eligible new candidate is reviewed.
+6. Check that every listed commit and changed API has a recorded outcome, and every original assessed identity has a source-backed conclusion. Snapshot totals and successful reconciliation are not reviewed counts. If work remains without a concrete blocker, return to step 3 or 4. Do not reuse a previous run's inspections or keep a persistent cursor. Publish only after the review is complete.
 
 Recover and continue where possible: use built-in search or `grep` when `rg` is missing, pinned file reads when code search is throttled, and `go mod download` for missing cached modules. Record blocked areas and work on other batches before retrying. Resolved errors are not blockers.
 
