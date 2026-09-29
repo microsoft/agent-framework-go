@@ -24,6 +24,13 @@
       "go_commit": "92aec43f5e5995627b06cced822e7197b63733a8",
       "inventory_sha256": "734ff2c4037aa311de95912a256bb7e223ab3fa81a699835a21d27bab90f53ab",
       "scope": "Rechecked AgentModeProvider mode accessors and AgentModeProviderOptions.Modes against pinned .NET source and Go after the agentmode API changes. Only leaves referencing this review were inspected."
+    },
+    "symbolmap-maintenance-2026-09-29": {
+      "checked_at": "2026-09-29",
+      "dotnet_commit": "0c9944cc9f577d51277ac7c55dbc388b60a577af",
+      "go_commit": "8f232547955495793c4c3e3584521ac3a41b92a7",
+      "inventory_sha256": "734ff2c4037aa311de95912a256bb7e223ab3fa81a699835a21d27bab90f53ab",
+      "scope": "Rechecked TodoCompletionLoopEvaluator.EvaluateAsync after the agentmode session API rename. Only leaves referencing this review were changed."
     }
   },
   "namespaces": {
@@ -2505,7 +2512,8 @@
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "note": "RemainingTodos and ModeForSession expose state, but no built-in Go evaluator combines them with continuation feedback."
+            "note": "RemainingTodos and Mode expose state, but no built-in Go evaluator combines them with continuation feedback.",
+            "review": "symbolmap-maintenance-2026-09-29"
           }
         },
         "constructors": {
