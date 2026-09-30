@@ -39,6 +39,15 @@ steps:
         git cat-file -e "${upstream_sha}:dotnet/src"
         git cat-file -e "${upstream_sha}:dotnet/tests"
         printf 'DOTNET_UPSTREAM_SHA=%s\n' "$upstream_sha" >> "$GITHUB_ENV"
+   - name: Prepare complete catalog gaps
+     shell: bash
+     working-directory: ${{ github.workspace }}
+     run: |
+        set -euo pipefail
+        data=/tmp/gh-aw/agent/dotnet-port-api
+        mkdir -p "$data"
+        go run ./cmd/symbolmap gaps -limit 0 > "$data/catalog-gaps.json"
+        printf 'DOTNET_GAPS_FILE=%s\n' "$data/catalog-gaps.json" >> "$GITHUB_ENV"
 permissions:
    contents: read
    pull-requests: read
@@ -116,34 +125,37 @@ Read source/tests from that object database with `git show "$DOTNET_UPSTREAM_SHA
 
 If a tool saves oversized output to a temporary path, read that file in ranges or extract its content with `jq`; the preview limit is not lost evidence. If the SHA or path was corrected, retry the local read before reporting a source blocker. Include the exact command and error for the prepared revision when source remains unavailable.
 
+Setup exports the complete catalog gap report to `DOTNET_GAPS_FILE` using `symbolmap gaps -limit 0`. Its `mappings` array contains every assessed gap; `page.total` is the full count. Use this prepared file, not a new first-page query. Missing or unreadable input is a blocker, not an empty gap list.
+
 The catalog and inventory are read-only. Release/package-scope upgrades and inventory regeneration are separate maintainer work. A leaf's named review or original baseline records historical evidence, not a different porting target. Weekly mapping maintenance updates assessments after the port merges, using published Go commits and preserving historical provenance.
 
 Before duplicate searches, read the member and declaring-type headers/attributes and relevant implementation/test bodies at the target SHA; grep matches only locate this evidence. Verify related public options/builders, experimental status, defaults, and opt-in gates. Compare the current Go implementation, callers, tests, and examples. Use `docs/dotnet-go-sdk-feature-comparison.md` as the mapping guide, not a second gap list. If relevant upstream commits/PRs clarify the contract, inspect their complete diffs and verify they are included in the pinned revision. Inventory scope limitations alone do not prove absence; out-of-inventory catalog leaves require direct pinned-source verification.
 
 Screen eligibility against the Scope rules using pinned source and the Go surface first. Record source-backed exclusions without duplicate searches. For remaining eligible candidates, use read-only GitHub MCP to search both issues and PRs in `repo:microsoft/agent-framework-go`, open and closed, including `[dotnet-port-api]` and `[dotnet-port-fixes]` work. Every query must include a specific .NET/Go symbol or behavior, or an associated implementing commit/PR; the shared inventory SHA and workflow prefixes alone do not identify a gap. Skip only work that implements, actively claims, or explicitly rejects the exact missing behavior, including older fallback tracking issues. A matching title, base feature port, internal refactor, or preservation test does not establish that; verify the relevant body/diff and current Go behavior. A `closed` PR is not necessarily merged.
 
-For `search_issues` and `search_pull_requests`, always set `perPage` to at most `10` and `fields` to `["number", "title", "state", "html_url"]`. Follow all pages and narrow capped queries. Fetch bodies, comments, and outcomes separately only for relevant matches; never include bodies in search results.
+For `search_issues` and `search_pull_requests`, always include `repo:microsoft/agent-framework-go` in `query`, set `perPage` to at most `10`, and set `fields` to `["number", "title", "state", "html_url"]`. Apply these rules to the final recheck too. Follow all pages and narrow capped queries. Fetch bodies, comments, and outcomes separately only for relevant matches; never include bodies in search results.
 
 Filtered, truncated, or failed reads do not establish absence. Recover with local pinned source or targeted approved GitHub reads; keep inaccessible required evidence unresolved. Do not lower integrity policy, retrieve filtered content through another transport, retry a trapped guard indefinitely, or use unauthenticated sandbox `gh` and unconfigured download tools.
 
 ## Main agent
 
-1. Verify `DOTNET_UPSTREAM_SHA` resolves locally. Invoke `port-candidate-selector` once with that SHA, the checkout and catalog/inventory paths, and the Scope and Evidence rules above. It owns gap selection and initial deduplication. Wait for it; do not repeat its searches, scan alternatives, or launch more workers.
-2. Check the evidence and per-candidate outcomes behind its `selected`, `no-change`, or `blocked` report, not just the status label. Resolve only targeted evidence gaps. **Before editing**, independently verify the selected catalog leaves, pinned .NET contract, and Go counterpart against the Evidence rules. Do not implement while that candidate's required checks remain unresolved. A blocked alternative does not disqualify a different fully verified selection; disclose the skipped blocker in the PR notes.
-3. Implement only the verified gap. Identify its catalog leaves and expected assessment changes in the PR for post-merge mapping maintenance. Do not rescan or re-rank candidates. Recheck matching issues/PRs before publication to catch work opened during implementation.
+1. Verify `DOTNET_UPSTREAM_SHA` resolves locally. Invoke `port-candidate-selector` once with that SHA, `DOTNET_GAPS_FILE`, the checkout and catalog/inventory paths, and the Scope and Evidence rules above. It owns gap selection and initial deduplication. Wait for it; do not repeat its initial searches, scan alternatives, or launch more workers.
+2. Check the evidence, screened/total gap counts, and per-candidate outcomes behind its `selected`, `no-change`, or `blocked` report, not just the status label. Incomplete screening cannot establish `selected` or `no-change`. Resolve only targeted evidence gaps. **Before editing**, independently verify the selected catalog leaves, pinned .NET contract, and Go counterpart against the Evidence rules. Do not implement while that candidate's required checks remain unresolved. A blocked alternative does not disqualify a different fully verified selection; disclose the skipped blocker in the PR notes.
+3. Implement and validate only the verified gap. Identify its catalog leaves and expected assessment changes in the PR for post-merge mapping maintenance. Do not rescan or re-rank candidates.
+4. **After validation and before committing or requesting a PR**, recheck the selected gap against both issues and PRs using the same search rules, including the selector's queries and relevant symbol/behavior variants. If a potentially relevant result is filtered or required evidence remains unresolved, the selected candidate is now blocked: call `report_incomplete` and leave the edits unpublished. Passing tests, narrower empty searches, or disclosing the filter in PR notes do not clear it. If new work disqualifies the candidate, leave edits unpublished and apply the Finish rules. Commit and request a PR only when this recheck is complete and clear.
 
 ## Implementation
 
 - Follow repository instructions, idiomatic Go, and neighboring APIs. Port relevant behavior and tests together; update examples for changed user scenarios. Already satisfied gaps belong to mapping maintenance, not a manufactured SDK change.
 - Run `gofmt`, targeted unit tests, and broader unit tests for shared runtime changes. Use the `go` command, not absolute toolchain paths. Do not run E2E, replay-harness, or benchmark suites.
-- Review the full diff and untracked files; run `git diff --check`. Commit only the selected SDK change and its tests/examples. Leave the catalog, inventory, and mapping guide unchanged. Exclude `.github/`, governance files, binaries, caches, reports, and generated agent files. Preserve pre-existing edits.
+- Review the full diff and untracked files; run `git diff --check`. After the final duplicate check passes, commit only the selected SDK change and its tests/examples. Leave the catalog, inventory, and mapping guide unchanged. Exclude `.github/`, governance files, binaries, caches, reports, and generated agent files. Preserve pre-existing edits.
 - Breaking changes are permitted for beta alignment but must be explicit in the PR.
 
 ## Finish
 
 After the worker finishes, the main agent must **invoke one of the safe-output tools below and check its result before writing the final response**. A prose summary does not count as a tool call. If no fully verified candidate remains because required checks are blocked, call `report_incomplete` through the separate safe-output server.
 
-- `create_pull_request`: one verified, tested gap closure. Use a concrete title and sections **Summary**, **Ported .NET PRs**, **Breaking Changes**, **Tests and Examples**, and **Notes**. Include inventoried package versions, pinned SHA, exact catalog leaves and expected assessment changes, relevant upstream commits/PRs (or `None` if no specific PR was ported), immutable evidence, experimental and duplicate checks, and actual validation. Keep prose concise without hard-wrapping paragraphs. Report publication as queued, not a confirmed PR; never push, merge, approve, or open PRs directly.
+- `create_pull_request`: one verified, tested gap closure with a clear final duplicate check. Send only `title`, `body`, and `branch`; omit `temporary_id` and other optional arguments. Draft status, base branch, and title prefix are configured already; this single PR needs no temporary ID. Use a concrete title and sections **Summary**, **Ported .NET PRs**, **Breaking Changes**, **Tests and Examples**, and **Notes**. Include inventoried package versions, pinned SHA, exact catalog leaves and expected assessment changes, relevant upstream commits/PRs (or `None` if no specific PR was ported), immutable evidence, experimental and duplicate checks, and actual validation. Keep prose concise without hard-wrapping paragraphs. Report publication as queued, not a confirmed PR; never push, merge, approve, or open PRs directly.
 - `noop`: completed bounded gap review with no eligible unclaimed change and no potentially eligible candidate left blocked. Source-backed exclusions, including experimental, fix-only, already covered, and too broad, are completed reviews, not blockers. State the pinned SHA, catalog gap count, actual leaves/groups inspected, exclusion or already-satisfied reasons, and existing-work links. Do not claim a full catalog audit from a few candidates; an empty diff alone does not establish completion.
 - `report_incomplete`: no fully verified selection is possible because a potentially eligible candidate's required evidence remains unresolved, or the selected port's validation fails, the worker fails, or execution reaches a runtime limit. Include the operation/error, recovery attempts, SHA, blocked candidates, and remaining work. Leave partial edits unpublished; do not substitute `noop`. The three-group selection limit alone is not a failure.
 
@@ -155,7 +167,7 @@ Read `.github/skills/dotnet-symbols/SKILL.md` and select at most one coherent, e
 
 Use the supplied `DOTNET_UPSTREAM_SHA` directly, never inventory checksum fields or a guessed hash. Verify it with `git cat-file -e "${DOTNET_UPSTREAM_SHA:?Missing prepared revision}^{commit}"`, locate source/tests with `git ls-tree` or `git grep` at that SHA, and read them with `git show "$DOTNET_UPSTREAM_SHA:dotnet/<path>"` before using GitHub code search. Read saved oversized tool outputs in ranges; a preview limit is not truncation of the saved content. Report a source blocker only after retrying the correct revision/path, with the exact failing command and error.
 
-From the supplied checkout, run `go run ./cmd/symbolmap gaps -limit 20` and follow `page.next_offset` with `-offset` to screen all recorded gap pages in the `mappings` collection. Group related `partial`/`unmapped` leaves into coherent candidates and inspect at most three promising groups in depth. Recheck each gap against current Go and source/tests at `DOTNET_UPSTREAM_SHA`; historical notes alone do not establish a current gap. Record the total and exact identities inspected.
+Read the complete prepared gap report at `DOTNET_GAPS_FILE`, produced by `symbolmap gaps -limit 0`. Screen every entry in its `mappings` array before choosing candidates; read remaining file ranges if a tool preview is cut off. Do not replace it with a first-page query. Report both the screened count and `page.total`; an unreadable or incompletely screened report is `blocked`, not `selected` or `no-change`. Group related `partial`/`unmapped` leaves into coherent candidates and inspect at most three promising groups in depth. Recheck each gap against current Go and source/tests at `DOTNET_UPSTREAM_SHA`; historical notes alone do not establish a current gap. Record the exact identities inspected in depth.
 
 One selection does not mean one attempt. If a candidate is already covered, excluded, or blocked by candidate-specific evidence such as a filtered PR, record its outcome and continue to the next promising group within the same three-group budget. Blocked groups count toward that budget and remain unresolved; never port them or assume their duplicate checks passed. Stop when one candidate passes every required check, the budget is exhausted, or a shared tool/source failure prevents evaluating alternatives. Do not repeat an explicitly denied read or bypass the policy.
 
@@ -171,7 +183,7 @@ Disclose filtered or truncated results and failed reads, even when a candidate i
 
 Return a compact `selected`, `no-change`, or `blocked` report with:
 
-- Inventoried package versions, pinned SHA, catalog gap count, exact namespace/type/member identities and existing statuses/notes inspected, selected gap group, and skipped alternatives.
+- Inventoried package versions, pinned SHA, screened/total gap counts, exact namespace/type/member identities and existing statuses/notes inspected in depth, selected gap group, and skipped alternatives.
 - Classification, public API/capability delta, defaults, opt-in gates, experimental evidence, complete diffs inspected, and relevant .NET/Go source and tests.
 - Duplicate queries/pages and issue/PR links; filtering/visibility limitations, unresolved reads, errors, recovery attempts, and targeted follow-up checks.
 
