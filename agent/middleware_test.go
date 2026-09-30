@@ -285,6 +285,7 @@ func TestProviderConfig_ManagesToolExecution_InsideProviderMiddleware(t *testing
 
 func TestProviderConfig_ManagesToolExecution_FunctionReplacement(t *testing.T) {
 	var order []string
+	var capturedInvocation *agent.FunctionInvocationContext
 	original := functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) {
 		order = append(order, "original")
 		t.Fatal("original tool invoked after middleware replaced it")
@@ -296,12 +297,16 @@ func TestProviderConfig_ManagesToolExecution_FunctionReplacement(t *testing.T) {
 	})
 	first := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
 		order = append(order, "first before")
+		capturedInvocation = invocation
 		if invocation.Function != original {
 			t.Errorf("middleware received %v, want original function", invocation.Function)
 		}
 		invocation.Function = replacement
 		result, err := next(ctx, invocation)
 		order = append(order, "first after")
+		if invocation.Function != replacement {
+			t.Errorf("function restored before middleware returned: got %v, want replacement", invocation.Function)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -309,12 +314,8 @@ func TestProviderConfig_ManagesToolExecution_FunctionReplacement(t *testing.T) {
 	})
 	second := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
 		order = append(order, "second before")
-		if invocation.Function != replacement {
-			t.Errorf("middleware did not observe the replaced function: %v", invocation.Function)
-		}
-		result, err := next(ctx, invocation)
-		order = append(order, "second after")
-		return result, err
+		t.Error("later middleware invoked for replacement")
+		return "unexpected", nil
 	})
 	run := func(ctx context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -338,8 +339,11 @@ func TestProviderConfig_ManagesToolExecution_FunctionReplacement(t *testing.T) {
 	if response.String() != "wrapped replacement" {
 		t.Errorf("response = %q, want %q", response.String(), "wrapped replacement")
 	}
-	if !slices.Equal(order, []string{"first before", "second before", "replacement", "second after", "first after"}) {
-		t.Errorf("order = %v, want [first before second before replacement second after first after]", order)
+	if capturedInvocation == nil || capturedInvocation.Function != original {
+		t.Errorf("function was not restored after middleware returned: %#v", capturedInvocation)
+	}
+	if !slices.Equal(order, []string{"first before", "replacement", "first after"}) {
+		t.Errorf("order = %v, want [first before replacement first after]", order)
 	}
 }
 

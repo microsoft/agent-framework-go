@@ -74,6 +74,9 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 				invocation.Arguments = `{"value":"changed"}`
 				result, err := next(ctx, invocation)
 				order = append(order, "first after")
+				if tc.replace && invocation.Function != replacement {
+					t.Errorf("function restored before middleware returned: got %v, want replacement", invocation.Function)
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -81,8 +84,8 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 			})
 			second := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
 				order = append(order, "second before")
-				if tc.replace && invocation.Function != replacement {
-					t.Errorf("middleware did not receive replaced function: %#v", invocation)
+				if tc.replace {
+					t.Error("later middleware invoked for replacement")
 				}
 				result, err := next(ctx, invocation)
 				order = append(order, "second after")
@@ -132,7 +135,7 @@ func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 				wantOrder := []string{"first before", "second before", "tool", "second after", "first after"}
 				if tc.replace {
 					wantResult = "wrapped replacement changed"
-					wantOrder = []string{"first before", "second before", "replacement tool", "second after", "first after"}
+					wantOrder = []string{"first before", "replacement tool", "first after"}
 				}
 				if tc.short {
 					wantResult = "cached"
