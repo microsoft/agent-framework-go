@@ -145,7 +145,7 @@ The checkouts must have the same module path, platform, architecture, CGO settin
 
 Keep the baseline tied to the revisions actually inspected. New assessments should reference a named review batch with the inventory hash and inspected source commits; old leaves keep their original baseline. Reformatting or grouping does not refresh verification, and inspecting a subset does not justify advancing the whole catalog's baseline. Record supporting source/test evidence and any approved omission in the change's PR discussion. The previous broad feature comparison remains available in Git history.
 
-Existing links to this guide remain valid. Porting workflows should update the relevant entries in the linked symbol mapping rather than append another feature table or package checklist here.
+Existing links to this guide remain valid. The [API porting workflow](../.github/workflows/dotnet-port-api-nightly.md) selects assessed `partial`/`unmapped` gaps and rechecks them against current Go and the source revision recorded by the declaration inventory, not upstream `main`. It leaves the catalog and inventory unchanged and names the addressed leaves in its PR. Weekly mapping maintenance records the implemented counterparts after merge using published Go commits; release upgrades and inventory regeneration remain separate maintainer work. Do not append another feature table or package checklist here.
 
 ## Weekly Mapping Maintenance
 
