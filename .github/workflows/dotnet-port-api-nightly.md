@@ -105,6 +105,17 @@ Close one assessed catalog gap against the inventory-pinned .NET Agent Framework
 
 Work from `${{ github.workspace }}`. Setup derives `DOTNET_UPSTREAM_SHA` from the common full commit suffix in `docs/dotnet-sdk-symbol-inventory.json` assembly metadata, fetches that exact commit, and verifies its source/test trees. Missing or conflicting provenance fails setup. Use this commit for source, tests, history, and evidence links; do not refetch, switch to an upstream branch, or substitute `main`, a newer release, or the catalog's historical baseline.
 
+Use the supplied environment variable directly; do not derive another SHA or grep hashes from the inventory. Package/assembly `sha256` values are checksums, not Git revisions. Before delegation, run:
+
+```bash
+git cat-file -e "${DOTNET_UPSTREAM_SHA:?Missing prepared revision}^{commit}"
+git ls-tree -r --name-only "$DOTNET_UPSTREAM_SHA" -- dotnet/src dotnet/tests
+```
+
+Read source/tests from that object database with `git show "$DOTNET_UPSTREAM_SHA:dotnet/<path>"`; the Go worktree and its `HEAD` do not contain the upstream files. Use `git grep` at the same SHA or the tree listing to locate declarations/tests before GitHub code search. A failed lookup of another hash does not establish that the prepared revision is absent.
+
+If a tool saves oversized output to a temporary path, read that file in ranges or extract its content with `jq`; the preview limit is not lost evidence. If the SHA or path was corrected, retry the local read before reporting a source blocker. Include the exact command and error for the prepared revision when source remains unavailable.
+
 The catalog and inventory are read-only. Release/package-scope upgrades and inventory regeneration are separate maintainer work. A leaf's named review or original baseline records historical evidence, not a different porting target. Weekly mapping maintenance updates assessments after the port merges, using published Go commits and preserving historical provenance.
 
 Before selecting a gap, verify its exact .NET declaration and behavior at the target SHA, including related public options/builders, declaring-type experimental annotations, defaults, opt-in gates, and tests. Compare the current Go implementation, callers, tests, and examples. Use `docs/dotnet-go-sdk-feature-comparison.md` as the mapping guide, not a second gap list. If relevant upstream commits/PRs clarify the contract, inspect their complete diffs and verify they are included in the pinned revision. Inventory scope limitations alone do not prove absence; out-of-inventory catalog leaves require direct pinned-source verification.
@@ -141,6 +152,8 @@ After the worker finishes, the main agent must **invoke one of the safe-output t
 description: Selects an easy-to-review assessed catalog gap at the inventoried .NET source revision
 ---
 Read `.github/skills/dotnet-symbols/SKILL.md` and select at most one coherent, easy-to-review port using the supplied Scope and Evidence rules. You are a read-only leaf worker: never delegate, invoke yourself, edit, commit, publish, or call safe outputs. Return blockers to the main agent.
+
+Use the supplied `DOTNET_UPSTREAM_SHA` directly, never inventory checksum fields or a guessed hash. Verify it with `git cat-file -e "${DOTNET_UPSTREAM_SHA:?Missing prepared revision}^{commit}"`, locate source/tests with `git ls-tree` or `git grep` at that SHA, and read them with `git show "$DOTNET_UPSTREAM_SHA:dotnet/<path>"` before using GitHub code search. Read saved oversized tool outputs in ranges; a preview limit is not truncation of the saved content. Report a source blocker only after retrying the correct revision/path, with the exact failing command and error.
 
 From the supplied checkout, run `go run ./cmd/symbolmap gaps -limit 20` and follow `page.next_offset` with `-offset` to screen all recorded gap pages in the `mappings` collection. Group related `partial`/`unmapped` leaves into coherent candidates and inspect at most three promising groups in depth. Recheck each gap against current Go and source/tests at `DOTNET_UPSTREAM_SHA`; historical notes alone do not establish a current gap. Record the total and exact identities inspected.
 
