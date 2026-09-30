@@ -255,6 +255,17 @@ func TestPortableValue_NilTypeDoesNotMatch(t *testing.T) {
 	}
 }
 
+func TestPortableValue_DoesNotMatchWrapperType(t *testing.T) {
+	value := workflow.AnyPortableValue("value")
+	typ := reflect.TypeFor[workflow.PortableValue]()
+	if value.Is(typ) {
+		t.Fatal("Is(PortableValue) = true, want false")
+	}
+	if got, ok := value.As(typ); ok || got != nil {
+		t.Fatalf("As(PortableValue) = (%v, %v), want (nil, false)", got, ok)
+	}
+}
+
 func TestPortableValue_RejectsZeroJSON(t *testing.T) {
 	if _, err := json.Marshal(workflow.PortableValue{}); err == nil {
 		t.Fatal("expected marshal error for zero PortableValue")
