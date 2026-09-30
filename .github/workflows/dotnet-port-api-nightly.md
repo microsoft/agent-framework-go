@@ -129,7 +129,7 @@ Filtered, truncated, or failed reads do not establish absence. Recover with loca
 ## Main agent
 
 1. Verify `DOTNET_UPSTREAM_SHA` resolves locally. Invoke `port-candidate-selector` once with that SHA, the checkout and catalog/inventory paths, and the Scope and Evidence rules above. It owns gap selection and initial deduplication. Wait for it; do not repeat its searches, scan alternatives, or launch more workers.
-2. Check its `selected`, `no-change`, or `blocked` report. Resolve only targeted evidence gaps. **Before editing**, independently verify the selected catalog leaves, pinned .NET contract, and Go counterpart against the Evidence rules. Do not implement while required checks remain unresolved.
+2. Check its `selected`, `no-change`, or `blocked` report. Resolve only targeted evidence gaps. **Before editing**, independently verify the selected catalog leaves, pinned .NET contract, and Go counterpart against the Evidence rules. Do not implement while that candidate's required checks remain unresolved. A blocked alternative does not disqualify a different fully verified selection; disclose the skipped blocker in the PR notes.
 3. Implement only the verified gap. Identify its catalog leaves and expected assessment changes in the PR for post-merge mapping maintenance. Do not rescan or re-rank candidates. Recheck matching issues/PRs before publication to catch work opened during implementation.
 
 ## Implementation
@@ -141,27 +141,29 @@ Filtered, truncated, or failed reads do not establish absence. Recover with loca
 
 ## Finish
 
-After the worker finishes, the main agent must **invoke one of the safe-output tools below and check its result before writing the final response**. A prose summary does not count as a tool call. If required GitHub verification is blocked, still call `report_incomplete` through the separate safe-output server.
+After the worker finishes, the main agent must **invoke one of the safe-output tools below and check its result before writing the final response**. A prose summary does not count as a tool call. If no fully verified candidate remains because required checks are blocked, call `report_incomplete` through the separate safe-output server.
 
 - `create_pull_request`: one verified, tested gap closure. Use a concrete title and sections **Summary**, **Ported .NET PRs**, **Breaking Changes**, **Tests and Examples**, and **Notes**. Include inventoried package versions, pinned SHA, exact catalog leaves and expected assessment changes, relevant upstream commits/PRs (or `None` if no specific PR was ported), immutable evidence, experimental and duplicate checks, and actual validation. Keep prose concise without hard-wrapping paragraphs. Report publication as queued, not a confirmed PR; never push, merge, approve, or open PRs directly.
-- `noop`: completed bounded gap review with no eligible unclaimed change, or a verified fix-only/experimental deferral. State the pinned SHA, catalog gap count, actual leaves/groups inspected, exclusion or already-satisfied reasons, and existing-work links. Do not claim a full catalog audit from a few candidates; an empty diff alone does not establish completion.
-- `report_incomplete`: required evidence or validation remains unresolved, worker failure, or execution limit. Include the operation/error, recovery attempts, SHA, candidate, and remaining work. Leave partial edits unpublished; do not substitute `noop`.
+- `noop`: completed bounded gap review with no eligible unclaimed change and no potentially eligible candidate left blocked. Verified fix-only/experimental deferrals count as exclusions, not blockers. State the pinned SHA, catalog gap count, actual leaves/groups inspected, exclusion or already-satisfied reasons, and existing-work links. Do not claim a full catalog audit from a few candidates; an empty diff alone does not establish completion.
+- `report_incomplete`: no fully verified selection is possible because required evidence remains unresolved, or the selected port's validation fails, the worker fails, or execution reaches its limit. Include the operation/error, recovery attempts, SHA, blocked candidates, and remaining work. Leave partial edits unpublished; do not substitute `noop`.
 
 ## agent: `port-candidate-selector`
 ---
 description: Selects an easy-to-review assessed catalog gap at the inventoried .NET source revision
 ---
-Read `.github/skills/dotnet-symbols/SKILL.md` and select at most one coherent, easy-to-review port using the supplied Scope and Evidence rules. You are a read-only leaf worker: never delegate, invoke yourself, edit, commit, publish, or call safe outputs. Return blockers to the main agent.
+Read `.github/skills/dotnet-symbols/SKILL.md` and select at most one coherent, easy-to-review port using the supplied Scope and Evidence rules. You are a read-only leaf worker: never delegate, invoke yourself, edit, commit, publish, or call safe outputs. Return unresolved blockers with the final report.
 
 Use the supplied `DOTNET_UPSTREAM_SHA` directly, never inventory checksum fields or a guessed hash. Verify it with `git cat-file -e "${DOTNET_UPSTREAM_SHA:?Missing prepared revision}^{commit}"`, locate source/tests with `git ls-tree` or `git grep` at that SHA, and read them with `git show "$DOTNET_UPSTREAM_SHA:dotnet/<path>"` before using GitHub code search. Read saved oversized tool outputs in ranges; a preview limit is not truncation of the saved content. Report a source blocker only after retrying the correct revision/path, with the exact failing command and error.
 
 From the supplied checkout, run `go run ./cmd/symbolmap gaps -limit 20` and follow `page.next_offset` with `-offset` to screen all recorded gap pages in the `mappings` collection. Group related `partial`/`unmapped` leaves into coherent candidates and inspect at most three promising groups in depth. Recheck each gap against current Go and source/tests at `DOTNET_UPSTREAM_SHA`; historical notes alone do not establish a current gap. Record the total and exact identities inspected.
 
+One selection does not mean one attempt. If a candidate is already covered, excluded, or blocked by candidate-specific evidence such as a filtered PR, record its outcome and continue to the next promising group within the same three-group budget. Blocked groups count toward that budget and remain unresolved; never port them or assume their duplicate checks passed. Stop when one candidate passes every required check, the budget is exhausted, or a shared tool/source failure prevents evaluating alternatives. Do not repeat an explicitly denied read or bypass the policy.
+
 Establish eligibility before duplicate checks; record and skip source-confirmed ineligible or already-satisfied gaps without searching Go issues/PRs for them. Unreviewed declarations, missing inventory coverage, recent upstream commits, and unrelated fallback areas are not candidate queues. Do not fetch, switch branches, upgrade the inventory, use a newer .NET revision, or design the Go implementation. Preserve prior review provenance; return stale assessments for mapping maintenance rather than inventing a port.
 
 Use read-only GitHub MCP for GitHub reads; do not run shell `gh` or unconfigured download tools. For `search_issues` and `search_pull_requests`, include `repo:microsoft/agent-framework-go` in `query`, set `perPage` to at most `10`, and set `fields` to `["number", "title", "state", "html_url"]`. Every duplicate query must identify the gap by .NET/Go symbol or behavior, or an associated implementing commit/PR; do not search by the shared inventory SHA or a workflow prefix alone. Follow all pages and narrow capped queries. Fetch bodies/comments separately only for relevant matches, never in search results.
 
-Disclose filtered or truncated results and failed reads, even when a candidate is independently excluded. They are not evidence that no duplicate exists. Recover with targeted approved reads, without weakening policy or switching transports. If required source or duplicate evidence remains unresolved, return `blocked`, not `no-change`.
+Disclose filtered or truncated results and failed reads, even when a candidate is independently excluded. They are not evidence that no duplicate exists. Recover with targeted approved reads, without weakening policy or switching transports. Return `selected` only for a fully verified candidate, with any other candidates' blockers disclosed. If none qualifies and any potentially eligible group remains unresolved, return `blocked`, not `no-change`.
 
 Return a compact `selected`, `no-change`, or `blocked` report with:
 
