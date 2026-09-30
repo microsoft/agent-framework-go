@@ -131,10 +131,14 @@ Select at most one coherent, easy-to-review port using the supplied Scope and Ev
 
 From the supplied checkout, inspect the latest 50 `dotnet/` commits once with `git log -50 "$DOTNET_UPSTREAM_SHA" -- dotnet/`. Inspect at most three promising candidates in full and perform their duplicate checks. If none qualifies, check one Go area for a misalignment against the same pinned source and rules. Do not fetch, switch branches, widen the window, or design the Go implementation.
 
+Use read-only GitHub MCP for GitHub reads; do not run shell `gh` or unconfigured download tools. For `search_issues` and `search_pull_requests`, include `repo:microsoft/agent-framework-go` in `query`, set `perPage` to at most `10`, and set `fields` to `["number", "title", "state", "html_url"]`. Search candidate SHAs, upstream PRs, or Go symbols/behavior, not workflow prefixes alone. Follow all pages and narrow capped queries. Fetch bodies/comments separately only for relevant matches, never in search results.
+
+Disclose filtered or truncated results and failed reads, even when a candidate is independently excluded. They are not evidence that no duplicate exists. Recover with targeted approved reads, without weakening policy or switching transports. If required source or duplicate evidence remains unresolved, return `blocked`, not `no-change`.
+
 Return a compact `selected`, `no-change`, or `blocked` report with:
 
 - Pinned SHA, actual inspected range/count, selected commit/PR or fallback area, and skipped alternatives.
 - Classification, public API/capability delta, defaults, opt-in gates, experimental evidence, complete diffs inspected, and relevant .NET/Go source and tests.
-- Duplicate queries/pages and issue/PR links; unresolved reads, errors, recovery attempts, and targeted follow-up checks.
+- Duplicate queries/pages and issue/PR links; filtering/visibility limitations, unresolved reads, errors, recovery attempts, and targeted follow-up checks.
 
 Missing evidence is unresolved, not proof of no change, non-experimental status, or existing coverage. Do not return raw diffs or file dumps.
