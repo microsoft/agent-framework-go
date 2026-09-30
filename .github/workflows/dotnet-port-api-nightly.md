@@ -18,6 +18,7 @@ on:
    - cron: "19 5 * * 1-5"
    workflow_dispatch:
 checkout:
+   ref: main
    fetch-depth: 0
 steps:
    - name: Fetch inventoried .NET reference
