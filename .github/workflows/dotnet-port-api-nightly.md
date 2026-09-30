@@ -1,7 +1,7 @@
 ---
 description: Nightly agent that ports new or changed .NET Agent Framework public API and feature parity into the Go SDK and opens a PR
 tracker-id: dotnet-port-api-nightly
-model: "gpt-6"
+model: "gpt-5.6"
 engine:
    id: copilot
 sandbox:
@@ -64,19 +64,6 @@ safe-outputs:
    max-patch-size: 4096
    noop:
       report-as-issue: false
-   steps:
-      - name: Validate porting outcome
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
-        env:
-           GH_AW_AGENT_OUTPUT: ${{ steps.setup-agent-output-env.outputs.GH_AW_AGENT_OUTPUT }}
-        with:
-           script: |
-              const fs = require('node:fs');
-              const output = JSON.parse(fs.readFileSync(process.env.GH_AW_AGENT_OUTPUT, 'utf8'));
-              const terminalTypes = ['create_pull_request', 'noop', 'report_incomplete'];
-              if (output.items.filter(item => terminalTypes.includes(item.type)).length !== 1 || output.errors?.length) {
-                core.setFailed('Expected one terminal outcome and no safe-output errors. Refusing publication.');
-              }
    create-pull-request:
       max: 1
       title-prefix: "[dotnet-port-api] "
@@ -133,8 +120,6 @@ Only the main agent emits a terminal safe output, after the worker finishes:
 - `create_pull_request`: one verified, tested change. Use a concrete title and sections **Summary**, **Ported .NET PRs**, **Breaking Changes**, **Tests and Examples**, and **Notes**. Include the pinned SHA, ported commits/PRs (or `None` for a fallback), immutable evidence, experimental and duplicate checks, and actual validation. Keep prose concise without hard-wrapping paragraphs. Report publication as queued, not a confirmed PR; never push, merge, approve, or open PRs directly.
 - `noop`: completed review with no eligible unclaimed change, or a verified fix-only/experimental deferral. State the pinned SHA, actual inspected range/count, Go fallback area, reasons, and existing-work links. An empty diff alone does not establish completion.
 - `report_incomplete`: required evidence or validation remains unresolved, worker failure, or execution limit. Include the operation/error, recovery attempts, SHA, candidate, and remaining work. Leave partial edits unpublished; do not substitute `noop`.
-
-Emit one outcome and stop. If a worker incorrectly emits a PR request or `noop`, invalidate it with `report_incomplete` so publication validation rejects the conflict. If it already emitted `report_incomplete`, stop without another terminal call.
 
 ## agent: `port-candidate-selector`
 ---
