@@ -96,7 +96,9 @@ Work from `${{ github.workspace }}`. Setup fetches upstream before the sandbox, 
 
 Before selecting a candidate, inspect its complete commit and associated PR diff, including public options/builders, declaring-type experimental annotations, defaults, and tests. Include changed files outside `dotnet/`. Compare current Go implementation, callers, tests, examples, and `docs/dotnet-go-sdk-feature-comparison.md`. A fallback misalignment requires the same evidence at the pinned SHA.
 
-For each serious candidate, use read-only GitHub MCP to search both issues and PRs in `repo:microsoft/agent-framework-go`, open and closed, for `[dotnet-port-api]` and `[dotnet-port-fixes]` work. Search commit SHA, upstream PR, and Go symbols/behavior separately. Follow small pages, narrow capped queries, and read matching bodies/comments and outcomes. Skip pending, merged, or rejected work, including older fallback tracking issues; branch names and a shared package alone do not prove duplication.
+For each serious candidate, use read-only GitHub MCP to search both issues and PRs in `repo:microsoft/agent-framework-go`, open and closed, for `[dotnet-port-api]` and `[dotnet-port-fixes]` work. Search commit SHA, upstream PR, and Go symbols/behavior separately; avoid broad searches by workflow prefix alone. Skip pending, merged, or rejected work, including older fallback tracking issues; branch names and a shared package alone do not prove duplication.
+
+For `search_issues` and `search_pull_requests`, always set `perPage` to at most `10` and `fields` to `["number", "title", "state", "html_url"]`. Follow all pages and narrow capped queries. Fetch bodies, comments, and outcomes separately only for relevant matches; never include bodies in search results.
 
 Filtered, truncated, or failed reads do not establish absence. Recover with local pinned source or targeted approved GitHub reads; keep inaccessible required evidence unresolved. Do not lower integrity policy, retrieve filtered content through another transport, retry a trapped guard indefinitely, or use unauthenticated sandbox `gh` and unconfigured download tools.
 
@@ -115,7 +117,7 @@ Filtered, truncated, or failed reads do not establish absence. Recover with loca
 
 ## Finish
 
-Only the main agent emits a terminal safe output, after the worker finishes:
+After the worker finishes, the main agent must **invoke one of the safe-output tools below and check its result before writing the final response**. A prose summary does not count as a tool call. If required GitHub verification is blocked, still call `report_incomplete` through the separate safe-output server.
 
 - `create_pull_request`: one verified, tested change. Use a concrete title and sections **Summary**, **Ported .NET PRs**, **Breaking Changes**, **Tests and Examples**, and **Notes**. Include the pinned SHA, ported commits/PRs (or `None` for a fallback), immutable evidence, experimental and duplicate checks, and actual validation. Keep prose concise without hard-wrapping paragraphs. Report publication as queued, not a confirmed PR; never push, merge, approve, or open PRs directly.
 - `noop`: completed review with no eligible unclaimed change, or a verified fix-only/experimental deferral. State the pinned SHA, actual inspected range/count, Go fallback area, reasons, and existing-work links. An empty diff alone does not establish completion.
