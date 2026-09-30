@@ -68,7 +68,9 @@ func TestSessionState_Set_OverwritesExistingValue(t *testing.T) {
 func TestSessionState_Delete_ExistingKey(t *testing.T) {
 	session := agenttest.CreateSession()
 	session.Set("key1", "value1")
-	session.Delete("key1")
+	if !session.Delete("key1") {
+		t.Fatal("expected existing key to be removed")
+	}
 
 	var v string
 	ok, err := session.Get("key1", &v)
@@ -77,6 +79,20 @@ func TestSessionState_Delete_ExistingKey(t *testing.T) {
 	}
 	if ok {
 		t.Error("expected key to be removed")
+	}
+}
+
+func TestSessionState_Delete_NonexistentKey_ReturnsFalse(t *testing.T) {
+	session := agenttest.CreateSession()
+	if session.Delete("nonexistent") {
+		t.Fatal("expected nonexistent key to report not removed")
+	}
+}
+
+func TestSessionState_Delete_NilSession_ReturnsFalse(t *testing.T) {
+	var session *agent.Session
+	if session.Delete("key") {
+		t.Fatal("expected nil session to report not removed")
 	}
 }
 
