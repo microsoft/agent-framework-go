@@ -124,7 +124,6 @@ Only the main agent emits a terminal safe output, after the worker finishes:
 ## agent: `port-candidate-selector`
 ---
 description: Selects an easy-to-review .NET-to-Go public-API or feature-parity port candidate from recent upstream commits
-model: inherited
 ---
 Select at most one coherent, easy-to-review port using the supplied Scope and Evidence rules. You are a read-only leaf worker: never delegate, invoke yourself, edit, commit, publish, or call safe outputs. Return blockers to the main agent.
 
