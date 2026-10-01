@@ -4,6 +4,7 @@ package todo_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -517,6 +518,47 @@ func TestProvide_InjectsTodoListMessage(t *testing.T) {
 	}
 }
 
+func TestProvide_FormatsPersistedDescriptions(t *testing.T) {
+	// Deserialize the session so the provider can decode its private state type.
+	var session agent.Session
+	err := json.Unmarshal([]byte(`{
+		"State": {
+			"todoProviderState": {
+				"nextId": 3,
+				"items": [
+					{"id": 1, "title": "Blank description", "description": "   ", "isComplete": false},
+					{"id": 2, "title": "Detailed", "description": "details", "isComplete": true}
+				]
+			}
+		}
+	}`), &session)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := todo.New(nil)
+	outMessages, _, err := invokeProvider(
+		p,
+		context.Background(),
+		newMessages("hi"),
+		agent.WithSession(&session),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := "### Current todo list\n- 1 [open] Blank description\n- 2 [done] Detailed: details"
+	for _, msg := range outMessages {
+		if text := msg.Contents.Text(); strings.HasPrefix(text, "### Current todo list") {
+			if text != want {
+				t.Fatalf("todo list message = %q, want %q", text, want)
+			}
+			return
+		}
+	}
+	t.Fatal("expected current todo list message")
+}
+
 // 20. ProvideAIContextAsync_SuppressTodoListMessage_NoMessageInjected
 func TestProvide_SuppressTodoListMessage(t *testing.T) {
 	p := todo.New(&todo.Options{
@@ -613,7 +655,7 @@ func TestToolNames(t *testing.T) {
 	}
 }
 
-// Verify CompleteInput with reason is accepted and items are marked complete.
+// Verify completion input with a reason is accepted and items are marked complete.
 func TestCompleteTodos_WithReason(t *testing.T) {
 	p := todo.New(nil)
 	opts := sessionOpts()

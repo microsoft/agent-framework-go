@@ -31,6 +31,13 @@
       "go_commit": "2b10117e67ea22a730c176567117537b720f45e0",
       "inventory_sha256": "734ff2c4037aa311de95912a256bb7e223ab3fa81a699835a21d27bab90f53ab",
       "scope": "Source-inspected ChatClientAgentOptions.RequirePerServiceCallChatHistoryPersistence against pinned .NET source and current Go per-service-call history persistence after the recent history contract changes. Only leaves referencing this review were inspected."
+    },
+    "symbolmap-maintenance-2026-09-29": {
+      "checked_at": "2026-09-29",
+      "dotnet_commit": "0c9944cc9f577d51277ac7c55dbc388b60a577af",
+      "go_commit": "4637d1dde71f9ecfa21d3bd3b243442d005b3db3",
+      "inventory_sha256": "734ff2c4037aa311de95912a256bb7e223ab3fa81a699835a21d27bab90f53ab",
+      "scope": "Reviewed weekly API and patch inputs through Go commit 4637d1dde71f9ecfa21d3bd3b243442d005b3db3. Added source-backed AgentMode and compaction-backed history-provider leaves implemented by recent Go commits; corrected stale assessed notes. Only leaves referencing this review were changed."
     }
   },
   "go_only": {},
@@ -755,6 +762,13 @@
             "status": "mapped",
             "note": "Synchronous validating setter; passing false queues a mode-change notification. Go returns an error for an invalid mode or nil session.",
             "review": "agentmode-go-2026-09-25"
+          },
+          "SetModeAsync(AgentSession, string, bool, CancellationToken)": {
+            "go": "provider.SetMode(session, \"plan\", true)",
+            "go_symbols": ["agent/harness/agentmode.Provider.SetMode"],
+            "status": "mapped",
+            "note": "The bool overload's notification suppression is the third Go argument; true changes state without queueing a mode-change notification.",
+            "review": "symbolmap-maintenance-2026-09-29"
           }
         },
         "constructors": {
@@ -780,6 +794,18 @@
             "go_symbols": ["agent/harness/agentmode.Config.DefaultMode"],
             "status": "mapped",
             "note": "Nullable initial mode becomes *string; nil selects the first configured mode."
+          },
+          "DisableModeGetTool": {
+            "go_symbols": ["agent/harness/agentmode.Config.DisableModeGetTool"],
+            "status": "mapped",
+            "note": "Boolean opt-out for registering the built-in mode_get tool; mode state and instructions still apply.",
+            "review": "symbolmap-maintenance-2026-09-29"
+          },
+          "DisableModeSetTool": {
+            "go_symbols": ["agent/harness/agentmode.Config.DisableModeSetTool"],
+            "status": "mapped",
+            "note": "Boolean opt-out for registering the built-in mode_set tool; mode state and instructions still apply.",
+            "review": "symbolmap-maintenance-2026-09-29"
           },
           "Instructions": {
             "go_symbols": ["agent/harness/agentmode.Config.Instructions"],
@@ -2140,31 +2166,77 @@
       "InMemoryChatHistoryProviderOptions": {
         "area": "agents",
         "assembly": "Microsoft.Agents.AI.Abstractions",
+        "mapping": {
+          "go": "compaction.HistoryProviderConfig{Strategy: strategy}",
+          "go_symbols": ["agent/compaction.HistoryProviderConfig", "agent.InMemoryHistoryProviderConfig"],
+          "status": "adapted",
+          "note": "Plain history storage uses agent.InMemoryHistoryProviderConfig; reducer-backed storage uses compaction.HistoryProviderConfig with the same session-backed history-provider surface.",
+          "review": "symbolmap-maintenance-2026-09-29"
+        },
         "properties": {
-          "ProvideOutputMessageFilter": {
-            "go_symbols": ["agent.InMemoryHistoryProviderConfig.ProvideOutputMessageFilter"],
+          "ChatReducer": {
+            "go_symbols": ["agent/compaction.HistoryProviderConfig.Strategy"],
             "status": "adapted",
-            "note": "Filters loaded history through a context-aware, error-returning Go callback; nil passes all loaded messages through."
+            "note": "IChatReducer-backed compaction becomes a compaction Strategy supplied to the compaction history provider.",
+            "review": "symbolmap-maintenance-2026-09-29"
+          },
+          "ProvideOutputMessageFilter": {
+            "go_symbols": ["agent.InMemoryHistoryProviderConfig.ProvideOutputMessageFilter", "agent/compaction.HistoryProviderConfig.ProvideOutputMessageFilter"],
+            "status": "adapted",
+            "note": "Filters loaded history through a context-aware, error-returning Go callback; nil passes all loaded messages through. The same field is available on the plain and compaction-backed history configs."
+          },
+          "ReducerTriggerEvent": {
+            "go_symbols": ["agent/compaction.HistoryProviderConfig.TriggerEvent"],
+            "status": "adapted",
+            "note": "Selects when reducer-backed history compaction runs; the zero value matches before-retrieval behavior.",
+            "review": "symbolmap-maintenance-2026-09-29"
           },
           "StateInitializer": {
-            "go_symbols": ["agent.InMemoryHistoryProviderConfig.StateInitializer"],
+            "go_symbols": ["agent.InMemoryHistoryProviderConfig.StateInitializer", "agent/compaction.HistoryProviderConfig.StateInitializer"],
             "status": "adapted",
-            "note": "Lazy initializer returns a message slice instead of a State object and receives the session pointer."
+            "note": "Lazy initializer returns a message slice instead of a State object and receives the session pointer. The same shape is available on the plain and compaction-backed history configs."
           },
           "StateKey": {
-            "go_symbols": ["agent.InMemoryHistoryProviderConfig.StateKey"],
+            "go_symbols": ["agent.InMemoryHistoryProviderConfig.StateKey", "agent/compaction.HistoryProviderConfig.StateKey"],
             "status": "adapted",
-            "note": "Selects the session storage key; Go defaults to SourceID (in-memory when unset), not the C# provider type name."
+            "note": "Selects the session storage key; Go defaults to SourceID (in-memory for the plain provider, CompactionHistoryProvider for the compaction provider), not the C# provider type name."
           },
           "StorageInputRequestMessageFilter": {
-            "go_symbols": ["agent.InMemoryHistoryProviderConfig.StoreInputRequestMessageFilter"],
+            "go_symbols": ["agent.InMemoryHistoryProviderConfig.StoreInputRequestMessageFilter", "agent/compaction.HistoryProviderConfig.StoreInputRequestMessageFilter"],
             "status": "adapted",
-            "note": "Go filter accepts context and returns messages/error; nil excludes history-provider messages before storage."
+            "note": "Go filter accepts context and returns messages/error; nil excludes history-provider messages before storage. The same field is available on the plain and compaction-backed history configs."
           },
           "StorageInputResponseMessageFilter": {
-            "go_symbols": ["agent.InMemoryHistoryProviderConfig.StoreInputResponseMessageFilter"],
+            "go_symbols": ["agent.InMemoryHistoryProviderConfig.StoreInputResponseMessageFilter", "agent/compaction.HistoryProviderConfig.StoreInputResponseMessageFilter"],
             "status": "adapted",
-            "note": "Go filter accepts context and returns messages/error; nil stores response messages without filtering."
+            "note": "Go filter accepts context and returns messages/error; nil stores response messages without filtering. The same field is available on the plain and compaction-backed history configs."
+          }
+        }
+      },
+      "InMemoryChatHistoryProviderOptions.ChatReducerTriggerEvent": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI.Abstractions",
+        "mapping": {
+          "go": "compaction.HistoryProviderTriggerEventBeforeMessagesRetrieval",
+          "go_symbols": ["agent/compaction.HistoryProviderTriggerEvent"],
+          "status": "adapted",
+          "note": "Nested enum becomes a package-level Go enum used by HistoryProviderConfig.TriggerEvent.",
+          "review": "symbolmap-maintenance-2026-09-29"
+        },
+        "constants": {
+          "AfterMessageAdded": {
+            "go": "compaction.HistoryProviderTriggerEventAfterMessageAdded",
+            "go_symbols": ["agent/compaction.HistoryProviderTriggerEventAfterMessageAdded"],
+            "status": "mapped",
+            "note": "Applies reducer-backed compaction after storing newly added messages.",
+            "review": "symbolmap-maintenance-2026-09-29"
+          },
+          "BeforeMessagesRetrieval": {
+            "go": "compaction.HistoryProviderTriggerEventBeforeMessagesRetrieval",
+            "go_symbols": ["agent/compaction.HistoryProviderTriggerEventBeforeMessagesRetrieval"],
+            "status": "mapped",
+            "note": "Applies reducer-backed compaction before returning messages for an invocation.",
+            "review": "symbolmap-maintenance-2026-09-29"
           }
         }
       },
@@ -2519,7 +2591,8 @@
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "note": "RemainingTodos and ModeForSession expose state, but no built-in Go evaluator combines them with continuation feedback."
+            "note": "RemainingTodos and Mode expose state, but no built-in Go evaluator combines them with continuation feedback.",
+            "review": "symbolmap-maintenance-2026-09-29"
           }
         },
         "constructors": {

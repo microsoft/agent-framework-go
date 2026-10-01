@@ -171,9 +171,6 @@ func (v *PortableValue) Is(typ reflect.Type) bool {
 	if v == nil || typ == nil {
 		return false
 	}
-	if typ == reflect.TypeFor[PortableValue]() {
-		return true
-	}
 	if v.cache != nil && reflect.TypeOf(v.cache).AssignableTo(typ) {
 		return true
 	}
