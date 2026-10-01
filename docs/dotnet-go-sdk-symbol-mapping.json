@@ -31,6 +31,13 @@
       "go_commit": "4637d1dde71f9ecfa21d3bd3b243442d005b3db3",
       "inventory_sha256": "734ff2c4037aa311de95912a256bb7e223ab3fa81a699835a21d27bab90f53ab",
       "scope": "Reviewed weekly API and patch inputs through Go commit 4637d1dde71f9ecfa21d3bd3b243442d005b3db3. Added source-backed AgentMode and compaction-backed history-provider leaves implemented by recent Go commits; corrected stale assessed notes. Only leaves referencing this review were changed."
+    },
+    "loop-experimental-scope-2026-09-30": {
+      "checked_at": "2026-09-30",
+      "dotnet_commit": "0c9944cc9f577d51277ac7c55dbc388b60a577af",
+      "go_commit": "ec4a7cadbe82946613eadb97d325f44407da5234",
+      "inventory_sha256": "734ff2c4037aa311de95912a256bb7e223ab3fa81a699835a21d27bab90f53ab",
+      "scope": "Confirmed that the missing AI-judge, background-task-completion, and todo-completion loop APIs are marked MAAI001 experimental and intentionally omitted from the Go 0.2.0 non-experimental harness scope. Existing mapped and partial Loop assessments were not re-reviewed."
     }
   },
   "go_only": {},
@@ -452,23 +459,70 @@
         "mapping": {
           "go": "",
           "go_symbols": [],
-          "status": "unmapped",
-          "note": "Experimental judge-model completion evaluator; no built-in Go counterpart was located and omission intent is unconfirmed."
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluator is marked MAAI001 experimental.",
+          "review": "loop-experimental-scope-2026-09-30"
         },
         "methods": {
           "EvaluateAsync(LoopContext, CancellationToken)": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "note": "No built-in structured-verdict or fallback-marker judge evaluation was located."
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
           }
         },
         "constructors": {
           "AIJudgeLoopEvaluator(IChatClient, AIJudgeLoopEvaluatorOptions)": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "note": "No Go constructor accepting a judge model and judging options was located."
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          }
+        },
+        "constants": {
+          "CriteriaPlaceholder": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          },
+          "DefaultFeedbackMessageTemplate": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          },
+          "DefaultInstructions": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          },
+          "DoneVerdictMarker": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          },
+          "GapAnalysisPlaceholder": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          },
+          "MoreVerdictMarker": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
           }
         }
       },
@@ -478,24 +532,37 @@
         "mapping": {
           "go": "",
           "go_symbols": [],
-          "status": "unmapped",
-          "note": "Experimental judge-evaluator configuration; no Go counterpart was located and omission intent is unconfirmed."
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluatorOptions is marked MAAI001 experimental.",
+          "review": "loop-experimental-scope-2026-09-30"
         },
         "properties": {
           "Criteria": {
             "go_symbols": [],
-            "status": "unmapped",
-            "note": "No built-in completion-criteria collection for judge evaluation was located."
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluatorOptions is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
           },
           "FeedbackMessageTemplate": {
             "go_symbols": [],
-            "status": "unmapped",
-            "note": "No judge feedback-template option with {gap_analysis} substitution was located."
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluatorOptions is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
           },
           "Instructions": {
             "go_symbols": [],
-            "status": "unmapped",
-            "note": "No built-in judge-instruction option was located."
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluatorOptions is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          }
+        },
+        "constructors": {
+          "AIJudgeLoopEvaluatorOptions()": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluatorOptions is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
           }
         }
       },
@@ -1621,6 +1688,86 @@
           }
         }
       },
+      "BackgroundTaskCompletionLoopEvaluator": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI",
+        "mapping": {
+          "go": "",
+          "go_symbols": [],
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because BackgroundTaskCompletionLoopEvaluator is marked MAAI001 experimental.",
+          "review": "loop-experimental-scope-2026-09-30"
+        },
+        "methods": {
+          "EvaluateAsync(LoopContext, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because BackgroundTaskCompletionLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          }
+        },
+        "constructors": {
+          "BackgroundTaskCompletionLoopEvaluator(BackgroundTaskCompletionLoopEvaluatorOptions)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because BackgroundTaskCompletionLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          }
+        },
+        "constants": {
+          "DefaultFeedbackMessageTemplate": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because BackgroundTaskCompletionLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          },
+          "IncompleteTaskCountPlaceholder": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because BackgroundTaskCompletionLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          },
+          "IncompleteTasksPlaceholder": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because BackgroundTaskCompletionLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          }
+        }
+      },
+      "BackgroundTaskCompletionLoopEvaluatorOptions": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI",
+        "mapping": {
+          "go": "",
+          "go_symbols": [],
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because BackgroundTaskCompletionLoopEvaluatorOptions is marked MAAI001 experimental.",
+          "review": "loop-experimental-scope-2026-09-30"
+        },
+        "properties": {
+          "FeedbackMessageTemplate": {
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because BackgroundTaskCompletionLoopEvaluatorOptions is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          }
+        },
+        "constructors": {
+          "BackgroundTaskCompletionLoopEvaluatorOptions()": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because BackgroundTaskCompletionLoopEvaluatorOptions is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          }
+        }
+      },
       "CachingAgentSkillsSource": {
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
@@ -2570,24 +2717,42 @@
         "mapping": {
           "go": "",
           "go_symbols": [],
-          "status": "unmapped",
-          "note": "Experimental mode-aware todo-completion evaluator; no built-in Go counterpart was located and omission intent is unconfirmed."
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because TodoCompletionLoopEvaluator is marked MAAI001 experimental.",
+          "review": "loop-experimental-scope-2026-09-30"
         },
         "methods": {
           "EvaluateAsync(LoopContext, CancellationToken)": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "note": "RemainingTodos and Mode expose state, but no built-in Go evaluator combines them with continuation feedback.",
-            "review": "symbolmap-maintenance-2026-09-29"
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because TodoCompletionLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
           }
         },
         "constructors": {
           "TodoCompletionLoopEvaluator(TodoCompletionLoopEvaluatorOptions)": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "note": "Go provides custom evaluators, not a constructor for a todo-completion evaluator."
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because TodoCompletionLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          }
+        },
+        "constants": {
+          "DefaultFeedbackMessageTemplate": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because TodoCompletionLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          },
+          "RemainingTodosPlaceholder": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because TodoCompletionLoopEvaluator is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
           }
         }
       },
@@ -2597,19 +2762,31 @@
         "mapping": {
           "go": "",
           "go_symbols": [],
-          "status": "unmapped",
-          "note": "Experimental todo-evaluator configuration; no Go counterpart was located and omission intent is unconfirmed."
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because TodoCompletionLoopEvaluatorOptions is marked MAAI001 experimental.",
+          "review": "loop-experimental-scope-2026-09-30"
         },
         "properties": {
           "FeedbackMessageTemplate": {
             "go_symbols": [],
-            "status": "unmapped",
-            "note": "No todo-completion feedback-template option with {remaining_todos} substitution was located."
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because TodoCompletionLoopEvaluatorOptions is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
           },
           "Modes": {
             "go_symbols": [],
-            "status": "unmapped",
-            "note": "No built-in evaluator option gates todo-driven continuation on the current agent mode."
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because TodoCompletionLoopEvaluatorOptions is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
+          }
+        },
+        "constructors": {
+          "TodoCompletionLoopEvaluatorOptions()": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because TodoCompletionLoopEvaluatorOptions is marked MAAI001 experimental.",
+            "review": "loop-experimental-scope-2026-09-30"
           }
         }
       },
