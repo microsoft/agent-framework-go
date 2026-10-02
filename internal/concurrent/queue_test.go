@@ -44,15 +44,20 @@ func TestQueue_EnqueueDequeue(t *testing.T) {
 
 func TestQueue_Concurrent(t *testing.T) {
 	q := &Queue[int]{}
-	count := 1000
+	const (
+		count       = 1000
+		workerCount = 10
+	)
 	var wg sync.WaitGroup
 
 	// Concurrent Enqueue
-	wg.Add(count)
-	for i := range count {
+	wg.Add(workerCount)
+	for range workerCount {
 		go func() {
 			defer wg.Done()
-			q.Enqueue(i)
+			for range count / workerCount {
+				q.Enqueue(1)
+			}
 		}()
 	}
 	wg.Wait()
@@ -62,17 +67,19 @@ func TestQueue_Concurrent(t *testing.T) {
 	}
 
 	// Concurrent Dequeue
-	wg.Add(count)
+	wg.Add(workerCount)
 	receivedCount := 0
 	var mu sync.Mutex
-	for range count {
+	for range workerCount {
 		go func() {
 			defer wg.Done()
-			_, ok := q.Dequeue()
-			if ok {
-				mu.Lock()
-				receivedCount++
-				mu.Unlock()
+			for range count / workerCount {
+				_, ok := q.Dequeue()
+				if ok {
+					mu.Lock()
+					receivedCount++
+					mu.Unlock()
+				}
 			}
 		}()
 	}
