@@ -3,6 +3,7 @@
 package compaction_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -175,6 +176,47 @@ func TestTruncationStrategy_PreservesRawJSONBelowTokenLimit(t *testing.T) {
 			}
 			if got, want := len(index.IncludedMessages()), len(messages); got != want {
 				t.Errorf("retained %d messages, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestTruncationStrategy_PreservesDataContentBelowTokenLimit(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		size int
+	}{
+		{name: "empty"},
+		{name: "no padding", size: 3000},
+		{name: "two padding characters", size: 3001},
+		{name: "one padding character", size: 3002},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := message.NewDataContent(bytes.Repeat([]byte("x"), tt.size), "text/plain")
+			if err != nil {
+				t.Fatal(err)
+			}
+			data.Name = "notes.txt"
+			messages := []*message.Message{
+				{Role: message.RoleUser, Contents: []message.Content{data}},
+				textMessage(message.RoleAssistant, "Received."),
+				textMessage(message.RoleUser, "Summarize it."),
+			}
+			index := compaction.CreateMessageIndex(messages, nil)
+			want := tt.size + len(data.MediaType) + len(data.Name)
+			want += len(messages[1].String()) + len(messages[2].String())
+			if got := index.TotalByteCount(); got != want {
+				t.Errorf("TotalByteCount = %d, want %d", got, want)
+			}
+			strategy := &compaction.TruncationStrategy{
+				Trigger:                compaction.TokensExceed(900),
+				MinimumPreservedGroups: new(1),
+			}
+			if compacted, err := strategy.Compact(t.Context(), index); err != nil || compacted {
+				t.Fatalf("Compact = %t, %v; want no compaction below the token limit", compacted, err)
+			}
+			if !slices.Equal(index.IncludedMessages(), messages) {
+				t.Error("compaction did not preserve the original messages")
 			}
 		})
 	}
