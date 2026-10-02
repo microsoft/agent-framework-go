@@ -885,22 +885,56 @@ func recordPendingApprovalRequests(session *agent.Session, contents message.Cont
 	if _, err := session.Get(pendingApprovalRequestsStateKey, &state); err != nil {
 		return err
 	}
-	byID := make(map[string]int, len(state.Requests)+len(additions))
-	for i, request := range state.Requests {
+	known := make(map[string]*message.ToolApprovalRequestContent, len(state.Requests)+len(additions))
+	for _, request := range state.Requests {
 		if request != nil {
-			byID[request.RequestID] = i
+			known[request.RequestID] = request
 		}
 	}
+	changed := false
 	for _, request := range additions {
-		if _, ok := byID[request.RequestID]; ok {
+		existing, ok := known[request.RequestID]
+		if !ok {
+			known[request.RequestID] = request
+			changed = true
 			continue
 		}
-		byID[request.RequestID] = len(state.Requests)
-		state.Requests = append(state.Requests, request)
+		if toolCallsEquivalent(request.ToolCall, existing.ToolCall) {
+			// The same call surfaced again; the recorded snapshot already covers it.
+			continue
+		}
+		// composeApprovalRequestID derives the request id solely from CallID, so a provider that
+		// reuses one makes two different calls collide under it. Drop the pending entry instead of
+		// guessing which call a later response is for; both must be requested again.
+		delete(known, request.RequestID)
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	state.Requests = state.Requests[:0]
+	for _, requestID := range slices.Sorted(maps.Keys(known)) {
+		state.Requests = append(state.Requests, known[requestID])
 	}
 	session.Set(pendingApprovalRequestsStateKey, state)
 	return nil
 }
+
+// toolCallsEquivalent reports whether a and b are the same call occurrence, so a repeated
+// approval request does not need rebinding. A false result is always safe: it only causes
+// recordPendingApprovalRequests to treat the request id as colliding.
+func toolCallsEquivalent(a, b message.ToolCallContent) bool {
+	fa, ok := a.(*message.FunctionCallContent)
+	if !ok || fa == nil {
+		return false
+	}
+	fb, ok := b.(*message.FunctionCallContent)
+	if !ok || fb == nil {
+		return false
+	}
+	return fa.CallID == fb.CallID && fa.Name == fb.Name && fa.Arguments == fb.Arguments
+}
+
 
 func injectPendingAutoApprovedCalls(session *agent.Session, messages []*message.Message) ([]*message.Message, bool, error) {
 	if session == nil {

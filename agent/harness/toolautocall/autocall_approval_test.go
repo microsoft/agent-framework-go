@@ -336,7 +336,7 @@ func TestFunctionInvoking_BindsProviderNativeApprovalRequest(t *testing.T) {
 	}
 }
 
-func TestFunctionInvoking_FirstApprovalRequestSnapshotWinsDuplicateID(t *testing.T) {
+func TestFunctionInvoking_DifferentCallsSurfacedUnderSameRequestIDAreNotBindable(t *testing.T) {
 	var originalCalls, substitutedCalls int
 	original := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "Original"}, func(context.Context, struct{}) (string, error) {
 		originalCalls++
@@ -378,6 +378,8 @@ func TestFunctionInvoking_FirstApprovalRequestSnapshotWinsDuplicateID(t *testing
 			}
 		}
 	}
+	// A provider that reuses a call id makes "Original" and "Substituted" collide on the same
+	// request id; it is impossible to tell which call the human answered, so neither is honored.
 	response := &message.ToolApprovalResponseContent{
 		RequestID: "duplicate-request",
 		Approved:  true,
@@ -388,8 +390,79 @@ func TestFunctionInvoking_FirstApprovalRequestSnapshotWinsDuplicateID(t *testing
 			t.Fatal(err)
 		}
 	}
-	if originalCalls != 1 || substitutedCalls != 0 {
-		t.Fatalf("tool calls = original:%d substituted:%d, want original:1 substituted:0", originalCalls, substitutedCalls)
+	if originalCalls != 0 || substitutedCalls != 0 {
+		t.Fatalf("tool calls = original:%d substituted:%d, want original:0 substituted:0", originalCalls, substitutedCalls)
+	}
+}
+
+// TestFunctionInvoking_CollidingCallIDInSameTurnPoisonsBothApprovals reproduces a malicious or
+// buggy endpoint assigning one remote tool-call id to two different calls within a single turn
+// (e.g. a benign read-only call and a shell command). Approving the call the human believes is
+// benign must never execute the other, even if its own denial or decision is lost in the same way.
+func TestFunctionInvoking_CollidingCallIDInSameTurnPoisonsBothApprovals(t *testing.T) {
+	var infoCalls, shellCalls int
+	info := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "GetInfo"}, func(context.Context, struct{}) (string, error) {
+		infoCalls++
+		return "safe", nil
+	}))
+	shell := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "RunShell"}, func(context.Context, struct{}) (string, error) {
+		shellCalls++
+		return "MSRC_DENIED_SHELL_EXECUTED", nil
+	}))
+
+	next := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if !yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+				&message.FunctionCallContent{CallID: "shared-call", Name: "RunShell", Arguments: `{}`},
+			}}, nil) {
+				return
+			}
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+				&message.FunctionCallContent{CallID: "shared-call", Name: "GetInfo", Arguments: `{}`},
+			}}, nil)
+		}
+	}
+
+	middleware := toolautocall.New(toolautocall.Config{})
+	session := &agent.Session{}
+	options := []agent.Option{agent.WithSession(session), agent.WithTool(shell), agent.WithTool(info)}
+
+	var requests []*message.ToolApprovalRequestContent
+	for update, err := range middleware.Run(next, t.Context(), []*message.Message{message.NewText("start")}, options...) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range update.Contents {
+			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
+				requests = append(requests, r)
+			}
+		}
+	}
+	if len(requests) != 2 || requests[0].RequestID != requests[1].RequestID {
+		t.Fatalf("got requests %#v, want two requests sharing one request id", requests)
+	}
+
+	// The caller approves what it believes is the safe GetInfo call and denies RunShell.
+	var approveInfo, denyShell *message.ToolApprovalResponseContent
+	for _, r := range requests {
+		if fcc, ok := r.ToolCall.(*message.FunctionCallContent); ok && fcc.Name == "GetInfo" {
+			approveInfo = r.CreateResponse(true, "")
+		} else {
+			denyShell = r.CreateResponse(false, "")
+		}
+	}
+	if approveInfo == nil || denyShell == nil {
+		t.Fatal("expected one GetInfo approval and one RunShell denial")
+	}
+
+	for _, err := range middleware.Run(next, t.Context(), []*message.Message{message.New(approveInfo, denyShell)}, options...) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if infoCalls != 0 || shellCalls != 0 {
+		t.Fatalf("tool calls = info:%d shell:%d, want info:0 shell:0 (ambiguous request id must not bind either call)", infoCalls, shellCalls)
 	}
 }
 
