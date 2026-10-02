@@ -109,13 +109,23 @@ Compare observable behavior, not language-specific types. Different names or Go 
 
 Use the `dotnet-symbols` skill for counterpart lookup. Catalog notes and old reviews are leads, not current parity proof. Keep the catalog, inventory, and mapping guide read-only; identify any expected assessment follow-up in the PR for post-merge maintenance using published commits. Do not infer inventoried package versions from upstream dependency files.
 
+## Counterpart eligibility
+
+Before duplicate searches, identify the affected .NET execution role (provider client, hosting server, or shared runtime), trace its caller and state/wire-ID ownership, and locate the current Go entry point performing the same role. Record a concrete behavior mismatch or missing relevant regression test reachable through that Go entry point. A similarly named helper, shared protocol, or absent internal .NET mechanism is not proof of a Go defect.
+
+If reproducing the upstream scenario requires adding a missing Go hosting endpoint, service, or other capability, exclude it here and defer the complete feature to `[dotnet-port-api]`, even when the upstream diff changes only internal code. Do not blanket-exclude hosting namespaces: Go has A2A and AG-UI hosting, so trace the actual path. Missing source or a failed read is unresolved evidence, not proof that a counterpart is absent.
+
+For example, `microsoft/agent-framework#8873` fixes `Microsoft.Agents.AI.Foundry.Hosting.InputConverter`: it resolves approval IDs synthesized by the hosting `OutputConverter`/`ToolApprovalIdMap` for the virtual `agent_framework` MCP server. Go's `foundryprovider.NewAgent` and `openaiprovider.NewResponsesAgent` are outbound clients handling service-issued IDs, not that inbound hosting implementation. Unless current Go has the corresponding hosting path, exclude this server-side fix without duplicate searches; do not invent the server's ID map in the provider client.
+
 ## Duplicate checks
 
-Establish eligibility from source and current Go callers/tests before searches. For eligible candidates, use read-only GitHub MCP to search both issues and PRs in `repo:microsoft/agent-framework-go`, across manual and automated work, including old fallback tracking issues. Start with one focused semantic issue query naming the missing behavior and .NET/Go symbols, and one PR query using GitHub search syntax. Add targeted follow-ups only for distinct coverage or relevant matches; do not scan by workflow prefix, author, package name, or shared upstream head alone.
+Search only candidates that passed the counterpart and Scope checks; a plausible name-based match is not eligible yet. For eligible candidates, use read-only GitHub MCP to search both issues and PRs in `repo:microsoft/agent-framework-go`, across manual and automated work, including old fallback tracking issues. Start with one focused semantic issue query naming the missing behavior and .NET/Go symbols, and one PR query using GitHub search syntax. Add targeted follow-ups only for distinct coverage or relevant matches; do not scan by workflow prefix, author, package name, or shared upstream head alone.
 
 For `search_issues` and `search_pull_requests`, include `repo:microsoft/agent-framework-go` in `query`, set `perPage` to at most `10`, and set `fields` to `["number", "title", "state", "html_url"]`. Omit state filters to include open and closed together; these tools have no `state` argument. Follow pages and narrow capped queries. Read bodies, comments, and diffs separately only for relevant matches. An old base port, matching title, or shared package is not a duplicate unless it implements, actively claims, or explicitly rejects the exact behavior. A closed PR is not necessarily merged.
 
 Record every filtered/failed reference with its candidate and query. Potentially relevant inaccessible evidence blocks that candidate; narrower empty searches, a partial diff, passing tests, or disclosing the filter do not clear it. Never disable TLS verification, weaken integrity/firewall policy, use shell `gh`/`curl`/Python downloads, or change transports to bypass a denied read. Do not repeat an explicitly denied read or call a trapped/unavailable guard. On a rate limit, review local source until the reported reset and retry only unresolved calls; a failed search is not empty evidence.
+
+If local source independently excludes a candidate under Scope or the counterpart check, record that exclusion separately from any visibility limits already encountered; those limits do not make the excluded candidate eligible or require further duplicate reads. This does not clear duplicate evidence for a candidate that remains eligible.
 
 ## Review and selection
 
@@ -124,7 +134,7 @@ Verify `DOTNET_UPSTREAM_SHA` and screen every row of `DOTNET_COMMITS_FILE`. Keep
 1. **Recent changes:** inspect at most two promising bug-fix/test groups from the prepared list using the evidence and classification rules above. Check duplicates only after establishing eligibility. Stop when one group is fully verified and unclaimed.
 2. **Existing-Go comparison:** if no recent group qualifies, use the remaining slot for one current Go behavior, not a third upstream change. Compare its implementation/callers/tests against the corresponding pinned .NET source/tests. Catalog `partial` notes can guide this check but are not proof. This fallback does not require a recent upstream commit. Record the Go area, both source paths, and the concrete match or mismatch even when no change is needed.
 
-Record each group's outcome with its source evidence, classification, and duplicate references. Blocked groups count toward the budget; continue to another group when its evidence is independent. A blocked alternative does not invalidate a fully verified selection, but disclose it in the final notes. Stop if a shared tool/source failure prevents further review.
+Record each group's outcome with its source evidence, execution role and Go entry point (or source-backed absence), classification, and duplicate references. Blocked groups count toward the budget; continue to another group when its evidence is independent. A blocked alternative does not invalidate a fully verified selection, but disclose it in the final notes. Stop if a shared tool/source failure prevents further review.
 
 Before editing, confirm that the selected group is fix-only and all required source/duplicate checks are resolved. Do not implement a blocked candidate or rescan alternatives after implementation. If nothing qualifies, report **Recent changes** and **Existing-Go comparison** separately; a missing comparison is incomplete selection, not proof of no work. Do not manufacture work from a catalog label, test name, or branch name.
 
