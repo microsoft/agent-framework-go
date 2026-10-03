@@ -73,6 +73,41 @@ func TestNew_ExposesAgentMetadataAndSchemas(t *testing.T) {
 	}
 }
 
+func TestNew_CustomArgNameAndDescription(t *testing.T) {
+	var capturedMessages []*message.Message
+	a := agenttest.New(agenttest.NewResponseBuilder(
+		func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+			capturedMessages = messages
+		},
+	).AddText("ok").Build())
+	tl := agenttool.New(a, agenttool.Config{ArgName: "task", ArgDescription: "the task to run"})
+
+	// Schema reflects the custom argument.
+	schema := tl.Schema().(map[string]any)
+	properties := schema["properties"].(map[string]any)
+	if _, ok := properties["task"]; !ok {
+		t.Fatalf("schema properties = %#v, want a \"task\" argument", properties)
+	}
+	if _, ok := properties["query"]; ok {
+		t.Fatalf("schema still exposes the default \"query\" argument")
+	}
+	arg := properties["task"].(map[string]any)
+	if arg["description"] != "the task to run" {
+		t.Errorf("task description = %v, want %q", arg["description"], "the task to run")
+	}
+	if req := schema["required"].([]string); len(req) != 1 || req[0] != "task" {
+		t.Errorf("required = %v, want [task]", req)
+	}
+
+	// Call reads the custom key and forwards its value to the agent.
+	if _, err := tl.Call(t.Context(), `{"task":"do the thing"}`); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if len(capturedMessages) == 0 || capturedMessages[len(capturedMessages)-1].String() != "do the thing" {
+		t.Fatalf("agent received %v, want the task text", capturedMessages)
+	}
+}
+
 func TestNew_PanicsWithNilAgent(t *testing.T) {
 	defer func() {
 		if recover() == nil {
