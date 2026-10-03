@@ -124,6 +124,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				Role:              message.RoleAssistant,
 				MessageID:         resp.ID,
 				ResponseID:        resp.ID,
+				ModelID:           string(resp.Model),
 				CreatedAt:         time.Now(),
 				FinishReason:      mapStopReason(resp.StopReason),
 				RawRepresentation: resp,
