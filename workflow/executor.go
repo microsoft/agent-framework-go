@@ -306,8 +306,8 @@ func (e *Executor) OnCheckpointRestored(ctx *Context) error {
 	return nil
 }
 
-// OnMessageDeliveryStarting invokes all configured OnMessageDeliveryStarting
-// hooks. Returns the first error from any hook.
+// OnMessageDeliveryStarting invokes the configured OnMessageDeliveryStarting
+// hooks in order, stopping at and returning the first hook error.
 func (e *Executor) OnMessageDeliveryStarting(ctx *Context) error {
 	if e.OnMessageDeliveryStartingFunc != nil {
 		return e.OnMessageDeliveryStartingFunc(ctx)
