@@ -306,11 +306,18 @@ func evaluate(ctx context.Context, evaluators []Evaluator, loopCtx *Context) (Ev
 }
 
 func nextMessages(cfg Config, loopCtx *Context, evaluation Evaluation) (messages []*message.Message, surfaced []*message.Message) {
+	// Explicit ContinueWithMessages is a full, verbatim override of the next
+	// input in every mode. FreshContextPerIteration governs only the session
+	// reset and the default-feedback input, not this override — matching the
+	// .NET (LoopAgent) and Python (_resolve_next_message) implementations, which
+	// send evaluator-supplied messages as the entire next input.
 	if len(evaluation.Messages) > 0 {
 		cloned := cloneMessages(evaluation.Messages)
 		return cloned, cloned
 	}
 	if cfg.FreshContextPerIteration {
+		// Fresh mode restarts the default-feedback path from the original input
+		// (the session is also reset to a pristine snapshot).
 		nextMessages := cloneMessages(loopCtx.InitialMessages)
 		feedbackMessage := aggregatedFeedbackMessage(loopCtx.Feedback, cfg.OnBehalfOfAuthorName)
 		if feedbackMessage == nil {
