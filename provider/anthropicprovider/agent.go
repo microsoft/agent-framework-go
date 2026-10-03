@@ -240,8 +240,9 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 }
 
 // mapStopReason maps an Anthropic stop_reason to the canonical FinishReason
-// values shared across providers (mirroring the OpenAI/Copilot providers). It
-// returns "" for empty or unrecognized reasons so callers can fall through.
+// values shared across providers (mirroring the OpenAI/Copilot providers). An
+// empty reason returns ""; an unrecognized non-empty reason is passed through
+// unchanged so newer Anthropic values still reach the caller.
 func mapStopReason(reason anthropic.StopReason) string {
 	switch reason {
 	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence, anthropic.StopReasonPauseTurn:
@@ -253,7 +254,11 @@ func mapStopReason(reason anthropic.StopReason) string {
 	case anthropic.StopReasonRefusal:
 		return "content_filter"
 	default:
-		return ""
+		// Pass through stop reasons we don't explicitly map (e.g. a newer
+		// value like model_context_window_exceeded) so they still reach the
+		// caller instead of being reported as no finish reason, matching the
+		// Python client. An empty reason maps to "".
+		return string(reason)
 	}
 }
 
