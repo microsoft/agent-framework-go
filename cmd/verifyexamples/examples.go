@@ -813,6 +813,17 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_harness_step03_agentmode",
+		ProjectPath:                  "examples/02-agents/harness/step03_agentmode",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		ExpectedOutputDescription: []string{
+			"The output should show a first run where the agent plans steps for a study group, then a second run where it executes them.",
+			"The two runs reflect the session switching from plan mode to execute mode between them.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:                         "02_agents_harness_step01_loop",
 		ProjectPath:                  "examples/02-agents/harness/step01_loop",
 		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
