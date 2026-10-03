@@ -1036,6 +1036,72 @@ func TestResponsesAssistantReplayPreservesHostedToolItems(t *testing.T) {
 	}
 }
 
+// A replayed assistant turn from client-side history must carry back the
+// citations its text originally arrived with, so the Responses API sees the
+// same annotations on round-trip. This is the inverse of populateAnnotations.
+func TestResponsesAssistantReplayRoundTripsCitationAnnotations(t *testing.T) {
+	start, end := 0, 5
+	contents := message.Contents{
+		&message.TextContent{
+			Text: "hello world",
+			ContentHeader: message.ContentHeader{
+				Annotations: []message.Annotation{
+					&message.CitationAnnotation{
+						Title:            "Example",
+						URL:              "https://example.com",
+						AnnotatedRegions: message.AnnotatedRegions{&message.TextSpanAnnotatedRegion{StartIndex: &start, EndIndex: &end}},
+					},
+					&message.CitationAnnotation{
+						FileID: "file_123",
+						Title:  "doc.pdf",
+					},
+				},
+			},
+		},
+	}
+
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"resp","object":"response","created_at":1,"status":"completed","model":"gpt-4o-mini","output":[]}`)
+	}))
+	defer server.Close()
+
+	a := newTestResponsesClient(server, "gpt-4o-mini")
+	if _, err := a.Run(t.Context(), []*message.Message{{Role: message.RoleAssistant, Contents: contents}}).Collect(); err != nil {
+		t.Fatal(err)
+	}
+
+	input, ok := captured["input"].([]any)
+	if !ok || len(input) != 1 {
+		t.Fatalf("input = %#v", captured["input"])
+	}
+	item, _ := input[0].(map[string]any)
+	textContents, _ := item["content"].([]any)
+	if len(textContents) != 1 {
+		t.Fatalf("assistant content = %#v, want one output_text", item["content"])
+	}
+	outputText, _ := textContents[0].(map[string]any)
+	anns, _ := outputText["annotations"].([]any)
+	if len(anns) != 2 {
+		t.Fatalf("annotations = %#v, want url_citation and file_citation", outputText["annotations"])
+	}
+	url, _ := anns[0].(map[string]any)
+	if url["type"] != "url_citation" || url["url"] != "https://example.com" || url["title"] != "Example" {
+		t.Errorf("url citation = %#v", url)
+	}
+	if url["start_index"] != float64(0) || url["end_index"] != float64(5) {
+		t.Errorf("url citation span = [%v, %v), want [0, 5)", url["start_index"], url["end_index"])
+	}
+	file, _ := anns[1].(map[string]any)
+	if file["type"] != "file_citation" || file["file_id"] != "file_123" || file["filename"] != "doc.pdf" {
+		t.Errorf("file citation = %#v", file)
+	}
+}
+
 func TestResponsesAssistantReplayReconstructsPersistedMCPContents(t *testing.T) {
 	original := message.Contents{
 		&message.ToolApprovalRequestContent{
