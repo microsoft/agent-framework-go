@@ -4132,7 +4132,7 @@ func TestResponsesResponseWithUsageDetails_ParsesTokenCounts(t *testing.T) {
                 "input_tokens":50,
                 "output_tokens":25,
                 "total_tokens":75,
-                "input_tokens_details":{"cached_tokens":10},
+                "input_tokens_details":{"cached_tokens":10,"cache_write_tokens":7},
                 "output_tokens_details":{"reasoning_tokens":5}
               }
             }
@@ -4150,6 +4150,9 @@ func TestResponsesResponseWithUsageDetails_ParsesTokenCounts(t *testing.T) {
 
 	// Find usage content
 	usage := resp.Usage()
+	if got := usage.AdditionalCounts["InputTokensDetails.CacheWriteTokens"]; got != 7 {
+		t.Errorf("expected cache_write_tokens 7, got %v", got)
+	}
 	if usage.InputTokenCount != 50 {
 		t.Errorf("expected input tokens 50, got %d", usage.InputTokenCount)
 	}

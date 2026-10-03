@@ -545,6 +545,25 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 	}
 }
 
+// cache_write_tokens (prompt-cache writes / cache creation) must be surfaced via AdditionalCounts,
+// matching the Python client.
+func TestChatCacheWriteTokensSurfaced(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-cw","object":"chat.completion","created":1727888631,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cache_write_tokens":7}}}`)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(server).RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	usage := resp.Usage()
+	if got := usage.AdditionalCounts["PromptTokensDetails.CacheWriteTokens"]; got != 7 {
+		t.Errorf("expected cache_write_tokens 7, got %v", got)
+	}
+}
+
 // Some OpenAI-compatible endpoints still emit the deprecated "function_call"
 // finish reason; it must be normalized to the canonical "tool_calls", matching
 // the Python client.
