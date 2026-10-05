@@ -45,6 +45,13 @@
       "go_commit": "ec4a7cadbe82946613eadb97d325f44407da5234",
       "inventory_sha256": "734ff2c4037aa311de95912a256bb7e223ab3fa81a699835a21d27bab90f53ab",
       "scope": "Confirmed that the missing AI-judge, background-task-completion, and todo-completion loop APIs are marked MAAI001 experimental and intentionally omitted from the Go 0.2.0 non-experimental harness scope. Existing mapped and partial Loop assessments were not re-reviewed."
+    },
+    "filestore-experimental-scope-2026-10-05": {
+      "checked_at": "2026-10-05",
+      "dotnet_commit": "0c9944cc9f577d51277ac7c55dbc388b60a577af",
+      "go_commit": "564a517674cf9cc887810588e64b137349dba5b6",
+      "inventory_sha256": "734ff2c4037aa311de95912a256bb7e223ab3fa81a699835a21d27bab90f53ab",
+      "scope": "Confirmed that every public API declared in the FileStore harness folder is marked MAAI001 experimental and intentionally omitted from the Go 0.2.0 non-experimental harness scope. Internal FileEditor and StorePaths helpers and stable FileMemory APIs are outside this review."
     }
   },
   "go_only": {},
@@ -570,6 +577,82 @@
             "status": "intentional",
             "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AIJudgeLoopEvaluatorOptions is marked MAAI001 experimental.",
             "review": "loop-experimental-scope-2026-09-30"
+          }
+        }
+      },
+      "AgentFileStore": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI",
+        "mapping": {
+          "go": "",
+          "go_symbols": [],
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AgentFileStore is marked MAAI001 experimental.",
+          "review": "filestore-experimental-scope-2026-10-05"
+        },
+        "methods": {
+          "CreateDirectoryAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "DeleteAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "FileExistsAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "ListChildrenAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "ReadAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "ScanContent(string, string, Regex)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "SearchAsync(string, string, string, bool, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "SplitLines(string)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "WriteAsync(string, string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because AgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
           }
         }
       },
@@ -2267,6 +2350,248 @@
           "review": "core-1.22.0"
         }
       },
+      "FileLineEdit": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI",
+        "mapping": {
+          "go": "",
+          "go_symbols": [],
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileLineEdit is marked MAAI001 experimental.",
+          "review": "filestore-experimental-scope-2026-10-05"
+        },
+        "properties": {
+          "ExpectedLine": {
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileLineEdit is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "LineNumber": {
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileLineEdit is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "NewLine": {
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileLineEdit is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          }
+        },
+        "constructors": {
+          "FileLineEdit()": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileLineEdit is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          }
+        }
+      },
+      "FileSearchMatch": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI",
+        "mapping": {
+          "go": "",
+          "go_symbols": [],
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSearchMatch is marked MAAI001 experimental.",
+          "review": "filestore-experimental-scope-2026-10-05"
+        },
+        "properties": {
+          "Line": {
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSearchMatch is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "LineNumber": {
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSearchMatch is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          }
+        },
+        "constructors": {
+          "FileSearchMatch()": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSearchMatch is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          }
+        }
+      },
+      "FileSearchResult": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI",
+        "mapping": {
+          "go": "",
+          "go_symbols": [],
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSearchResult is marked MAAI001 experimental.",
+          "review": "filestore-experimental-scope-2026-10-05"
+        },
+        "properties": {
+          "FileName": {
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSearchResult is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "MatchingLines": {
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSearchResult is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "Snippet": {
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSearchResult is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          }
+        },
+        "constructors": {
+          "FileSearchResult()": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSearchResult is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          }
+        }
+      },
+      "FileStoreEntry": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI",
+        "mapping": {
+          "go": "",
+          "go_symbols": [],
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileStoreEntry is marked MAAI001 experimental.",
+          "review": "filestore-experimental-scope-2026-10-05"
+        },
+        "properties": {
+          "Name": {
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileStoreEntry is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "Type": {
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileStoreEntry is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          }
+        },
+        "constructors": {
+          "FileStoreEntry()": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileStoreEntry is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "FileStoreEntry(string, string)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileStoreEntry is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          }
+        },
+        "constants": {
+          "Directory": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileStoreEntry is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "File": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileStoreEntry is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          }
+        }
+      },
+      "FileSystemAgentFileStore": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI",
+        "mapping": {
+          "go": "",
+          "go_symbols": [],
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSystemAgentFileStore is marked MAAI001 experimental.",
+          "review": "filestore-experimental-scope-2026-10-05"
+        },
+        "methods": {
+          "CreateDirectoryAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSystemAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "DeleteAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSystemAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "FileExistsAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSystemAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "ListChildrenAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSystemAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "ReadAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSystemAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "SearchAsync(string, string, string, bool, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSystemAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "WriteAsync(string, string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSystemAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          }
+        },
+        "constructors": {
+          "FileSystemAgentFileStore(string)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileSystemAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          }
+        }
+      },
       "FunctionInvocationDelegatingAgentBuilderExtensions": {
         "area": "tools",
         "assembly": "Microsoft.Agents.AI",
@@ -2276,6 +2601,77 @@
             "go_symbols": ["agent.Config.FunctionMiddlewares", "agent.FunctionInvocationMiddleware", "agent.FunctionInvocationContext", "agent.AgentFromContext"],
             "status": "adapted",
             "note": "Register function middleware on Config; arguments are raw JSON and the agent comes from context. The C# builder requires FunctionInvokingChatClient; Go integrates callbacks with tool execution."
+          }
+        }
+      },
+      "InMemoryAgentFileStore": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI",
+        "mapping": {
+          "go": "",
+          "go_symbols": [],
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because InMemoryAgentFileStore is marked MAAI001 experimental.",
+          "review": "filestore-experimental-scope-2026-10-05"
+        },
+        "methods": {
+          "CreateDirectoryAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because InMemoryAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "DeleteAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because InMemoryAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "FileExistsAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because InMemoryAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "ListChildrenAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because InMemoryAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "ReadAsync(string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because InMemoryAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "SearchAsync(string, string, string, bool, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because InMemoryAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          },
+          "WriteAsync(string, string, CancellationToken)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because InMemoryAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
+          }
+        },
+        "constructors": {
+          "InMemoryAgentFileStore()": {
+            "go": "",
+            "go_symbols": [],
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because InMemoryAgentFileStore is marked MAAI001 experimental.",
+            "review": "filestore-experimental-scope-2026-10-05"
           }
         }
       },
