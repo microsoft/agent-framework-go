@@ -210,9 +210,10 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 		session, _ := agent.GetOption(opts, agent.WithSession)
 		serviceID, _ := agent.GetOption(opts, agent.WithServiceID)
 		serviceManagedHistory := strings.TrimSpace(serviceID) != ""
+		ambiguousRequestIDs := make(map[string]struct{})
 		yieldUpdate := func(update *agent.ResponseUpdate) bool {
 			if !f.disableApprovalResponseBinding && update != nil {
-				if err := recordPendingApprovalRequests(session, update.Contents); err != nil {
+				if err := recordPendingApprovalRequests(session, update.Contents, ambiguousRequestIDs); err != nil {
 					yield(nil, err)
 					return false
 				}
@@ -867,7 +868,7 @@ func bindApprovalResponses(session *agent.Session, messages []*message.Message) 
 	return out, true, nil
 }
 
-func recordPendingApprovalRequests(session *agent.Session, contents message.Contents) error {
+func recordPendingApprovalRequests(session *agent.Session, contents message.Contents, ambiguous map[string]struct{}) error {
 	if session == nil {
 		return nil
 	}
@@ -885,56 +886,63 @@ func recordPendingApprovalRequests(session *agent.Session, contents message.Cont
 	if _, err := session.Get(pendingApprovalRequestsStateKey, &state); err != nil {
 		return err
 	}
-	known := make(map[string]*message.ToolApprovalRequestContent, len(state.Requests)+len(additions))
+	byID := make(map[string]*message.ToolApprovalRequestContent, len(state.Requests)+len(additions))
 	for _, request := range state.Requests {
 		if request != nil {
-			known[request.RequestID] = request
+			byID[request.RequestID] = request
 		}
 	}
-	changed := false
+	var changed, collided bool
 	for _, request := range additions {
-		existing, ok := known[request.RequestID]
-		if !ok {
-			known[request.RequestID] = request
+		id := request.RequestID
+		if _, ok := ambiguous[id]; ok {
+			continue
+		}
+		existing, found := byID[id]
+		switch {
+		case !found:
+			byID[id] = request
+			state.Requests = append(state.Requests, request)
 			changed = true
-			continue
+		case !toolCallsEquivalent(request.ToolCall, existing.ToolCall):
+			// Different calls sharing one request id cannot be told apart, so keep it unbound for the rest of the run.
+			ambiguous[id] = struct{}{}
+			delete(byID, id)
+			changed, collided = true, true
 		}
-		if toolCallsEquivalent(request.ToolCall, existing.ToolCall) {
-			// The same call surfaced again; the recorded snapshot already covers it.
-			continue
-		}
-		// composeApprovalRequestID derives the request id solely from CallID, so a provider that
-		// reuses one makes two different calls collide under it. Drop the pending entry instead of
-		// guessing which call a later response is for; both must be requested again.
-		delete(known, request.RequestID)
-		changed = true
 	}
 	if !changed {
 		return nil
 	}
-	state.Requests = state.Requests[:0]
-	for _, requestID := range slices.Sorted(maps.Keys(known)) {
-		state.Requests = append(state.Requests, known[requestID])
+	if collided {
+		state.Requests = slices.DeleteFunc(slices.Clone(state.Requests), func(request *message.ToolApprovalRequestContent) bool {
+			if request == nil {
+				return false
+			}
+			_, drop := ambiguous[request.RequestID]
+			return drop
+		})
 	}
 	session.Set(pendingApprovalRequestsStateKey, state)
 	return nil
 }
 
-// toolCallsEquivalent reports whether a and b are the same call occurrence, so a repeated
-// approval request does not need rebinding. A false result is always safe: it only causes
-// recordPendingApprovalRequests to treat the request id as colliding.
+// toolCallsEquivalent reports whether a and b are the same call; calls of different kinds never match.
 func toolCallsEquivalent(a, b message.ToolCallContent) bool {
-	fa, ok := a.(*message.FunctionCallContent)
-	if !ok || fa == nil {
-		return false
+	if a == nil || b == nil {
+		return a == nil && b == nil
 	}
-	fb, ok := b.(*message.FunctionCallContent)
-	if !ok || fb == nil {
-		return false
+	switch a := a.(type) {
+	case *message.FunctionCallContent:
+		b, ok := b.(*message.FunctionCallContent)
+		return ok && a != nil && b != nil && a.CallID == b.CallID && a.Name == b.Name && a.Arguments == b.Arguments
+	case *message.MCPServerToolCallContent:
+		b, ok := b.(*message.MCPServerToolCallContent)
+		return ok && a != nil && b != nil && a.CallID == b.CallID && a.Name == b.Name && a.ServerName == b.ServerName && a.Arguments == b.Arguments
 	}
-	return fa.CallID == fb.CallID && fa.Name == fb.Name && fa.Arguments == fb.Arguments
+	// Other hosted call kinds are never executed locally, so their kind and call ID identify them.
+	return reflect.TypeOf(a) == reflect.TypeOf(b) && a.GetCallID() == b.GetCallID()
 }
-
 
 func injectPendingAutoApprovedCalls(session *agent.Session, messages []*message.Message) ([]*message.Message, bool, error) {
 	if session == nil {
