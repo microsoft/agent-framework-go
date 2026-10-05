@@ -7,14 +7,14 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1
 	github.com/a2aproject/a2a-go/v2 v2.6.0
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260312103001-8e7ab1df34c8
-	github.com/anthropics/anthropic-sdk-go v1.76.0
-	github.com/github/copilot-sdk/go v1.0.15
+	github.com/anthropics/anthropic-sdk-go v1.78.0
+	github.com/github/copilot-sdk/go v1.0.16
 	github.com/gofrs/flock v0.13.1
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/microsoft/go-winmd v0.0.0-20260922124842-16e7d31aeb8a
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/openai/openai-go/v3 v3.66.0
+	github.com/openai/openai-go/v3 v3.70.0
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.46.0
 	go.opentelemetry.io/otel/metric v1.46.0
@@ -24,7 +24,7 @@ require (
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba
 	golang.org/x/sync v0.23.0
 	golang.org/x/tools v0.50.0
-	google.golang.org/genai v1.71.0
+	google.golang.org/genai v1.72.0
 	google.golang.org/grpc v1.84.0
 )
 
