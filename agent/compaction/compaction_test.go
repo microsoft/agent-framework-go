@@ -757,6 +757,30 @@ func TestNewProvider_CompactsWithoutSession(t *testing.T) {
 	}
 }
 
+func TestNewProvider_SkipsServiceManagedSession(t *testing.T) {
+	session := agenttest.CreateSession()
+	session.SetServiceID("remote-conversation-id")
+	called := false
+	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
+		Strategy: strategyFunc(func(context.Context, *compaction.MessageIndex) (bool, error) {
+			called = true
+			return true, nil
+		}),
+	})
+	messages := turnMessages(2)
+
+	compactedMessages, _, err := invokeProvider(provider, t.Context(), messages, agent.WithSession(session))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if called {
+		t.Fatal("expected service-managed session to skip compaction")
+	}
+	if !slices.Equal(compactedMessages, messages) {
+		t.Fatalf("expected original messages to be returned, got %v", messageTexts(compactedMessages))
+	}
+}
+
 func TestMessageIndex_UsesTokenCounterForTextContent(t *testing.T) {
 	counter := tokenCounterFunc(func(text string) int { return len(text) + 10 })
 	messages := []*message.Message{{
