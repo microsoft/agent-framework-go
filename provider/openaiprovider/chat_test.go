@@ -29,7 +29,7 @@ import (
 
 func TestChatToolCallsWithServiceIDDoNotClaimStoredHistory(t *testing.T) {
 	requests := make(chan []byte, 2)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Error(err)
@@ -44,7 +44,7 @@ func TestChatToolCallsWithServiceIDDoNotClaimStoredHistory(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL)), openaiprovider.AgentConfig{Model: "test-model"})
+	a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL), option.WithHTTPClient(server.Client())), openaiprovider.AgentConfig{Model: "test-model"})
 	session, err := a.CreateSession(t.Context(), agent.WithServiceID("thread-1"))
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestChatCompletionsAgent_FunctionInvocationMiddleware(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				var requests atomic.Int32
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
 					if requests.Add(1)%2 == 1 {
 						_, _ = io.WriteString(w, `{"id":"chatcmpl-tools","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`)
@@ -119,7 +119,7 @@ func TestChatCompletionsAgent_FunctionInvocationMiddleware(t *testing.T) {
 						},
 					})}
 				}
-				a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL)), openaiprovider.AgentConfig{
+				a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL), option.WithHTTPClient(server.Client())), openaiprovider.AgentConfig{
 					Config:       cfg,
 					Model:        "test-model",
 					ToolAutoCall: autoCall,
@@ -357,7 +357,7 @@ func TestChatConfigInstructions_NonStreaming(t *testing.T) {
 
 func TestChatAgentConfigAllowsConcurrentToolInvocation(t *testing.T) {
 	var requests atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if requests.Add(1) == 1 {
 			_, _ = io.WriteString(w, `{
@@ -382,7 +382,7 @@ func TestChatAgentConfigAllowsConcurrentToolInvocation(t *testing.T) {
 		})
 	}
 	a := openaiprovider.NewChatCompletionsAgent(
-		openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")),
+		openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test"), option.WithHTTPClient(server.Client())),
 		openaiprovider.AgentConfig{
 			Model: "gpt-4o-mini",
 			ToolAutoCall: &toolautocall.Config{
@@ -417,7 +417,7 @@ func TestChatAgentConfigAllowsConcurrentToolInvocation(t *testing.T) {
 func TestChatAgentConfigEnablesMessageInjectionInsideToolAutoCall(t *testing.T) {
 	var requests atomic.Int64
 	var injectedMessageSeen atomic.Bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		if requests.Add(1) == 1 {
@@ -438,7 +438,7 @@ func TestChatAgentConfigEnablesMessageInjectionInsideToolAutoCall(t *testing.T) 
 		return "ok", nil
 	})
 	a := openaiprovider.NewChatCompletionsAgent(
-		openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")),
+		openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test"), option.WithHTTPClient(server.Client())),
 		openaiprovider.AgentConfig{
 			Model: "gpt-4o-mini",
 			Config: agent.Config{
