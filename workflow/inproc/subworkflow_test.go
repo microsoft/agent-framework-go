@@ -60,6 +60,41 @@ func TestSubworkflowBinding_ForwardsOutputsAsParentOutputsAndMessages(t *testing
 	}
 }
 
+func TestSubworkflowBinding_ForwardsWorkflowWarningAsWorkflowWarning(t *testing.T) {
+	childStart := workflow.NewExecutor("child-start", func(ctx *workflow.Context, _ textMessage) error {
+		return ctx.AddEvent(workflow.WorkflowWarningEvent{Message: "child warning"})
+	}).Bind()
+	child, err := workflow.NewBuilder(childStart).Build()
+	if err != nil {
+		t.Fatalf("Build child: %v", err)
+	}
+
+	host := inproc.BindSubworkflowAsExecutor(child, "child")
+	parent, err := workflow.NewBuilder(host).Build()
+	if err != nil {
+		t.Fatalf("Build parent: %v", err)
+	}
+
+	run, err := inproc.Lockstep.Run(t.Context(), parent, textMessage{Text: "input"})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	for _, event := range slicesCollect(run.OutgoingEvents()) {
+		switch warning := event.(type) {
+		case workflow.WorkflowWarningEvent:
+			if warning.Message != "child warning" {
+				t.Fatalf("warning message = %q, want child warning", warning.Message)
+			}
+			if warning.SubWorkflowID != "child" {
+				t.Fatalf("warning SubWorkflowID = %q, want child", warning.SubWorkflowID)
+			}
+			return
+		}
+	}
+	t.Fatal("no WorkflowWarningEvent received")
+}
+
 func TestSubworkflowBinding_UsesActiveRunnerInputTypes(t *testing.T) {
 	childStart := workflow.BindNewExecutorFunc("child-start", func(sessionID string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{

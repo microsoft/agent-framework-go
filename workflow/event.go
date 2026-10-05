@@ -124,22 +124,11 @@ var _ Event = WorkflowWarningEvent{}
 // WorkflowWarningEvent is an event triggered when a workflow encounters a
 // warning condition.
 type WorkflowWarningEvent struct {
-	Message string
-}
-
-func (e WorkflowWarningEvent) Data() any {
-	return e.Message
-}
-
-var _ Event = SubworkflowWarningEvent{}
-
-// SubworkflowWarningEvent is a warning raised by a subworkflow.
-type SubworkflowWarningEvent struct {
 	Message       string
 	SubWorkflowID string
 }
 
-func (e SubworkflowWarningEvent) Data() any {
+func (e WorkflowWarningEvent) Data() any {
 	return e.Message
 }
 

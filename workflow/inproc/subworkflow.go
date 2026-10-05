@@ -266,6 +266,12 @@ func (h *subworkflowHostExecutor) forwardWorkflowEvent(ctx *workflow.Context, ev
 			return h.joinContext.addEvent(ctx, event)
 		}
 		return nil
+	case workflow.WorkflowWarningEvent:
+		event.SubWorkflowID = h.id
+		if h.joinContext != nil {
+			return h.joinContext.addEvent(ctx, event)
+		}
+		return nil
 	case workflow.OutputEvent:
 		if event.Output == nil {
 			return nil

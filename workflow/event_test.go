@@ -5,16 +5,8 @@ package workflow
 import "testing"
 
 func TestWorkflowWarningEvent(t *testing.T) {
-	event := WorkflowWarningEvent{Message: "workflow warning"}
-
-	if got := event.Data(); got != event.Message {
-		t.Fatalf("Data() = %v, want %q", got, event.Message)
-	}
-}
-
-func TestSubworkflowWarningEvent(t *testing.T) {
-	event := SubworkflowWarningEvent{
-		Message:       "subworkflow warning",
+	event := WorkflowWarningEvent{
+		Message:       "workflow warning",
 		SubWorkflowID: "child-workflow",
 	}
 
@@ -23,5 +15,12 @@ func TestSubworkflowWarningEvent(t *testing.T) {
 	}
 	if event.SubWorkflowID != "child-workflow" {
 		t.Fatalf("SubWorkflowID = %q, want %q", event.SubWorkflowID, "child-workflow")
+	}
+
+	var warning Event = event
+	switch warning.(type) {
+	case WorkflowWarningEvent:
+	default:
+		t.Fatalf("warning type = %T, want WorkflowWarningEvent", warning)
 	}
 }
