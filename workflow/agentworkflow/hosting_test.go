@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"iter"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -32,8 +33,10 @@ var testReplayMessages = []string{
 
 func sendStreamMessage(t *testing.T, stream *inproc.StreamingRun, ctx context.Context, message any) {
 	t.Helper()
-	if _, err := stream.TrySendMessage(ctx, message); err != nil {
+	if accepted, err := stream.TrySendMessage(ctx, message); err != nil {
 		t.Fatalf("SendMessage: %v", err)
+	} else if !accepted {
+		t.Fatalf("SendMessage rejected %T", message)
 	}
 }
 
@@ -274,6 +277,9 @@ func assertHostedAgentBindingID(t *testing.T, wf *workflow.Workflow, binding wor
 	if executor.ID != want {
 		t.Fatalf("executor instance ID = %q, want %q", executor.ID, want)
 	}
+	if !slices.Contains(executor.DescribeProtocol().Accepts, reflect.TypeFor[*message.Message]()) {
+		t.Fatalf("executor protocol accepts = %v, want *message.Message", executor.DescribeProtocol().Accepts)
+	}
 }
 
 func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg agentworkflow.Config) []*message.Message {
@@ -322,9 +328,15 @@ func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg agentwor
 		Contents: []message.Content{&message.TextContent{Text: "go"}},
 	}})
 	sendStreamMessage(t, stream, ctx, workflow.TurnToken{})
-	for _, err := range stream.WatchUntilHalt(ctx) {
+	for event, err := range stream.WatchUntilHalt(ctx) {
 		if err != nil {
 			t.Fatalf("watch: %v", err)
+		}
+		switch event := event.(type) {
+		case workflow.ErrorEvent:
+			t.Fatalf("unexpected workflow error: %v", event.Error)
+		case workflow.ExecutorFailedEvent:
+			t.Fatalf("unexpected executor failure from %q: %v", event.ExecutorID, event.Error)
 		}
 	}
 	return observed
@@ -417,8 +429,14 @@ func TestHostedAgent_EmitsStreamingUpdatesIfConfigured(t *testing.T) {
 					if u.ExecutorID == "" {
 						t.Errorf("update[%d] missing ExecutorID", i)
 					}
+					if u.Payload.AgentID != testAgentID {
+						t.Errorf("update[%d] AgentID = %q, want %q", i, u.Payload.AgentID, testAgentID)
+					}
 					if u.Payload.AuthorName != testAgentName {
 						t.Errorf("update[%d] AuthorName = %q, want %q", i, u.Payload.AuthorName, testAgentName)
+					}
+					if u.Payload.Role != message.RoleAssistant {
+						t.Errorf("update[%d] Role = %q, want %q", i, u.Payload.Role, message.RoleAssistant)
 					}
 					if len(u.Payload.Contents) != 1 {
 						t.Errorf("update[%d] expected 1 content, got %d", i, len(u.Payload.Contents))
@@ -576,7 +594,6 @@ func TestHostedAgent_ReassignsRolesIfConfigured(t *testing.T) {
 		Role: message.RoleAssistant, AuthorName: "OtherAgent",
 		Contents: []message.Content{&message.TextContent{Text: "Hello from Assistant!"}},
 	}
-
 	cases := []struct {
 		reassign        bool
 		includeUser     bool
@@ -621,17 +638,25 @@ func TestHostedAgent_ReassignsRolesIfConfigured(t *testing.T) {
 			}
 
 			events := runHostedAgent(t, newRoleCheckAgent(), cfg, workflow.TurnToken{}, msgs)
+			if userMsg.Role != message.RoleUser || selfMsg.Role != message.RoleAssistant || otherMsg.Role != message.RoleAssistant {
+				t.Fatal("role reassignment mutated caller-owned messages")
+			}
 
 			var sawError bool
 			for _, e := range events {
-				if errEvt, ok := e.(workflow.ErrorEvent); ok {
-					if errEvt.Error == nil {
-						continue
-					}
-					sawError = true
-					if !tc.wantErrorReport && !errors.Is(errEvt.Error, errEvt.Error) {
-						t.Errorf("unexpected error: %v", errEvt.Error)
-					}
+				var runErr error
+				switch e := e.(type) {
+				case workflow.ErrorEvent:
+					runErr = e.Error
+				case workflow.ExecutorFailedEvent:
+					runErr = e.Error
+				}
+				if runErr == nil {
+					continue
+				}
+				sawError = true
+				if !tc.wantErrorReport || !strings.Contains(runErr.Error(), "message from other assistant role detected: AuthorName=OtherAgent") {
+					t.Errorf("unexpected error: %v", runErr)
 				}
 			}
 			if tc.wantErrorReport && !sawError {
@@ -982,14 +1007,16 @@ func TestHostedAgent_StripsRawRepresentationFromForwardedResponseMessages(t *tes
 		ContentHeader: message.ContentHeader{RawRepresentation: "content-raw"},
 		Text:          "Response",
 	}
-	agent := newContentAgent(&agent.ResponseUpdate{
-		Role:              message.RoleAssistant,
-		MessageID:         "raw-message",
-		RawRepresentation: "message-raw",
-		Contents:          message.Contents{text},
-	})
+	update := &agent.ResponseUpdate{
+		Role:                 message.RoleAssistant,
+		MessageID:            "raw-message",
+		RawRepresentation:    "message-raw",
+		AdditionalProperties: map[string]any{"retained": "value"},
+		Contents:             message.Contents{text},
+	}
+	a := newContentAgent(update)
 
-	forwarded := collectForwardedResponseMessages(t, agent, agentworkflow.Config{})
+	forwarded := collectForwardedResponseMessages(t, a, agentworkflow.Config{})
 	if len(forwarded) != 1 {
 		t.Fatalf("expected 1 forwarded message, got %d", len(forwarded))
 	}
@@ -999,9 +1026,21 @@ func TestHostedAgent_StripsRawRepresentationFromForwardedResponseMessages(t *tes
 	if forwarded[0].AuthorName != testAgentName {
 		t.Fatalf("expected AuthorName %q, got %q", testAgentName, forwarded[0].AuthorName)
 	}
-	forwardedText := forwarded[0].Contents[0].(*message.TextContent)
+	if forwarded[0].ID != "raw-message" || forwarded[0].Role != message.RoleAssistant || forwarded[0].AdditionalProperties["retained"] != "value" {
+		t.Fatalf("forwarded metadata = %#v, want original ID, role, and additional property", forwarded[0])
+	}
+	if len(forwarded[0].Contents) != 1 {
+		t.Fatalf("forwarded content count = %d, want 1", len(forwarded[0].Contents))
+	}
+	forwardedText, ok := forwarded[0].Contents[0].(*message.TextContent)
+	if !ok || forwardedText.Text != "Response" {
+		t.Fatalf("forwarded content = %#v, want original response text", forwarded[0].Contents[0])
+	}
 	if forwardedText.RawRepresentation != "content-raw" {
 		t.Fatalf("expected content RawRepresentation to be preserved, got %#v", forwardedText.RawRepresentation)
+	}
+	if update.RawRepresentation != "message-raw" || text.RawRepresentation != "content-raw" || text.Text != "Response" {
+		t.Fatal("forwarding modified the provider update or its content")
 	}
 }
 

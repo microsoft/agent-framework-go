@@ -5,13 +5,18 @@ package foundryprovider_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 )
 
 func TestWithClientHeaderStampsRequest(t *testing.T) {
+	var requests atomic.Int64
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
 		if got := r.Header.Get("x-client-end-user-id"); got != "user-123" {
 			t.Fatalf("x-client-end-user-id = %q", got)
 		}
@@ -24,6 +29,9 @@ func TestWithClientHeaderStampsRequest(t *testing.T) {
 	if _, err := foundryAgent.RunText(t.Context(), "hello", foundryprovider.WithClientHeader("x-client-end-user-id", "user-123")).Collect(); err != nil {
 		t.Fatalf("RunText error = %v", err)
 	}
+	if got := requests.Load(); got == 0 {
+		t.Fatal("no request was sent")
+	}
 }
 
 func TestWithClientHeaderRejectsInvalidArguments(t *testing.T) {
@@ -35,6 +43,7 @@ func TestWithClientHeaderRejectsInvalidArguments(t *testing.T) {
 		{name: "authorization", header: "authorization", value: "secret"},
 		{name: "custom header", header: "x-custom-header", value: "value"},
 		{name: "missing prefix", header: "client-end-user-id", value: "value"},
+		{name: "missing hyphen after x", header: "xclient-end-user-id", value: "value"},
 		{name: "empty name", header: "", value: "value"},
 		{name: "whitespace name", header: "   ", value: "value"},
 		{name: "empty value", header: "x-client-end-user-id", value: ""},
@@ -119,9 +128,20 @@ func TestWithClientHeaderUpsertsCaseInsensitively(t *testing.T) {
 }
 
 func TestWithClientHeaderDoesNotLeakToSubsequentRun(t *testing.T) {
+	var mu sync.Mutex
 	var values []string
+	var afterRun1 int
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
 		values = append(values, r.Header.Get("x-client-end-user-id"))
+		if afterRun1 > 0 {
+			for name := range r.Header {
+				if strings.EqualFold(name, "x-client-end-user-id") {
+					t.Fatalf("second-run request retained header key %q: %#v", name, r.Header[name])
+				}
+			}
+		}
 		writeResponsesOK(w)
 	}))
 	defer server.Close()
@@ -130,8 +150,26 @@ func TestWithClientHeaderDoesNotLeakToSubsequentRun(t *testing.T) {
 	if _, err := foundryAgent.RunText(t.Context(), "hello", foundryprovider.WithClientHeader("x-client-end-user-id", "alice")).Collect(); err != nil {
 		t.Fatalf("first RunText error = %v", err)
 	}
+	mu.Lock()
+	afterRun1 = len(values)
+	var firstValue string
+	if afterRun1 > 0 {
+		firstValue = values[0]
+	}
+	mu.Unlock()
+	if afterRun1 == 0 {
+		t.Fatal("first run sent no HTTP requests")
+	}
+	if got := firstValue; got != "alice" {
+		t.Fatalf("first-run x-client-end-user-id = %q, want alice", got)
+	}
 	if _, err := foundryAgent.RunText(t.Context(), "hello").Collect(); err != nil {
 		t.Fatalf("second RunText error = %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(values) <= afterRun1 {
+		t.Fatal("second run sent no HTTP requests")
 	}
 	if len(values) != 2 {
 		t.Fatalf("request count = %d", len(values))
@@ -168,7 +206,7 @@ func TestWithHostedAgentUserIdentityRejectsInvalidArguments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertPanics(t, func() { _ = foundryprovider.WithHostedAgentUserIdentity(tt.userIdentity) })
+			assertPanics(t, func() { _ = foundryprovider.WithHostedAgentUserIdentity(tt.userIdentity) }, "hosted agent user identity is required")
 		})
 	}
 }

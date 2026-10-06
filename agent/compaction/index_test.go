@@ -64,29 +64,50 @@ func TestMessageIndex_CountsStableToolContent(t *testing.T) {
 }
 
 func TestMessageIndex_CreateMixedConversationGroupsCorrectly(t *testing.T) {
-	index := compaction.CreateMessageIndex([]*message.Message{
-		textMessage(message.RoleSystem, "system"),
-		textMessage(message.RoleUser, "weather?"),
-		functionCallMessage("call1", "get_weather"),
-		functionResultMessage("call1", "Sunny"),
-		textMessage(message.RoleAssistant, "sunny"),
-	}, nil)
-
-	got := make([]compaction.GroupKind, len(index.Groups))
-	for i, group := range index.Groups {
-		got[i] = group.Kind
-	}
-	want := []compaction.GroupKind{
-		compaction.GroupKindSystem,
-		compaction.GroupKindUser,
-		compaction.GroupKindToolCall,
-		compaction.GroupKindAssistantText,
-	}
-	if !slices.Equal(got, want) {
-		t.Fatalf("unexpected group kinds: got %v want %v", got, want)
-	}
-	if got := index.Groups[2].MessageCount; got != 2 {
-		t.Fatalf("expected tool call group to contain call and result, got %d", got)
+	for _, tt := range []struct {
+		name     string
+		messages []*message.Message
+	}{
+		{
+			name: "text-only tool result",
+			messages: []*message.Message{
+				textMessage(message.RoleSystem, "You are helpful."),
+				textMessage(message.RoleUser, "What's the weather?"),
+				functionCallMessage("call1", "get_weather"),
+				textMessage(message.RoleTool, "Sunny"),
+				textMessage(message.RoleAssistant, "The weather is sunny!"),
+			},
+		},
+		{
+			name: "typed tool result",
+			messages: []*message.Message{
+				textMessage(message.RoleSystem, "system"),
+				textMessage(message.RoleUser, "weather?"),
+				functionCallMessage("call1", "get_weather"),
+				functionResultMessage("call1", "Sunny"),
+				textMessage(message.RoleAssistant, "sunny"),
+			},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			index := compaction.CreateMessageIndex(tt.messages, nil)
+			got := make([]compaction.GroupKind, len(index.Groups))
+			for i, group := range index.Groups {
+				got[i] = group.Kind
+			}
+			want := []compaction.GroupKind{
+				compaction.GroupKindSystem,
+				compaction.GroupKindUser,
+				compaction.GroupKindToolCall,
+				compaction.GroupKindAssistantText,
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("unexpected group kinds: got %v want %v", got, want)
+			}
+			if got := index.Groups[2].MessageCount; got != 2 {
+				t.Fatalf("expected tool call group to contain call and result, got %d", got)
+			}
+		})
 	}
 }
 
@@ -99,6 +120,9 @@ func TestMessageIndex_IncludedAndAllMessagesRespectExclusions(t *testing.T) {
 	index := compaction.CreateMessageIndex(msgs, nil)
 	index.Groups[1].IsExcluded = true
 
+	if got, want := index.IncludedMessages(), []*message.Message{msgs[0], msgs[2]}; !slices.Equal(got, want) {
+		t.Fatalf("unexpected included message references: got %#v want %#v", got, want)
+	}
 	if got, want := messageTexts(index.IncludedMessages()), []string{"first", "second"}; !slices.Equal(got, want) {
 		t.Fatalf("unexpected included messages: got %v want %v", got, want)
 	}
@@ -175,6 +199,12 @@ func TestMessageIndex_UpdateBehaviors(t *testing.T) {
 		textMessage(message.RoleAssistant, "a1"),
 	}
 	index := compaction.CreateMessageIndex(msgs, nil)
+	if got := len(index.Groups); got != 2 {
+		t.Fatalf("expected initial index to contain 2 groups, got %d", got)
+	}
+	if got := index.RawMessageCount(); got != 2 {
+		t.Fatalf("expected initial raw message count 2, got %d", got)
+	}
 	index.Groups[0].IsExcluded = true
 	index.Groups[0].ExcludeReason = "test"
 
@@ -182,6 +212,15 @@ func TestMessageIndex_UpdateBehaviors(t *testing.T) {
 	index.Update(msgs)
 	if got := len(index.Groups); got != 4 {
 		t.Fatalf("expected appended update to produce 4 groups, got %d", got)
+	}
+	if got := index.RawMessageCount(); got != 4 {
+		t.Fatalf("expected appended raw message count 4, got %d", got)
+	}
+	if got := index.Groups[2].Kind; got != compaction.GroupKindUser {
+		t.Fatalf("unexpected appended user group kind: got %v want %v", got, compaction.GroupKindUser)
+	}
+	if got := index.Groups[3].Kind; got != compaction.GroupKindAssistantText {
+		t.Fatalf("unexpected appended assistant group kind: got %v want %v", got, compaction.GroupKindAssistantText)
 	}
 	if !index.Groups[0].IsExcluded || index.Groups[0].ExcludeReason != "test" {
 		t.Fatal("expected existing exclusion state to be preserved")
@@ -239,6 +278,15 @@ func TestMessageIndex_UpdatePreservesStateFromCompactedProjection(t *testing.T) 
 }
 
 func TestMessageIndex_InsertAndAddGroupComputeCounts(t *testing.T) {
+	t.Run("nil turn", func(t *testing.T) {
+		index := compaction.CreateMessageIndex([]*message.Message{textMessage(message.RoleUser, "Q1")}, nil)
+		inserted := index.InsertGroup(0, compaction.GroupKindAssistantText, []*message.Message{textMessage(message.RoleAssistant, "Hello")}, nil)
+		if inserted.ByteCount != 5 || inserted.TokenCount != 1 {
+			t.Fatalf("unexpected inserted counts: bytes=%d tokens=%d", inserted.ByteCount, inserted.TokenCount)
+		}
+		assertNilTurn(t, inserted)
+	})
+
 	index := compaction.CreateMessageIndex([]*message.Message{textMessage(message.RoleUser, "q1")}, nil)
 	turnIndex := 1
 
@@ -288,6 +336,12 @@ func TestMessageIndex_ByteAndTokenCounts(t *testing.T) {
 	}
 
 	index = compaction.CreateMessageIndex([]*message.Message{textMessage(message.RoleUser, "hello world test")}, counter)
+	if got := len(index.Groups); got != 1 {
+		t.Fatalf("expected one group, got %d", got)
+	}
+	if index.TokenCounter == nil {
+		t.Fatal("expected token counter to be retained")
+	}
 	if got, want := index.Groups[0].TokenCount, 3; got != want {
 		t.Fatalf("expected tokenizer count 3, got %d", got)
 	}
@@ -305,6 +359,9 @@ func TestMessageIndex_ReasoningToolCallGrouping(t *testing.T) {
 	if index.Groups[0].Kind != compaction.GroupKindToolCall || index.Groups[0].MessageCount != 3 {
 		t.Fatalf("unexpected reasoning tool call group: kind=%v count=%d", index.Groups[0].Kind, index.Groups[0].MessageCount)
 	}
+	if got, want := index.Groups[0].Messages, []*message.Message{reasoning, toolCall, toolResult}; !slices.Equal(got, want) {
+		t.Fatalf("unexpected reasoning tool call message references: got %#v want %#v", got, want)
+	}
 
 	index = compaction.CreateMessageIndex([]*message.Message{reasoning, textMessage(message.RoleUser, "hello")}, nil)
 	if got, want := []compaction.GroupKind{index.Groups[0].Kind, index.Groups[1].Kind}, []compaction.GroupKind{compaction.GroupKindAssistantText, compaction.GroupKindUser}; !slices.Equal(got, want) {
@@ -314,6 +371,9 @@ func TestMessageIndex_ReasoningToolCallGrouping(t *testing.T) {
 
 func TestMessageIndex_StandaloneToolMessageFallsBackToAssistantText(t *testing.T) {
 	index := compaction.CreateMessageIndex([]*message.Message{textMessage(message.RoleTool, "orphan")}, nil)
+	if got := len(index.Groups); got != 1 {
+		t.Fatalf("expected one orphan tool group, got %d", got)
+	}
 	if got := index.Groups[0].Kind; got != compaction.GroupKindAssistantText {
 		t.Fatalf("unexpected orphan tool kind: got %v want %v", got, compaction.GroupKindAssistantText)
 	}

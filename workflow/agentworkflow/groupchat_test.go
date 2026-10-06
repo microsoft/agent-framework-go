@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
@@ -99,17 +98,25 @@ func TestGroupChatWorkflowBuilder_WithNameOnlySetsWorkflowName(t *testing.T) {
 }
 
 func TestGroupChatWorkflowBuilder_WithoutNameDefaultsToEmptyMetadata(t *testing.T) {
-	wf, err := newGroupChatWorkflow("", func(agents []*agent.Agent) *GroupChatManager {
-		return NewRoundRobinGroupChatManager(agents, RoundRobinGroupChatOptions{MaximumIterationCount: 1})
-	}, newGroupChatLabelAgent("a", "A", "from-a"))
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	if got := wf.Name(); got != "" {
-		t.Fatalf("workflow name = %q, want empty", got)
-	}
-	if got := wf.Description(); got != "" {
-		t.Fatalf("workflow description = %q, want empty", got)
+	for _, setEmptyName := range []bool{false, true} {
+		t.Run(fmt.Sprintf("explicitEmptyName=%v", setEmptyName), func(t *testing.T) {
+			builder := NewGroupChatWorkflowBuilder(func(agents []*agent.Agent) *GroupChatManager {
+				return NewRoundRobinGroupChatManager(agents, RoundRobinGroupChatOptions{MaximumIterationCount: 1})
+			}, newGroupChatLabelAgent("a", "A", "from-a"))
+			if setEmptyName {
+				builder.WithName("")
+			}
+			wf, err := builder.Build()
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if got := wf.Name(); got != "" {
+				t.Fatalf("workflow name = %q, want empty", got)
+			}
+			if got := wf.Description(); got != "" {
+				t.Fatalf("workflow description = %q, want empty", got)
+			}
+		})
 	}
 }
 
@@ -206,6 +213,9 @@ func TestGroupChatWorkflowBuilder_ExplicitOutputDesignationRejectsNonParticipant
 			if !strings.Contains(err.Error(), "not a participant") {
 				t.Fatalf("error = %q, want it to mention not a participant", err.Error())
 			}
+			if !strings.Contains(err.Error(), nonParticipant.Name()) {
+				t.Fatalf("error = %q, want it to identify %q", err.Error(), nonParticipant.Name())
+			}
 		})
 	}
 }
@@ -301,6 +311,9 @@ func TestGroupChatWorkflowBuilder_BroadcastsDeltaAndTargetsTurnTokenToSpeakerOnl
 	if got := collectGroupChatOutputTexts(events); !slices.Equal(got, []string{"hello", "agentA", "agentB", "agentC", "agentA"}) {
 		t.Fatalf("output transcript = %v, want [hello agentA agentB agentC agentA]", got)
 	}
+	if got := collectGroupChatUpdateTexts(events); !slices.Equal(got, []string{"agentA", "agentB", "agentC", "agentA"}) {
+		t.Fatalf("update texts = %v, want one update per selected speaker", got)
+	}
 	if got := agentA.Invocations(); !equalGroupChatInvocations(got, [][]string{{"hello"}, {"agentB", "agentC"}}) {
 		t.Fatalf("agentA invocations = %v, want [[hello] [agentB agentC]]", got)
 	}
@@ -327,7 +340,10 @@ func TestGroupChatWorkflowBuilder_UpdateHistoryFiltersBroadcastPayload(t *testin
 		t.Fatalf("Build: %v", err)
 	}
 
-	_ = runGroupChatWorkflowTurn(t, wf, "hello")
+	events := runGroupChatWorkflowTurn(t, wf, "hello")
+	if got := collectGroupChatOutputTexts(events); !slices.Equal(got, []string{"hello", "agentA", "agentB"}) {
+		t.Fatalf("output transcript = %v, want unmodified canonical history", got)
+	}
 	if got := agentA.Invocations(); !equalGroupChatInvocations(got, [][]string{{"[broadcast] hello"}}) {
 		t.Fatalf("agentA invocations = %v, want [[broadcast hello]]", got)
 	}
@@ -408,8 +424,8 @@ func TestGroupChatWorkflowBuilder_ToolApprovalCheckpointResumePreservesFunctionC
 	}
 	postResponseEvents := slices.Collect(resumed.NewEvents())
 	assertNoGroupChatErrors(t, postResponseEvents)
-	if got := collectGroupChatOutputTexts(postResponseEvents); !slices.Equal(got, []string{"go", "approved"}) {
-		t.Fatalf("output transcript = %v, want [go approved]", got)
+	if got := collectGroupChatOutputTexts(postResponseEvents); !slices.Equal(got, []string{"go", "", "approved"}) {
+		t.Fatalf("output transcript = %v, want [go \"\" approved]", got)
 	}
 }
 
@@ -444,11 +460,11 @@ func TestGroupChatWorkflowBuilder_ToolApprovalDeniedResponseConversationContinue
 	}
 	postResponseEvents := slices.Collect(run.NewEvents())
 	assertNoGroupChatErrors(t, postResponseEvents)
-	if got := collectGroupChatOutputTexts(postResponseEvents); !slices.Equal(got, []string{"go", "denied", "next-agent"}) {
-		t.Fatalf("output transcript = %v, want [go denied next-agent]", got)
+	if got := collectGroupChatOutputTexts(postResponseEvents); !slices.Equal(got, []string{"go", "", "denied", "next-agent"}) {
+		t.Fatalf("output transcript = %v, want [go \"\" denied next-agent]", got)
 	}
-	if got := nextAgent.Invocations(); !equalGroupChatInvocations(got, [][]string{{"go", "denied"}}) {
-		t.Fatalf("next-agent invocations = %v, want [[go denied]]", got)
+	if got := nextAgent.Invocations(); !equalGroupChatInvocations(got, [][]string{{"go", "", "denied"}}) {
+		t.Fatalf("next-agent invocations = %v, want [[go \"\" denied]]", got)
 	}
 }
 
@@ -483,11 +499,11 @@ func TestGroupChatWorkflowBuilder_FunctionCallExternallyResolvedConversationCont
 	}
 	postResponseEvents := slices.Collect(run.NewEvents())
 	assertNoGroupChatErrors(t, postResponseEvents)
-	if got := collectGroupChatOutputTexts(postResponseEvents); !slices.Equal(got, []string{"go", "got:external-data", "next-agent"}) {
-		t.Fatalf("output transcript = %v, want [go got:external-data next-agent]", got)
+	if got := collectGroupChatOutputTexts(postResponseEvents); !slices.Equal(got, []string{"go", "", "got:external-data", "next-agent"}) {
+		t.Fatalf("output transcript = %v, want [go \"\" got:external-data next-agent]", got)
 	}
-	if got := nextAgent.Invocations(); !equalGroupChatInvocations(got, [][]string{{"go", "got:external-data"}}) {
-		t.Fatalf("next-agent invocations = %v, want [[go got:external-data]]", got)
+	if got := nextAgent.Invocations(); !equalGroupChatInvocations(got, [][]string{{"go", "", "got:external-data"}}) {
+		t.Fatalf("next-agent invocations = %v, want [[go \"\" got:external-data]]", got)
 	}
 }
 
@@ -603,19 +619,16 @@ func TestRoundRobinGroupChatManager_ShouldTerminate(t *testing.T) {
 	agentA := newGroupChatLabelAgent("a", "A", "from-a")
 	manager := NewRoundRobinGroupChatManager([]*agent.Agent{agentA}, RoundRobinGroupChatOptions{MaximumIterationCount: 3})
 
-	terminate, err := manager.ShouldTerminate(t.Context(), nil, 2)
-	if err != nil {
-		t.Fatalf("ShouldTerminate before max: %v", err)
-	}
-	if terminate {
-		t.Fatal("ShouldTerminate before max = true, want false")
-	}
-	terminate, err = manager.ShouldTerminate(t.Context(), nil, 3)
-	if err != nil {
-		t.Fatalf("ShouldTerminate at max: %v", err)
-	}
-	if !terminate {
-		t.Fatal("ShouldTerminate at max = false, want true")
+	for _, test := range []struct {
+		iteration int
+		want      bool
+	}{
+		{iteration: 2, want: false},
+		{iteration: 3, want: true},
+	} {
+		if terminate, err := manager.ShouldTerminate(t.Context(), nil, test.iteration); err != nil || terminate != test.want {
+			t.Fatalf("ShouldTerminate(%d) = (%v, %v), want (%v, nil)", test.iteration, terminate, err, test.want)
+		}
 	}
 
 	custom := NewRoundRobinGroupChatManager([]*agent.Agent{agentA}, RoundRobinGroupChatOptions{
@@ -624,7 +637,7 @@ func TestRoundRobinGroupChatManager_ShouldTerminate(t *testing.T) {
 			return slices.Contains(collectGroupChatMessageTexts(history), "done"), nil
 		},
 	})
-	terminate, err = custom.ShouldTerminate(t.Context(), []*message.Message{textMessage("continue")}, 0)
+	terminate, err := custom.ShouldTerminate(t.Context(), []*message.Message{textMessage("continue")}, 0)
 	if err != nil {
 		t.Fatalf("custom ShouldTerminate continue: %v", err)
 	}
@@ -950,9 +963,7 @@ func prefixGroupChatMessages(prefix string, messages []*message.Message) []*mess
 func collectGroupChatMessageTexts(messages []*message.Message) []string {
 	texts := make([]string, 0, len(messages))
 	for _, msg := range messages {
-		if msg != nil && msg.String() != "" {
-			texts = append(texts, msg.String())
-		}
+		texts = append(texts, msg.String())
 	}
 	return texts
 }
@@ -1029,8 +1040,7 @@ func newGroupChatJSONCheckpointManager(t *testing.T) checkpoint.Manager {
 
 func runGroupChatWorkflowTurn(t *testing.T, wf *workflow.Workflow, inputText string) []workflow.Event {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("RunStreaming: %v", err)
@@ -1059,6 +1069,7 @@ func runGroupChatWorkflowTurn(t *testing.T, wf *workflow.Workflow, inputText str
 		}
 		events = append(events, event)
 	}
+	assertNoGroupChatErrors(t, events)
 	return events
 }
 
@@ -1094,11 +1105,7 @@ func collectGroupChatOutputTexts(events []workflow.Event) []string {
 			continue
 		}
 		for _, currentMessage := range messages {
-			for _, content := range currentMessage.Contents {
-				if textContent, ok := content.(*message.TextContent); ok {
-					texts = append(texts, textContent.Text)
-				}
-			}
+			texts = append(texts, currentMessage.String())
 		}
 	}
 	return texts

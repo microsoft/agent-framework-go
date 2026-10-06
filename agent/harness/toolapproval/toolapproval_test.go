@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
 	"strings"
 	"testing"
@@ -53,7 +54,7 @@ func TestToolApproval_PassthroughWithoutApprovalRequests(t *testing.T) {
 	mw := toolapproval.New(toolapproval.Config{})
 	updates := collectUpdates(t, mw, runner.Run, []*message.Message{
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
-	})
+	}, agent.WithSession(agenttest.CreateSession()))
 
 	if len(updates) != 1 {
 		t.Fatalf("expected 1 update, got %d", len(updates))
@@ -132,6 +133,10 @@ func TestToolApproval_SurfacesFirstApprovalRequest(t *testing.T) {
 				Contents: []message.Content{
 					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc1},
 					&message.ToolApprovalRequestContent{RequestID: "r2", ToolCall: fcc2},
+					&message.ToolApprovalRequestContent{
+						RequestID: "r3",
+						ToolCall:  &message.FunctionCallContent{CallID: "c3", Name: "status", Arguments: `{}`},
+					},
 				},
 			}).
 			Build(),
@@ -159,6 +164,9 @@ func TestToolApproval_SurfacesFirstApprovalRequest(t *testing.T) {
 	}
 	if approvalReqs[0].RequestID != "r1" {
 		t.Errorf("expected request ID 'r1', got %q", approvalReqs[0].RequestID)
+	}
+	if fc, ok := approvalReqs[0].ToolCall.(*message.FunctionCallContent); !ok || fc == nil || fc.Name != "deploy" {
+		t.Errorf("expected deploy function call, got %#v", approvalReqs[0].ToolCall)
 	}
 }
 
@@ -460,6 +468,10 @@ func TestToolApproval_QueuedRequestsSurfacedOneAtATime(t *testing.T) {
 				Contents: []message.Content{
 					&message.ToolApprovalRequestContent{RequestID: "r1", ToolCall: fcc1},
 					&message.ToolApprovalRequestContent{RequestID: "r2", ToolCall: fcc2},
+					&message.ToolApprovalRequestContent{
+						RequestID: "r3",
+						ToolCall:  &message.FunctionCallContent{CallID: "c3", Name: "status", Arguments: `{}`},
+					},
 				},
 			}).
 			Build(),
@@ -496,15 +508,23 @@ func TestToolApproval_QueuedRequestsSurfacedOneAtATime(t *testing.T) {
 	)
 
 	var secondReq *message.ToolApprovalRequestContent
+	var secondReqCount int
 	for _, u := range updates {
 		for _, c := range u.Contents {
 			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
 				secondReq = r
+				secondReqCount++
 			}
 		}
 	}
+	if secondReqCount != 1 {
+		t.Fatalf("expected 1 second-run approval request, got %d", secondReqCount)
+	}
 	if secondReq == nil || secondReq.RequestID != "r2" {
 		t.Fatalf("expected second approval request to be r2, got %v", secondReq)
+	}
+	if fc, ok := secondReq.ToolCall.(*message.FunctionCallContent); !ok || fc == nil || fc.Name != "restart" {
+		t.Errorf("expected restart function call, got %#v", secondReq.ToolCall)
 	}
 }
 
@@ -515,6 +535,9 @@ func TestToolApproval_AlwaysApproveToolWithArgumentsResponse(t *testing.T) {
 	}
 
 	resp := req.AlwaysApproveToolWithArgumentsResponse()
+	if resp.AlwaysApproveTool {
+		t.Error("expected AlwaysApproveTool to be false")
+	}
 	if !resp.AlwaysApproveToolWithArguments {
 		t.Error("expected AlwaysApproveToolWithArguments to be true")
 	}
@@ -770,19 +793,27 @@ func TestToolApproval_AlwaysApproveToolWithNoArgumentsDoesNotMatchCallWithArgume
 		opts...,
 	)
 
-	var surfacedReq *message.ToolApprovalRequestContent
+	var surfacedReqs []*message.ToolApprovalRequestContent
 	for _, u := range updates {
 		for _, c := range u.Contents {
 			if r, ok := c.(*message.ToolApprovalRequestContent); ok {
-				surfacedReq = r
+				surfacedReqs = append(surfacedReqs, r)
 			}
 			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
 				t.Fatal("argument-bearing call was auto-approved by an exact no-argument rule")
 			}
 		}
 	}
-	if surfacedReq == nil || surfacedReq.RequestID != "r2" {
+	if len(surfacedReqs) != 1 {
+		t.Fatalf("expected exactly one argument-bearing approval request, got %d", len(surfacedReqs))
+	}
+	surfacedReq := surfacedReqs[0]
+	if surfacedReq.RequestID != "r2" {
 		t.Fatalf("expected argument-bearing request r2 to be surfaced, got %#v", surfacedReq)
+	}
+	fc, ok := surfacedReq.ToolCall.(*message.FunctionCallContent)
+	if !ok || fc.CallID != "c2" || fc.Name != "send_payment" || fc.Arguments != `{"amount":5000,"recipient":"attacker@example.test"}` {
+		t.Fatalf("expected original argument-bearing send_payment call, got %#v", surfacedReq.ToolCall)
 	}
 }
 
@@ -848,7 +879,9 @@ func TestToolApproval_AlwaysApproveToolWithNoArgumentsMatchesLaterNoArgumentsCal
 	)
 
 	var gotDone bool
+	var response agent.Response
 	for _, u := range updates {
+		response.Update(u)
 		for _, c := range u.Contents {
 			if _, ok := c.(*message.ToolApprovalRequestContent); ok {
 				t.Fatal("expected later no-argument call to be auto-approved by exact no-argument rule")
@@ -860,6 +893,9 @@ func TestToolApproval_AlwaysApproveToolWithNoArgumentsMatchesLaterNoArgumentsCal
 	}
 	if !gotDone {
 		t.Fatal("expected done after auto-approval with exact no-argument match")
+	}
+	if got := response.String(); got != "done" {
+		t.Fatalf("response text = %q, want done", got)
 	}
 }
 
@@ -1084,14 +1120,18 @@ func TestToolApproval_NonApprovalRequiredQueuedRequestDrained(t *testing.T) {
 }
 
 func TestAllToolsAutoApprovalRule(t *testing.T) {
-	approved, err := toolapproval.AllToolsAutoApprovalRule(t.Context(), &toolapproval.ToolAutoApprovalRuleContext{
-		FunctionCall: &message.FunctionCallContent{Name: "deploy"},
-	})
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if !approved {
-		t.Fatal("expected all-tools rule to approve the tool call")
+	for _, name := range []string{"deploy", "ReadTool", "DangerousTool", "file_access_delete"} {
+		t.Run(name, func(t *testing.T) {
+			approved, err := toolapproval.AllToolsAutoApprovalRule(t.Context(), &toolapproval.ToolAutoApprovalRuleContext{
+				FunctionCall: &message.FunctionCallContent{Name: name},
+			})
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
+			if !approved {
+				t.Fatal("expected all-tools rule to approve the tool call")
+			}
+		})
 	}
 }
 
@@ -1172,6 +1212,7 @@ func TestToolApproval_AutoApprovalRule_DoesNotMatchSurfacesToCaller(t *testing.T
 	updates := collectUpdates(
 		t, mw, runner.Run,
 		[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "go"}}}},
+		agent.WithSession(agenttest.CreateSession()),
 	)
 
 	var approvalReqs []*message.ToolApprovalRequestContent
@@ -1224,7 +1265,7 @@ func TestToolApproval_AutoApprovalRuleContext_ProvidesRunMetadata(t *testing.T) 
 				AutoApprovalRules: []toolapproval.AutoApprovalRule{
 					func(_ context.Context, ruleCtx *toolapproval.ToolAutoApprovalRuleContext) (bool, error) {
 						captured = ruleCtx
-						return true, nil
+						return ruleCtx.FunctionCall.Name == "ReadTool", nil
 					},
 				},
 			}),
@@ -1232,10 +1273,15 @@ func TestToolApproval_AutoApprovalRuleContext_ProvidesRunMetadata(t *testing.T) 
 	})
 
 	session := agenttest.CreateSession()
-	for _, err := range ag.Run(context.Background(), requestMessages, agent.WithSession(session), agent.WithInstructions("use care")) {
+	var response agent.Response
+	for update, err := range ag.Run(context.Background(), requestMessages, agent.WithSession(session), agent.WithInstructions("use care")) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
+		response.Update(update)
+	}
+	if got := response.String(); got != "done" {
+		t.Fatalf("response text = %q, want done", got)
 	}
 
 	if captured == nil {
@@ -1247,8 +1293,8 @@ func TestToolApproval_AutoApprovalRuleContext_ProvidesRunMetadata(t *testing.T) 
 	if captured.Session != session {
 		t.Fatalf("expected session %p, got %p", session, captured.Session)
 	}
-	if captured.Agent == nil {
-		t.Fatal("expected agent in auto-approval rule context")
+	if captured.Agent != ag {
+		t.Fatalf("expected agent %p, got %p", ag, captured.Agent)
 	}
 	if captured.Agent.ID() != "toolapproval-test-agent" {
 		t.Fatalf("expected agent ID %q, got %q", "toolapproval-test-agent", captured.Agent.ID())
@@ -1361,7 +1407,9 @@ func TestToolApproval_StandingRuleTakesPrecedenceOverAutoApprovalRule(t *testing
 	}
 
 	var gotDone bool
+	var response agent.Response
 	for _, u := range updates {
+		response.Update(u)
 		for _, c := range u.Contents {
 			if tc, ok := c.(*message.TextContent); ok && tc.Text == "done" {
 				gotDone = true
@@ -1370,6 +1418,9 @@ func TestToolApproval_StandingRuleTakesPrecedenceOverAutoApprovalRule(t *testing
 	}
 	if !gotDone {
 		t.Error("expected 'done' after auto-approval rule approved on first turn")
+	}
+	if got := response.String(); got != "done" {
+		t.Fatalf("response text without standing rule = %q, want done", got)
 	}
 }
 
@@ -1581,46 +1632,56 @@ func TestToolApproval_NilUpdatePassthrough(t *testing.T) {
 }
 
 func TestToolApproval_AutoApprovedRequestsStopAtDefaultIterationCap(t *testing.T) {
-	var callCount int
-	next := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
-		return func(yield func(*agent.ResponseUpdate, error) bool) {
-			callCount++
-			yield(&agent.ResponseUpdate{
-				Role: message.RoleAssistant,
-				Contents: []message.Content{
-					&message.ToolApprovalRequestContent{
-						RequestID: "r1",
-						ToolCall: &message.FunctionCallContent{
-							CallID: "c1",
-							Name:   "load_skill",
-						},
-					},
-				},
-			}, nil)
-		}
-	}
+	wantCalls := toolapproval.DefaultMaxAutoApprovalIterations + 1
+	for _, state := range []string{"without session", "with session"} {
+		t.Run(state, func(t *testing.T) {
+			var callCount int
+			next := func(_ context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				return func(yield func(*agent.ResponseUpdate, error) bool) {
+					callCount++
+					if callCount > wantCalls {
+						t.Fatalf("inner invocations exceeded the default cap: %d", callCount)
+					}
+					yield(&agent.ResponseUpdate{
+						Role: message.RoleAssistant,
+						Contents: message.Contents{&message.ToolApprovalRequestContent{
+							RequestID: fmt.Sprintf("r%d", callCount),
+							ToolCall: &message.FunctionCallContent{
+								CallID: fmt.Sprintf("c%d", callCount),
+								Name:   "load_skill",
+							},
+						}},
+					}, nil)
+				}
+			}
 
-	mw := toolapproval.New(toolapproval.Config{
-		AutoApprovalRules: []toolapproval.AutoApprovalRule{
-			autoApprovalRule(func(*message.FunctionCallContent) (bool, error) { return true, nil }),
-		},
-	})
+			mw := toolapproval.New(toolapproval.Config{
+				AutoApprovalRules: []toolapproval.AutoApprovalRule{toolapproval.AllToolsAutoApprovalRule},
+			})
+			var opts []agent.Option
+			if state == "with session" {
+				opts = append(opts, agent.WithSession(agenttest.CreateSession()))
+			}
+			updates := collectUpdates(t, mw, next, []*message.Message{message.NewText("hi")}, opts...)
 
-	updates := collectUpdates(t, mw, next, []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
-	})
-
-	if callCount != 41 {
-		t.Fatalf("expected 41 inner invocations (40 auto-approved turns plus one final surfaced turn), got %d", callCount)
-	}
-	if len(updates) != 1 {
-		t.Fatalf("expected 1 surfaced update after hitting the cap, got %d", len(updates))
-	}
-	if len(updates[0].Contents) != 1 {
-		t.Fatalf("expected final update to contain the unsplit approval request, got %#v", updates[0].Contents)
-	}
-	if _, ok := updates[0].Contents[0].(*message.ToolApprovalRequestContent); !ok {
-		t.Fatalf("expected final update to surface the approval request, got %#v", updates[0].Contents[0])
+			if callCount != wantCalls {
+				t.Fatalf("expected %d inner invocations including the final surfaced turn, got %d", wantCalls, callCount)
+			}
+			if len(updates) != 1 {
+				t.Fatalf("expected 1 surfaced update after hitting the cap, got %d", len(updates))
+			}
+			if updates[0] == nil || len(updates[0].Contents) != 1 {
+				t.Fatalf("expected final update to contain the unsplit approval request, got %#v", updates[0])
+			}
+			request, ok := updates[0].Contents[0].(*message.ToolApprovalRequestContent)
+			if !ok || request.RequestID != fmt.Sprintf("r%d", wantCalls) {
+				t.Fatalf("expected final turn's approval request, got %#v", updates[0].Contents[0])
+			}
+			call, ok := request.ToolCall.(*message.FunctionCallContent)
+			if !ok || call.CallID != fmt.Sprintf("c%d", wantCalls) || call.Name != "load_skill" {
+				t.Fatalf("expected final turn's tool call, got %#v", request.ToolCall)
+			}
+		})
 	}
 }
 
@@ -1633,9 +1694,9 @@ func TestToolApproval_AutoApprovedRequestsStopAtConfiguredIterationCap(t *testin
 				Role: message.RoleAssistant,
 				Contents: []message.Content{
 					&message.ToolApprovalRequestContent{
-						RequestID: "r1",
+						RequestID: fmt.Sprintf("r%d", callCount),
 						ToolCall: &message.FunctionCallContent{
-							CallID: "c1",
+							CallID: fmt.Sprintf("c%d", callCount),
 							Name:   "load_skill",
 						},
 					},
@@ -1653,7 +1714,7 @@ func TestToolApproval_AutoApprovedRequestsStopAtConfiguredIterationCap(t *testin
 
 	updates := collectUpdates(t, mw, next, []*message.Message{
 		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
-	})
+	}, agent.WithSession(agenttest.CreateSession()))
 
 	if callCount != 4 {
 		t.Fatalf("expected 4 inner invocations (3 auto-approved turns plus one final surfaced turn), got %d", callCount)

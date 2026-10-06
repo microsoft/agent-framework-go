@@ -16,12 +16,31 @@ func TestOutputTag_JSONRoundtrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal() error = %v", err)
 	}
+	if string(data) != `"intermediate"` {
+		t.Fatalf("Marshal() = %s, want bare JSON string %q", data, `"intermediate"`)
+	}
 	var got workflow.OutputTag
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
 	if got != workflow.OutputTagIntermediate {
 		t.Fatalf("roundtrip = %q, want %q", got, workflow.OutputTagIntermediate)
+	}
+
+	var known workflow.OutputTag
+	if err := json.Unmarshal([]byte(`"intermediate"`), &known); err != nil {
+		t.Fatalf("Unmarshal known literal: %v", err)
+	}
+	if known != workflow.OutputTagIntermediate {
+		t.Fatalf("known literal = %q, want %q", known, workflow.OutputTagIntermediate)
+	}
+
+	var custom workflow.OutputTag
+	if err := json.Unmarshal([]byte(`"custom"`), &custom); err != nil {
+		t.Fatalf("Unmarshal custom literal: %v", err)
+	}
+	if custom.Value() != "custom" {
+		t.Fatalf("custom Value() = %q, want custom", custom.Value())
 	}
 }
 
@@ -40,6 +59,7 @@ func TestEdgeConnection_JsonRoundtrip(t *testing.T) {
 		{SourceIDs: []string{"a"}, SinkIDs: []string{"b"}},
 		{SourceIDs: []string{"s1", "s2"}, SinkIDs: []string{"t1"}},
 		{SourceIDs: []string{"src"}, SinkIDs: []string{"sink1", "sink2", "sink3"}},
+		{SourceIDs: []string{"s1", "s2"}, SinkIDs: []string{"t1", "t2"}},
 	}
 	for i, c := range cases {
 		t.Run("case-"+itoa(i), func(t *testing.T) {
@@ -81,6 +101,12 @@ func TestRequestPortInfo_JsonRoundtrip(t *testing.T) {
 	}
 	if got.ResponseType != info.ResponseType {
 		t.Errorf("ResponseType = %+v, want %+v", got.ResponseType, info.ResponseType)
+	}
+	if !got.RequestType.Match(port.Request) {
+		t.Errorf("RequestType = %v, want a match for %v", got.RequestType, port.Request)
+	}
+	if !got.ResponseType.Match(port.Response) {
+		t.Errorf("ResponseType = %v, want a match for %v", got.ResponseType, port.Response)
 	}
 }
 
@@ -125,6 +151,9 @@ func TestExternalRequest_JsonRoundtrip(t *testing.T) {
 	if got.PortInfo != request.PortInfo {
 		t.Fatalf("PortInfo = %+v, want %+v", got.PortInfo, request.PortInfo)
 	}
+	if got.Data.TypeID != request.Data.TypeID {
+		t.Fatalf("Data.TypeID = %v, want %v", got.Data.TypeID, request.Data.TypeID)
+	}
 	value, ok := workflow.PortableValueAs[string](got.Data)
 	if !ok || value != "payload" {
 		t.Fatalf("Data = %q, %v; want payload, true", value, ok)
@@ -159,6 +188,9 @@ func TestExternalResponse_JsonRoundtrip(t *testing.T) {
 	}
 	if got.PortInfo != response.PortInfo {
 		t.Fatalf("PortInfo = %+v, want %+v", got.PortInfo, response.PortInfo)
+	}
+	if got.Data.TypeID != response.Data.TypeID {
+		t.Fatalf("Data.TypeID = %v, want %v", got.Data.TypeID, response.Data.TypeID)
 	}
 	value, ok := workflow.PortableValueAs[int](got.Data)
 	if !ok || value != 13 {
@@ -340,6 +372,13 @@ func TestScopeKey_JsonRoundtrip(t *testing.T) {
 				Key: "state-key",
 			},
 		},
+		{
+			name: "shared scope key with executor",
+			key: workflow.ScopeKey{
+				ID:  workflow.ScopeID{ScopeName: "shared-state", ExecutorID: "exec-1"},
+				Key: "state-key",
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -353,6 +392,15 @@ func TestScopeKey_JsonRoundtrip(t *testing.T) {
 			}
 			if !got.Equal(tc.key) {
 				t.Fatalf("roundtrip = %+v, want %+v", got, tc.key)
+			}
+			if got.Key != tc.key.Key {
+				t.Errorf("Key = %q, want %q", got.Key, tc.key.Key)
+			}
+			if got.ID.ScopeName != tc.key.ID.ScopeName {
+				t.Errorf("ScopeName = %q, want %q", got.ID.ScopeName, tc.key.ID.ScopeName)
+			}
+			if got.ID.ExecutorID != tc.key.ID.ExecutorID {
+				t.Errorf("ExecutorID = %q, want %q", got.ID.ExecutorID, tc.key.ID.ExecutorID)
 			}
 		})
 	}

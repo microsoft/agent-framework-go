@@ -42,31 +42,42 @@ func TestE2E_RunTextReturnsResponse(t *testing.T) {
 }
 
 func TestE2E_RunTextStreamingReturnsUpdates(t *testing.T) {
-	client := newE2EClient(t)
-	canaryAgent := copilotprovider.NewAgent(client, copilotprovider.AgentConfig{
-		SessionConfig: restrictedSessionConfig(nil),
-	})
-	session := newE2ESession(t, canaryAgent, client)
+	skipUnlessE2EEnabled(t)
+	for _, variant := range []struct {
+		name   string
+		config *copilot.SessionConfig
+	}{
+		{name: "restricted", config: restrictedSessionConfig(nil)},
+		{name: "upstream_defaults"},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			client := newE2EClient(t)
+			canaryAgent := copilotprovider.NewAgent(client, copilotprovider.AgentConfig{
+				SessionConfig: variant.config,
+			})
+			session := newE2ESession(t, canaryAgent, client)
 
-	var responseText strings.Builder
-	var updates int
-	for update, err := range canaryAgent.RunText(
-		t.Context(),
-		"What is 2 + 2? Answer with just the number.",
-		agent.WithSession(session),
-		agent.Stream(true),
-	) {
-		if err != nil {
-			t.Fatal(err)
-		}
-		updates++
-		responseText.WriteString(update.String())
-	}
-	if updates == 0 {
-		t.Fatal("stream contains no updates")
-	}
-	if !strings.Contains(responseText.String(), "4") {
-		t.Fatalf("streamed response = %q, want it to contain 4", responseText.String())
+			var responseText strings.Builder
+			var updates int
+			for update, err := range canaryAgent.RunText(
+				t.Context(),
+				"What is 2 + 2? Answer with just the number.",
+				agent.WithSession(session),
+				agent.Stream(true),
+			) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				updates++
+				responseText.WriteString(update.String())
+			}
+			if updates == 0 {
+				t.Fatal("stream contains no updates")
+			}
+			if !strings.Contains(responseText.String(), "4") {
+				t.Fatalf("streamed response = %q, want it to contain 4", responseText.String())
+			}
+		})
 	}
 }
 
@@ -150,8 +161,12 @@ func TestE2E_RunTextMaintainsSessionContext(t *testing.T) {
 	session := newE2ESession(t, canaryAgent, client)
 
 	ctx := t.Context()
-	if _, err := canaryAgent.RunText(ctx, "My name is Alice.", agent.WithSession(session), agent.Stream(false)).Collect(); err != nil {
+	firstResponse, err := canaryAgent.RunText(ctx, "My name is Alice.", agent.WithSession(session), agent.Stream(false)).Collect()
+	if err != nil {
 		t.Fatal(err)
+	}
+	if firstResponse == nil {
+		t.Fatal("first response is nil")
 	}
 	response, err := canaryAgent.RunText(ctx, "What is my name?", agent.WithSession(session), agent.Stream(false)).Collect()
 	if err != nil {

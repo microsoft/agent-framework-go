@@ -188,6 +188,7 @@ func NewSourceOptions(opts SourceOptions, filesystems ...fs.FS) *Source {
 }
 
 // Skills discovers and loads valid skills from the configured filesystems.
+// Each skill retains the instruction text read during discovery.
 func (s *Source) Skills(ctx context.Context) ([]*skills.Skill, error) {
 	directories := discoverSkillDirectories(s.filesystems, s.logger)
 	s.logger.Info("Discovered potential skills", "count", len(directories))
@@ -287,23 +288,19 @@ func (s *Source) parseSkillDirectory(directory discoveredSkillDir) *skills.Skill
 	var (
 		contentOnce   sync.Once
 		cachedContent string
-		contentErr    error
 	)
 	return &skills.Skill{
 		Frontmatter: frontmatter,
 		GetContent: func(context.Context) (string, error) {
 			contentOnce.Do(func() {
-				data, err := fs.ReadFile(skillFS, skillFileName)
-				if err != nil {
-					contentErr = err
-					return
-				}
-				raw := string(data)
+				// Keep the body paired with its parsed metadata; do not reopen a
+				// path that may have been replaced since discovery.
+				raw := content
 				raw += "\n" + buildAvailableResourcesBlock(resources)
 				raw += "\n" + buildAvailableScriptsBlock(scripts)
 				cachedContent = raw
 			})
-			return cachedContent, contentErr
+			return cachedContent, nil
 		},
 		Resources: resources,
 		Scripts:   scripts,

@@ -70,12 +70,15 @@ func TestConstructor_WithDefaultParameters_UsesBaseProperties(t *testing.T) {
 func TestCreateSession_ReturnsSession(t *testing.T) {
 	agent := copilotprovider.NewAgent(copilot.NewClient(nil), copilotprovider.AgentConfig{})
 
-	session, err := agent.CreateSession(context.Background())
+	session, err := agent.CreateSession(t.Context())
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	if session == nil {
 		t.Fatal("session is nil")
+	}
+	if got := session.ServiceID(); got != "" {
+		t.Fatalf("new session ServiceID = %q, want empty", got)
 	}
 }
 
@@ -349,14 +352,23 @@ func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenStreaming_DoesNot
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
 
-	response, err := runText(t, agent, "hello")
-	if err != nil {
-		t.Fatalf("RunText: %v", err)
+	var response agentpkg.Response
+	for update, err := range agent.RunText(t.Context(), "hello") {
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		for _, content := range update.Contents {
+			if _, ok := content.(*message.TextContent); ok {
+				t.Fatalf("streaming completion emitted TextContent: %#v", content)
+			}
+		}
+		response.Update(update)
 	}
+	response.Coalesce()
 	if got := response.String(); got != "" {
 		t.Fatalf("response text = %q, want empty", got)
 	}
-	_ = firstContent[*message.RawContent](t, response)
+	_ = firstContent[*message.RawContent](t, &response)
 }
 
 func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenNotStreaming_EmitsTextContent(t *testing.T) {
@@ -393,7 +405,13 @@ func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenNotStreaming_Hand
 	if got := response.String(); got != "" {
 		t.Fatalf("response text = %q, want empty", got)
 	}
-	_ = firstContent[*message.TextContent](t, response)
+	text := firstContent[*message.TextContent](t, response)
+	if text.Text != "" {
+		t.Fatalf("TextContent.Text = %q, want empty", text.Text)
+	}
+	if response.ID != "msg-000" || len(response.Messages) != 1 || response.Messages[0].ID != "msg-000" {
+		t.Fatalf("empty content lost response/message identity: %#v", response)
+	}
 }
 
 func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenNotStreaming_HandlesNullData(t *testing.T) {
@@ -460,6 +478,9 @@ func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithNullArguments_
 	}
 	if call.Arguments != "" {
 		t.Fatalf("Arguments = %q, want empty", call.Arguments)
+	}
+	if call.Error != nil {
+		t.Fatalf("null arguments produced an error: %v", call.Error)
 	}
 }
 
@@ -616,6 +637,9 @@ func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithNullData_Produ
 	if call.CallID != "" || call.Name != "" || call.Arguments != "" {
 		t.Fatalf("call = (%q, %q, %q), want empty fields", call.CallID, call.Name, call.Arguments)
 	}
+	if call.Error != nil {
+		t.Fatalf("null event data produced an argument error: %v", call.Error)
+	}
 }
 
 func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithSuccess_ProducesFunctionResultContent(t *testing.T) {
@@ -703,6 +727,9 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithNullData_Pr
 	if result.CallID != "" || result.Result != "Tool execution failed" {
 		t.Fatalf("result = (%q, %#v), want empty call ID and default failure", result.CallID, result.Result)
 	}
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "tool execution failed") {
+		t.Fatalf("Error = %v, want default failure error", result.Error)
+	}
 }
 
 func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithSuccessButNullResult_ProducesNullResult(t *testing.T) {
@@ -720,6 +747,9 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithSuccessButN
 	if result.CallID != "call-null-result" || result.Result != nil {
 		t.Fatalf("result = (%q, %#v), want nil", result.CallID, result.Result)
 	}
+	if result.Error != nil {
+		t.Fatalf("successful null result produced an error: %v", result.Error)
+	}
 }
 
 func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithEmptyObjectArguments_ProducesEmptyObjectArguments(t *testing.T) {
@@ -734,8 +764,11 @@ func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithEmptyObjectArg
 		t.Fatalf("RunText: %v", err)
 	}
 	call := firstContent[*message.FunctionCallContent](t, response)
-	if call.CallID != "call-empty" || call.Arguments != "{}" {
-		t.Fatalf("call = (%q, %q), want empty object arguments", call.CallID, call.Arguments)
+	if call.CallID != "call-empty" || call.Name != "noArgsTool" || call.Arguments != "{}" {
+		t.Fatalf("call = (%q, %q, %q), want call-empty/noArgsTool with empty object arguments", call.CallID, call.Name, call.Arguments)
+	}
+	if call.Error != nil {
+		t.Fatalf("empty object arguments produced an error: %v", call.Error)
 	}
 }
 
@@ -754,12 +787,15 @@ func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithMultipleArgume
 	if call.CallID != "call-multi" || call.Name != "queryTable" {
 		t.Fatalf("call = (%q, %q), want call-multi/queryTable", call.CallID, call.Name)
 	}
+	if call.Error != nil {
+		t.Fatalf("object arguments produced an error: %v", call.Error)
+	}
 	var args map[string]any
 	if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
 		t.Fatalf("unmarshal arguments: %v", err)
 	}
-	if args["table"] != "incidents" || args["limit"] != float64(10) || args["filter"] != "active=true" {
-		t.Fatalf("arguments = %#v, want all top-level arguments", args)
+	if len(args) != 3 || args["table"] != "incidents" || args["limit"] != float64(10) || args["filter"] != "active=true" {
+		t.Fatalf("arguments = %#v, want exactly the three top-level arguments", args)
 	}
 }
 

@@ -168,6 +168,9 @@ func TestSequentialWorkflowBuilder_ExplicitOutputDesignationRejectsNonParticipan
 			if !strings.Contains(err.Error(), "not a participant") {
 				t.Fatalf("error = %q, want it to mention not a participant", err.Error())
 			}
+			if !strings.Contains(err.Error(), nonParticipant.Name()) {
+				t.Fatalf("error = %q, want it to identify %q", err.Error(), nonParticipant.Name())
+			}
 		})
 	}
 }
@@ -204,16 +207,21 @@ func TestSequentialWorkflowBuilder_AgentsRunInOrder(t *testing.T) {
 				if len(resultMessages) != numAgents+1 {
 					t.Fatalf("result count = %d, want %d", len(resultMessages), numAgents+1)
 				}
-				if resultMessages[0].Role != message.RoleUser {
-					t.Fatalf("result[0].Role = %q, want %q", resultMessages[0].Role, message.RoleUser)
-				}
-				for resultIndex, resultMessage := range resultMessages[1:] {
-					wantAuthorName := fmt.Sprintf("agent%d", resultIndex+1)
-					if resultMessage.Role != message.RoleAssistant {
-						t.Fatalf("result[%d].Role = %q, want %q", resultIndex+1, resultMessage.Role, message.RoleAssistant)
+				for resultIndex, resultMessage := range resultMessages {
+					if got := resultMessage.String(); got != wantResultTexts[resultIndex] {
+						t.Fatalf("result[%d] text = %q, want %q", resultIndex, got, wantResultTexts[resultIndex])
+					}
+					wantRole := message.RoleUser
+					wantAuthorName := ""
+					if resultIndex > 0 {
+						wantRole = message.RoleAssistant
+						wantAuthorName = fmt.Sprintf("agent%d", resultIndex)
+					}
+					if resultMessage.Role != wantRole {
+						t.Fatalf("result[%d].Role = %q, want %q", resultIndex, resultMessage.Role, wantRole)
 					}
 					if resultMessage.AuthorName != wantAuthorName {
-						t.Fatalf("result[%d].AuthorName = %q, want %q", resultIndex+1, resultMessage.AuthorName, wantAuthorName)
+						t.Fatalf("result[%d].AuthorName = %q, want %q", resultIndex, resultMessage.AuthorName, wantAuthorName)
 					}
 				}
 			}

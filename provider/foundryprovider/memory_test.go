@@ -20,38 +20,43 @@ import (
 
 func TestNewMemoryProviderPanicsWithInvalidArguments(t *testing.T) {
 	tests := []struct {
-		name string
-		act  func()
+		name        string
+		act         func()
+		wantMessage string
 	}{
 		{
 			name: "empty endpoint",
 			act: func() {
 				_ = foundryprovider.NewMemoryProvider(" ", validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{})
 			},
+			wantMessage: "endpoint is required",
 		},
 		{
 			name: "nil credential",
 			act: func() {
 				_ = foundryprovider.NewMemoryProvider(validEndpoint, nil, "memory", validScope, foundryprovider.MemoryProviderConfig{})
 			},
+			wantMessage: "credential is required",
 		},
 		{
 			name: "empty memory store",
 			act: func() {
 				_ = foundryprovider.NewMemoryProvider(validEndpoint, validCredential, " ", validScope, foundryprovider.MemoryProviderConfig{})
 			},
+			wantMessage: "memory store name is required",
 		},
 		{
 			name: "nil scope",
 			act: func() {
 				_ = foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", nil, foundryprovider.MemoryProviderConfig{})
 			},
+			wantMessage: "memory scope is required",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertPanics(t, tt.act)
+			assertPanics(t, tt.act, tt.wantMessage)
 		})
 	}
 }
@@ -164,7 +169,7 @@ func TestMemoryProviderPanicsWhenScopeIsEmptyOnUse(t *testing.T) {
 	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", func(*agent.Session) string { return " " }, foundryprovider.MemoryProviderConfig{})
 	assertPanics(t, func() {
 		_, _, _ = provider.Invoking(t.Context(), agent.InvokingContext{Messages: []*message.Message{message.NewText("hello")}})
-	})
+	}, "memory scope must not be empty")
 }
 
 func TestMemoryProviderInvokingSearchesAndInjectsRetrievedMemories(t *testing.T) {

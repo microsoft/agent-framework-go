@@ -226,14 +226,18 @@ func TestProviderConfig_ManagesToolExecution(t *testing.T) {
 }
 
 func TestProviderConfig_ManagesToolExecution_InsideProviderMiddleware(t *testing.T) {
+	var executionOrder []string
 	fn := functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) {
+		executionOrder = append(executionOrder, "tool")
 		return "found", nil
 	})
 	functionMiddleware := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+		executionOrder = append(executionOrder, "function before")
 		if invocation.Function != fn {
 			t.Error("middleware did not receive the original tool")
 		}
 		result, err := next(ctx, invocation)
+		executionOrder = append(executionOrder, "function after")
 		if err != nil {
 			return nil, err
 		}
@@ -241,6 +245,7 @@ func TestProviderConfig_ManagesToolExecution_InsideProviderMiddleware(t *testing
 	})
 	providerMiddleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			executionOrder = append(executionOrder, "run before")
 			for range 2 {
 				original, _ := agent.GetOption(options, agent.WithTool)
 				if original != fn {
@@ -255,6 +260,7 @@ func TestProviderConfig_ManagesToolExecution_InsideProviderMiddleware(t *testing
 					t.Fatal("wrapping mutated provider middleware's options")
 				}
 			}
+			executionOrder = append(executionOrder, "run after")
 		}
 	})
 	run := func(ctx context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -280,6 +286,15 @@ func TestProviderConfig_ManagesToolExecution_InsideProviderMiddleware(t *testing
 	}
 	if !slices.Equal(results, []string{"wrapped found", "wrapped found"}) {
 		t.Errorf("results = %v, want [wrapped found wrapped found]", results)
+	}
+	wantOrder := []string{
+		"run before",
+		"function before", "tool", "function after",
+		"function before", "tool", "function after",
+		"run after",
+	}
+	if !slices.Equal(executionOrder, wantOrder) {
+		t.Errorf("execution order = %v, want %v", executionOrder, wantOrder)
 	}
 }
 

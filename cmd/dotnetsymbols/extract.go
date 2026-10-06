@@ -43,54 +43,16 @@ func extractAssembly(file string, selected selection) (string, assemblyInfo, map
 }
 
 func extractAssemblyBytes(data []byte, selected selection) (assemblyName string, info assemblyInfo, types map[string]typeInfo, err error) {
-	image, err := pe.NewFile(bytes.NewReader(data))
-	if err != nil {
-		return "", assemblyInfo{}, nil, fmt.Errorf("PE: %w", err)
-	}
-	metadata, err := winmd.New(image)
-	if err != nil {
-		return "", assemblyInfo{}, nil, fmt.Errorf("CLI metadata: %w", err)
-	}
-	if count := metadata.Tables.Assembly.Len(); count != 1 {
-		return "", assemblyInfo{}, nil, fmt.Errorf("assembly: expected exactly one manifest row, got %d; netmodules are not supported", count)
-	}
-	assembly, err := metadata.Tables.Assembly.At(0)
+	assemblyName, info, extractor, err := readAssembly(data, selected)
 	if err != nil {
 		return "", assemblyInfo{}, nil, err
-	}
-	assemblyName = assembly.Name.String()
-	if assemblyName == "" {
-		return "", assemblyInfo{}, nil, fmt.Errorf("Assembly[0]: empty assembly name")
-	}
-	if count := metadata.Tables.Module.Len(); count != 1 {
-		return "", assemblyInfo{}, nil, fmt.Errorf("module: expected exactly one manifest module, got %d", count)
-	}
-	if _, err := metadata.Tables.Module.At(0); err != nil {
-		return "", assemblyInfo{}, nil, err
-	}
-	for index := range metadata.Tables.File.Indices() {
-		file, err := metadata.Tables.File.At(index)
-		if err != nil {
-			return "", assemblyInfo{}, nil, err
-		}
-		if file.Flags.Content() == winmd.FileContent_ContainsMetaData {
-			return "", assemblyInfo{}, nil, fmt.Errorf("file[%d] %q: multi-module assemblies are not supported", index, file.Name)
-		}
-	}
-	extractor, err := newAssemblyExtractor(metadata, selected)
-	if err != nil {
-		return "", assemblyInfo{}, nil, err
-	}
-	assemblyAttributes, err := extractor.readAttributes(winmd.CodedIndex[winmd.HasCustomAttribute]{Tag: winmd.HasCustomAttribute_Assembly, Index: 0})
-	if err != nil {
-		return "", assemblyInfo{}, nil, fmt.Errorf("Assembly[0] %q: %w", assemblyName, err)
 	}
 	forwarded, err := extractor.forwardedTypes()
 	if err != nil {
 		return "", assemblyInfo{}, nil, err
 	}
 	types = make(map[string]typeInfo)
-	for index := range metadata.Tables.TypeDef.Indices() {
+	for index := range extractor.metadata.Tables.TypeDef.Indices() {
 		name, err := extractor.signatures.namedType(winmd.CodedIndex[winmd.TypeDefOrRefOrSpec]{Tag: winmd.TypeDefOrRefOrSpec_TypeDef, Index: index}, 0)
 		if err != nil {
 			return "", assemblyInfo{}, nil, err
@@ -117,15 +79,63 @@ func extractAssemblyBytes(data []byte, selected selection) (assemblyName string,
 		}
 		types[name.name] = typ
 	}
-	info = assemblyInfo{
+	info.ForwardedTypes = forwarded
+	return assemblyName, info, types, nil
+}
+
+// readAssembly shares metadata decoding and provenance between API and test
+// extraction. Selection is applied by the caller, not while opening metadata.
+func readAssembly(data []byte, selected selection) (string, assemblyInfo, *assemblyExtractor, error) {
+	image, err := pe.NewFile(bytes.NewReader(data))
+	if err != nil {
+		return "", assemblyInfo{}, nil, fmt.Errorf("PE: %w", err)
+	}
+	metadata, err := winmd.New(image)
+	if err != nil {
+		return "", assemblyInfo{}, nil, fmt.Errorf("CLI metadata: %w", err)
+	}
+	if count := metadata.Tables.Assembly.Len(); count != 1 {
+		return "", assemblyInfo{}, nil, fmt.Errorf("assembly: expected exactly one manifest row, got %d; netmodules are not supported", count)
+	}
+	assembly, err := metadata.Tables.Assembly.At(0)
+	if err != nil {
+		return "", assemblyInfo{}, nil, err
+	}
+	assemblyName := assembly.Name.String()
+	if assemblyName == "" {
+		return "", assemblyInfo{}, nil, fmt.Errorf("Assembly[0]: empty assembly name")
+	}
+	if count := metadata.Tables.Module.Len(); count != 1 {
+		return "", assemblyInfo{}, nil, fmt.Errorf("module: expected exactly one manifest module, got %d", count)
+	}
+	if _, err := metadata.Tables.Module.At(0); err != nil {
+		return "", assemblyInfo{}, nil, err
+	}
+	for index := range metadata.Tables.File.Indices() {
+		file, err := metadata.Tables.File.At(index)
+		if err != nil {
+			return "", assemblyInfo{}, nil, err
+		}
+		if file.Flags.Content() == winmd.FileContent_ContainsMetaData {
+			return "", assemblyInfo{}, nil, fmt.Errorf("file[%d] %q: multi-module assemblies are not supported", index, file.Name)
+		}
+	}
+	extractor, err := newAssemblyExtractor(metadata, selected)
+	if err != nil {
+		return "", assemblyInfo{}, nil, err
+	}
+	assemblyAttributes, err := extractor.readAttributes(winmd.CodedIndex[winmd.HasCustomAttribute]{Tag: winmd.HasCustomAttribute_Assembly, Index: 0})
+	if err != nil {
+		return "", assemblyInfo{}, nil, fmt.Errorf("Assembly[0] %q: %w", assemblyName, err)
+	}
+	info := assemblyInfo{
 		Version:              fmt.Sprintf("%d.%d.%d.%d", assembly.MajorVersion, assembly.MinorVersion, assembly.BuildNumber, assembly.RevisionNumber),
 		InformationalVersion: assemblyAttributes.informationalVersion,
 		TargetFramework:      assemblyAttributes.targetFramework,
 		SHA256:               fmt.Sprintf("%x", sha256.Sum256(data)),
 		ReferenceAssembly:    assemblyAttributes.referenceAssembly,
-		ForwardedTypes:       forwarded,
 	}
-	return assemblyName, info, types, nil
+	return assemblyName, info, extractor, nil
 }
 
 func newAssemblyExtractor(metadata *winmd.Metadata, selected selection) (*assemblyExtractor, error) {

@@ -1,7 +1,8 @@
 // Copyright (c) Microsoft. All rights reserved.
 
 // dotnetsymbols reads local or published .NET assembly metadata without executing code.
-// It writes a deterministic public-symbol inventory to standard output.
+// It optionally adds test declarations from selected local test assemblies
+// and writes a deterministic inventory to standard output.
 package main
 
 import (
@@ -15,6 +16,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/microsoft/agent-framework-go/cmd/internal/testinventory"
 )
 
 func main() {
@@ -27,12 +30,19 @@ func main() {
 func run(args []string, out, diagnostics io.Writer) error {
 	flags := flag.NewFlagSet("dotnetsymbols", flag.ContinueOnError)
 	flags.SetOutput(diagnostics)
-	var patterns, namespaces, packages []string
+	var patterns, testPatterns, namespaces, packages []string
 	flags.Func("assembly", "local assembly file or filepath glob; repeat for each selected input", func(value string) error {
 		if strings.TrimSpace(value) == "" {
 			return errors.New("assembly pattern must not be empty")
 		}
 		patterns = append(patterns, value)
+		return nil
+	})
+	flags.Func("test-assembly", "local implementation assembly containing xUnit tests; repeat for each file or filepath glob", func(value string) error {
+		if strings.TrimSpace(value) == "" {
+			return errors.New("test assembly pattern must not be empty")
+		}
+		testPatterns = append(testPatterns, value)
 		return nil
 	})
 	flags.Func("namespace", "include this namespace and its children; repeat to select several (default: all)", func(value string) error {
@@ -71,22 +81,13 @@ func run(args []string, out, diagnostics io.Writer) error {
 			return fmt.Errorf("-assembly cannot be combined with -%s", releaseFlag)
 		}
 	}
-	files := make(map[string]bool)
-	for _, pattern := range patterns {
-		matches, err := filepath.Glob(pattern)
-		if err != nil {
-			return fmt.Errorf("assembly pattern %q: %w", pattern, err)
-		}
-		if len(matches) == 0 {
-			return fmt.Errorf("assembly pattern %q matched no files", pattern)
-		}
-		for _, name := range matches {
-			absolute, err := filepath.Abs(name)
-			if err != nil {
-				return err
-			}
-			files[absolute] = true
-		}
+	files, err := assemblyFiles(patterns)
+	if err != nil {
+		return err
+	}
+	testFiles, err := assemblyFiles(testPatterns)
+	if err != nil {
+		return fmt.Errorf("test assemblies: %w", err)
 	}
 	slices.Sort(namespaces)
 	namespaces = slices.Compact(namespaces)
@@ -103,18 +104,29 @@ func run(args []string, out, diagnostics io.Writer) error {
 			return err
 		}
 	}
-	ordered := make([]string, 0, len(files))
-	for name := range files {
-		ordered = append(ordered, name)
-	}
-	slices.Sort(ordered)
-	for _, name := range ordered {
+	for _, name := range files {
 		assemblyName, assembly, types, err := extractAssembly(name, selected)
 		if err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
 		if err := result.addAssembly(assemblyName, assembly, types); err != nil {
 			return err
+		}
+	}
+	if len(testFiles) != 0 {
+		result.Tests = &testinventory.Inventory{
+			IdentityFormat: testinventory.IdentityFormat,
+			Assemblies:     make(map[string]testinventory.Assembly),
+		}
+		for _, file := range testFiles {
+			name, assembly, err := extractTestAssembly(file)
+			if err != nil {
+				return fmt.Errorf("extract test declarations from %s: %w", file, err)
+			}
+			if previous, exists := result.Tests.Assemblies[name]; exists && previous.SHA256 != assembly.SHA256 {
+				return fmt.Errorf("multiple different inputs for test assembly %q; select one build configuration", name)
+			}
+			result.Tests.Assemblies[name] = assembly
 		}
 	}
 	// Buffer the full report so decoding/encoding errors cannot produce a
@@ -131,6 +143,32 @@ func run(args []string, out, diagnostics io.Writer) error {
 		err = io.ErrShortWrite
 	}
 	return err
+}
+
+func assemblyFiles(patterns []string) ([]string, error) {
+	files := make(map[string]bool)
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			return nil, fmt.Errorf("assembly pattern %q: %w", pattern, err)
+		}
+		if len(matches) == 0 {
+			return nil, fmt.Errorf("assembly pattern %q matched no files", pattern)
+		}
+		for _, name := range matches {
+			absolute, err := filepath.Abs(name)
+			if err != nil {
+				return nil, err
+			}
+			files[absolute] = true
+		}
+	}
+	ordered := make([]string, 0, len(files))
+	for name := range files {
+		ordered = append(ordered, name)
+	}
+	slices.Sort(ordered)
+	return ordered, nil
 }
 
 func (result *inventory) addAssembly(name string, assembly assemblyInfo, types map[string]typeInfo) error {

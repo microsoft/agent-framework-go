@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -16,84 +17,89 @@ func TestInputWaiter_WaitForInput_CompletesAfterSignal(t *testing.T) {
 	w.signalInput()
 
 	// Should complete immediately because input was already signaled.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := w.waitForInput(ctx); err != nil {
+	if err := w.waitForInput(t.Context()); err != nil {
 		t.Fatalf("waitForInput: %v", err)
 	}
 }
 
 func TestInputWaiter_WaitForInput_BlocksUntilSignaled(t *testing.T) {
-	w := newInputWaiter()
-	defer w.close()
+	synctest.Test(t, func(t *testing.T) {
+		w := newInputWaiter()
+		defer w.close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- w.waitForInput(t.Context()) }()
 
-	done := make(chan error, 1)
-	go func() { done <- w.waitForInput(ctx) }()
+		synctest.Wait()
+		select {
+		case err := <-done:
+			t.Fatalf("waitForInput returned before signal: err=%v", err)
+		default:
+		}
 
-	// Should still be blocked.
-	select {
-	case err := <-done:
-		t.Fatalf("waitForInput returned before signal: err=%v", err)
-	case <-time.After(50 * time.Millisecond):
-	}
-
-	w.signalInput()
-
-	select {
-	case err := <-done:
-		if err != nil {
+		w.signalInput()
+		if err := <-done; err != nil {
 			t.Fatalf("waitForInput: %v", err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("waitForInput did not return after signal")
-	}
+	})
 }
 
 func TestInputWaiter_SignalInput_DoubleSignalIsIdempotent(t *testing.T) {
-	w := newInputWaiter()
-	defer w.close()
+	synctest.Test(t, func(t *testing.T) {
+		w := newInputWaiter()
+		defer w.close()
 
-	// Double signal should not panic and should still leave exactly one
-	// pending signal (binary semaphore behavior).
-	w.signalInput()
-	w.signalInput()
+		// Double signal must leave exactly one pending signal.
+		w.signalInput()
+		w.signalInput()
+		if err := w.waitForInput(t.Context()); err != nil {
+			t.Fatalf("first waitForInput: %v", err)
+		}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if err := w.waitForInput(ctx); err != nil {
-		t.Fatalf("first waitForInput: %v", err)
-	}
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- w.waitForInput(ctx) }()
+		synctest.Wait()
+		select {
+		case err := <-done:
+			t.Fatalf("second wait consumed an extra signal: %v", err)
+		default:
+		}
 
-	// A second wait without another signal must block (and time out).
-	ctx2, cancel2 := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel2()
-	err := w.waitForInput(ctx2)
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("expected DeadlineExceeded, got %v", err)
-	}
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("second waitForInput = %v, want context.Canceled", err)
+		}
+	})
 }
 
 func TestInputWaiter_WaitForInput_RespectsCancellation(t *testing.T) {
-	w := newInputWaiter()
-	defer w.close()
+	synctest.Test(t, func(t *testing.T) {
+		w := newInputWaiter()
+		defer w.close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- w.waitForInput(ctx) }()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- w.waitForInput(ctx) }()
+		synctest.Wait()
+		select {
+		case err := <-done:
+			t.Fatalf("waitForInput returned before cancellation: %v", err)
+		default:
+		}
 
-	cancel()
-
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
 			t.Fatalf("expected context.Canceled, got %v", err)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("waitForInput did not return after cancellation")
-	}
+
+		w.signalInput()
+		if err := w.waitForInput(t.Context()); err != nil {
+			t.Fatalf("waitForInput after canceled wait: %v", err)
+		}
+	})
 }
 
 func TestInputWaiter_WaitForInput_DoesNotCompleteWhenNotSignaled(t *testing.T) {
@@ -113,12 +119,9 @@ func TestInputWaiter_WaitForInput_CanBeSignaledMultipleTimesSequentially(t *test
 	w := newInputWaiter()
 	defer w.close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
 	for i := range 3 {
 		w.signalInput()
-		if err := w.waitForInput(ctx); err != nil {
+		if err := w.waitForInput(t.Context()); err != nil {
 			t.Fatalf("cycle %d: %v", i, err)
 		}
 	}

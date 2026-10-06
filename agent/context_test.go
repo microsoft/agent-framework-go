@@ -28,6 +28,9 @@ func TestContextProvider_Invoking_WithoutProvide_ReturnsNoAdditions(t *testing.T
 	if len(messages) != 1 || messages[0] != request {
 		t.Fatal("expected original messages when no provider is set")
 	}
+	if got := messages[0].String(); got != "r1" {
+		t.Fatalf("output message text = %q, want r1", got)
+	}
 	if len(options) != 1 {
 		t.Fatalf("expected original options when no provider is set, got %d", len(options))
 	}
@@ -144,7 +147,7 @@ func TestContextProviderMiddleware_Run_SharedOptions_ProviderToolsDoNotAccumulat
 }
 
 func TestContextProviderMiddleware_Run_SharedOptions_OriginalToolsNotMutated(t *testing.T) {
-	baselineTool := stubTool{name: "baseline"}
+	baselineTool := &stubTool{name: "baseline"}
 	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "provider-a",
 		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
@@ -171,6 +174,9 @@ func TestContextProviderMiddleware_Run_SharedOptions_OriginalToolsNotMutated(t *
 	originalTools := slices.Collect(agent.AllOptions(sharedOptions, agent.WithTool))
 	if len(originalTools) != 1 {
 		t.Fatalf("expected original shared options to keep 1 tool, got %d", len(originalTools))
+	}
+	if originalTools[0] != baselineTool {
+		t.Fatal("expected original shared options to preserve the baseline tool instance")
 	}
 	if originalTools[0].Name() != baselineTool.Name() {
 		t.Fatalf("expected original shared options to preserve baseline tool, got %q", originalTools[0].Name())
@@ -384,6 +390,15 @@ func TestContextProvider_Invoking_SourceStampsProvidedMessages(t *testing.T) {
 	if messages[1].Source != (message.Source{Type: agent.SourceTypeContextProvider, ID: "ctx"}) {
 		t.Fatalf("provided message source = %#v, want context provider source", messages[1].Source)
 	}
+	if got := messageStrings(messages); !slices.Equal(got, []string{"request", "provided"}) {
+		t.Fatalf("output messages = %v, want [request provided]", got)
+	}
+	if provided.Source != (message.Source{}) {
+		t.Fatalf("original provided source = %#v, want external source", provided.Source)
+	}
+	if got := provided.String(); got != "provided" {
+		t.Fatalf("original provided text = %q, want provided", got)
+	}
 }
 
 func TestContextProvider_Invoking_DoesNotMutateProvidedMessageSlice(t *testing.T) {
@@ -470,6 +485,8 @@ func TestContextProvider_Invoking_PropagatesProvideError(t *testing.T) {
 
 func TestContextProvider_Invoking_FiltersInputMessagesBeforeProvide(t *testing.T) {
 	request := message.NewText("request")
+	historyMessage := message.NewText("history")
+	historyMessage.Source = message.Source{Type: agent.SourceTypeHistoryProvider, ID: "other"}
 	ctxMessage := message.NewText("ctx")
 	ctxMessage.Source = message.Source{Type: agent.SourceTypeContextProvider, ID: "other"}
 	var providedInput []*message.Message
@@ -481,15 +498,21 @@ func TestContextProvider_Invoking_FiltersInputMessagesBeforeProvide(t *testing.T
 		},
 	})
 
-	messages, _, err := invokeContextProvider(provider, t.Context(), []*message.Message{request, ctxMessage}, agent.WithSession(agenttest.CreateSession()))
+	messages, _, err := invokeContextProvider(provider, t.Context(), []*message.Message{request, historyMessage, ctxMessage}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(providedInput) != 1 || providedInput[0] != request {
+		t.Fatal("expected Provide to receive only the original external request")
 	}
 	if got := messageStrings(providedInput); !slices.Equal(got, []string{"request"}) {
 		t.Fatalf("provided input messages = %v, want [request]", got)
 	}
-	if got := messageStrings(messages); !slices.Equal(got, []string{"request", "ctx"}) {
+	if got := messageStrings(messages); !slices.Equal(got, []string{"request", "history", "ctx"}) {
 		t.Fatalf("output messages = %v, want original unfiltered messages", got)
+	}
+	if !slices.Equal(messages, []*message.Message{request, historyMessage, ctxMessage}) {
+		t.Fatal("expected all three original messages to be preserved in input order")
 	}
 }
 
@@ -555,6 +578,7 @@ func TestContextProvider_Invoking_ReturnsProvidedMessagesAndSetsSourceID(t *test
 
 func TestContextProvider_Invoking_AppendsProvidedMessages(t *testing.T) {
 	provided := message.NewText("ctx")
+	provided.Role = message.RoleSystem
 	request := message.NewText("request")
 
 	provider := agent.NewContextProvider(agent.ContextProviderConfig{
@@ -571,6 +595,12 @@ func TestContextProvider_Invoking_AppendsProvidedMessages(t *testing.T) {
 	if len(messages) != 2 {
 		t.Fatalf("expected original and provided messages, got %d", len(messages))
 	}
+	if got := messages[0].String(); got != "request" {
+		t.Fatalf("original message text = %q, want request", got)
+	}
+	if got := messages[1].String(); got != "ctx" {
+		t.Fatalf("provided message text = %q, want ctx", got)
+	}
 	if messages[0] != request {
 		t.Fatal("expected original message to be preserved first")
 	}
@@ -586,7 +616,7 @@ func TestContextProvider_Invoking_UsesCustomSourceID(t *testing.T) {
 	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "CustomContextSource",
 		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
-			return []*message.Message{message.NewText("ctx")}, nil, nil
+			return []*message.Message{{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "ctx"}}}}, nil, nil
 		},
 	})
 
@@ -596,6 +626,9 @@ func TestContextProvider_Invoking_UsesCustomSourceID(t *testing.T) {
 	}
 	if len(messages) != 1 {
 		t.Fatalf("expected 1 provided message, got %d", len(messages))
+	}
+	if messages[0].Source.Type != agent.SourceTypeContextProvider {
+		t.Fatalf("provided source type = %q, want %q", messages[0].Source.Type, agent.SourceTypeContextProvider)
 	}
 	if messages[0].Source.ID != "CustomContextSource" {
 		t.Fatalf("expected custom source ID, got %q", messages[0].Source.ID)
@@ -610,6 +643,7 @@ func TestContextProvider_Invoked_CallsStoreAndIncludesExternalRequestMessagesByD
 	req3 := message.NewText("request3")
 	req3.Source = message.Source{Type: agent.SourceTypeHistoryProvider, ID: "history"}
 	resp := message.NewText("response")
+	resp.Role = message.RoleAssistant
 
 	called := false
 	var storedRequest []*message.Message
@@ -635,8 +669,17 @@ func TestContextProvider_Invoked_CallsStoreAndIncludesExternalRequestMessagesByD
 	if len(storedRequest) != 1 || storedRequest[0] != req1 {
 		t.Fatal("expected default request filter to keep only external messages")
 	}
+	if got := storedRequest[0].String(); got != "request1" {
+		t.Fatalf("stored request text = %q, want request1", got)
+	}
 	if len(storedResponse) != 1 || storedResponse[0] != resp {
 		t.Fatal("expected response messages to pass through unchanged")
+	}
+	if got := storedResponse[0].String(); got != "response" {
+		t.Fatalf("stored response text = %q, want response", got)
+	}
+	if got := storedResponse[0].Role; got != message.RoleAssistant {
+		t.Fatalf("stored response role = %q, want assistant", got)
 	}
 }
 

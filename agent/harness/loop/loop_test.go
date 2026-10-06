@@ -553,6 +553,12 @@ func TestLoop_FreshContextPerIteration_SessionCreatedCallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if capture.callCount != 3 {
+		t.Fatalf("callCount = %d, want 3", capture.callCount)
+	}
+	if slices.Contains(createdSessions, initialSession) {
+		t.Fatal("session-created callback should not report the caller session")
+	}
 	if len(createdSessions) != 2 {
 		t.Fatalf("created sessions = %d, want 2", len(createdSessions))
 	}
@@ -708,6 +714,9 @@ func TestCompletionMarkerEvaluator_CustomTemplateSubstitutesLastResponse(t *test
 	evaluation, err := evaluator.Evaluate(context.Background(), contextWithResponse("candidate name: NoteNest"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !evaluation.ShouldReinvoke {
+		t.Fatal("expected missing marker to continue")
 	}
 	want := "Previous: candidate name: NoteNest. Finish with FINISHED."
 	if evaluation.Feedback != want {

@@ -45,6 +45,8 @@ type catalog struct {
 	Baseline      baseline                          `json:"baseline"`
 	Reviews       map[string]reviewBaseline         `json:"reviews,omitempty"`
 	GoOnly        map[string]goOnlyAssessment       `json:"go_only,omitempty"`
+	GoTests       *goTestQueue                      `json:"go_tests,omitempty"`
+	Tests         testMappings                      `json:"tests,omitempty"`
 	Namespaces    map[string]map[string]typeMapping `json:"namespaces"`
 }
 
@@ -127,6 +129,7 @@ type summary struct {
 type reportOptions struct {
 	file, inventoryFile, goRoot, oldRoot, tags string
 	filter                                     reportFilter
+	testFilter                                 testReportFilter
 	page                                       pageOptions
 	goPatterns                                 []string
 	asJSON, brief, check                       bool
@@ -140,7 +143,7 @@ func main() {
 }
 
 func run(args []string, out, diagnostics io.Writer) error {
-	const usage = "Usage: symbolmap <mappings|gaps|go-only|go|changes|reconcile> [flags]"
+	const usage = "Usage: symbolmap <mappings|gaps|go-only|go|changes|reconcile|go-tests|tests> [flags]"
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(diagnostics, usage); err != nil {
 			return err
@@ -153,7 +156,7 @@ func run(args []string, out, diagnostics io.Writer) error {
 		return err
 	}
 	switch command {
-	case "mappings", "gaps", "go-only", "go", "changes", "reconcile":
+	case "mappings", "gaps", "go-only", "go", "changes", "reconcile", "go-tests", "tests":
 	default:
 		return fmt.Errorf("unknown subcommand %q", command)
 	}
@@ -166,6 +169,13 @@ func run(args []string, out, diagnostics io.Writer) error {
 	}
 	if command == "changes" {
 		return runGoChanges(out, options)
+	}
+	if command == "go-tests" {
+		index, err := indexGoTests(options.goRoot)
+		if err != nil {
+			return err
+		}
+		return writeGoTests(out, index, options.testFilter.Symbol, options.page, options.asJSON, options.brief)
 	}
 	if command == "go" {
 		api, err := indexGo(options.goRoot, options.goPatterns, options.tags)
@@ -181,6 +191,9 @@ func run(args []string, out, diagnostics io.Writer) error {
 	rows, err := c.flatten()
 	if err != nil {
 		return err
+	}
+	if command == "tests" {
+		return runTestReconciliation(out, c, options)
 	}
 	report := mappingsReport{Baseline: c.Baseline, Reviews: c.Reviews, Mappings: rows, GoOnly: c.GoOnly}
 	if command == "go-only" {
@@ -224,6 +237,19 @@ func parseReportOptions(command string, args []string, diagnostics io.Writer) (r
 	case "go-only":
 		flags.StringVar(&options.file, "file", "docs/dotnet-go-sdk-symbol-mapping.json", "catalog path (default is relative to repository root)")
 		flags.StringVar(&options.filter.Symbol, "symbol", "", "case-insensitive substring of a qualified Go symbol")
+	case "go-tests":
+		addGoTestFlags(flags, &options)
+		flags.StringVar(&options.testFilter.Symbol, "symbol", "", "case-insensitive substring of a qualified Go test function")
+	case "tests":
+		addGoTestFlags(flags, &options)
+		flags.StringVar(&options.file, "file", "docs/dotnet-go-sdk-symbol-mapping.json", "catalog path (default is relative to repository root)")
+		flags.StringVar(&options.inventoryFile, "inventory", "docs/dotnet-sdk-symbol-inventory.json", "declaration inventory containing test assembly metadata")
+		flags.StringVar(&options.testFilter.Assembly, "assembly", "", "case-insensitive substring of the test assembly name")
+		flags.StringVar(&options.testFilter.Namespace, "namespace", "", "case-insensitive substring of the declaring namespace")
+		flags.StringVar(&options.testFilter.Type, "type", "", "case-insensitive substring of the full CLR declaring type")
+		flags.StringVar(&options.testFilter.Symbol, "symbol", "", "case-insensitive substring of a test identity or qualified Go test function")
+		flags.StringVar(&options.testFilter.State, "state", "", "filter by test state: "+strings.Join(testReconciliationStates, ", "))
+		flags.BoolVar(&options.check, "check", false, "fail on dangling .NET test references or missing Go test functions across the entire report")
 	}
 	if err := flags.Parse(args); err != nil {
 		return options, err
@@ -255,6 +281,7 @@ func parseReportOptions(command string, args []string, diagnostics io.Writer) (r
 		{"kind", options.filter.Kind, append([]string{"", "event"}, kinds...)},
 		{"status", options.filter.Status, append([]string{""}, statuses...)},
 		{"state", options.filter.State, append([]string{""}, reconciliationStates...)},
+		{"state", options.testFilter.State, append([]string{""}, testReconciliationStates...)},
 	} {
 		if !slices.Contains(option.allowed, option.value) {
 			return options, fmt.Errorf("invalid -%s %q", option.name, option.value)
@@ -284,6 +311,11 @@ func addIndexFlags(flags *flag.FlagSet, options *reportOptions) {
 		options.goPatterns = append(options.goPatterns, value)
 		return nil
 	})
+}
+
+func addGoTestFlags(flags *flag.FlagSet, options *reportOptions) {
+	flags.StringVar(&options.goRoot, "go-root", ".", "Go module root for static test discovery (no compilation or dependency loading)")
+	flags.BoolVar(&options.brief, "summary", false, "emit counts without test declaration rows")
 }
 
 func runReconciliation(out io.Writer, report mappingsReport, options reportOptions) error {
@@ -416,6 +448,14 @@ func (c catalog) flatten() ([]mappingRow, error) {
 		}
 	}
 	if err := c.validateGoOnly(); err != nil {
+		return nil, err
+	}
+	// Test pairs and Go review lists are validated on every catalog
+	// path, but never enter API mapping rows, summaries, or reconciliation.
+	if err := c.validateGoTestQueue(); err != nil {
+		return nil, err
+	}
+	if _, err := c.flattenTests(); err != nil {
 		return nil, err
 	}
 	if len(c.Namespaces) == 0 {

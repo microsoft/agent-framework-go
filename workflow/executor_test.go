@@ -207,6 +207,7 @@ func TestNewExecutor_TypedValueFunction(t *testing.T) {
 
 func TestNewExecutor_TypedContextActionFunction(t *testing.T) {
 	var got string
+	var events []workflow.Event
 	executor := workflow.NewExecutor("typed-context-action", func(ctx *workflow.Context, input string) error {
 		if ctx == nil || ctx.Context == nil {
 			t.Fatal("handler received nil workflow context")
@@ -215,15 +216,34 @@ func TestNewExecutor_TypedContextActionFunction(t *testing.T) {
 		return nil
 	})
 	ctx := &workflow.Context{
-		Context:  t.Context(),
-		AddEvent: func(workflow.Event) error { return nil },
+		Context: t.Context(),
+		AddEvent: func(event workflow.Event) error {
+			events = append(events, event)
+			return nil
+		},
 	}
 
-	if _, err := executor.Execute(ctx, "hello"); err != nil {
+	result, err := executor.Execute(ctx, "hello")
+	if err != nil {
 		t.Fatalf("Execute: %v", err)
+	}
+	if result != nil {
+		t.Fatalf("result = %#v, want nil for action handler", result)
 	}
 	if got != "hello" {
 		t.Fatalf("handler input = %q, want hello", got)
+	}
+	if !slices.ContainsFunc(events, func(event workflow.Event) bool {
+		invoked, ok := event.(workflow.ExecutorInvokedEvent)
+		return ok && invoked.Message == "hello"
+	}) {
+		t.Fatalf("events = %#v, want ExecutorInvokedEvent with message hello", events)
+	}
+	if !slices.ContainsFunc(events, func(event workflow.Event) bool {
+		completed, ok := event.(workflow.ExecutorCompletedEvent)
+		return ok && completed.Result == result
+	}) {
+		t.Fatalf("events = %#v, want ExecutorCompletedEvent with result %v", events, result)
 	}
 }
 
@@ -705,18 +725,23 @@ func TestAddHandlerRaw_WithHandlerOverwrite(t *testing.T) {
 		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.RouteBuilder.
-				AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(*workflow.Context, any) (any, error) {
-					return "first", nil
+				AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(ctx *workflow.Context, _ any) (any, error) {
+					return "first", ctx.SendMessage("", "first")
 				}).
-				AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(*workflow.Context, any) (any, error) {
-					return "second", nil
+				AddHandlerRaw(reflect.TypeFor[string](), reflect.TypeFor[string](), func(ctx *workflow.Context, _ any) (any, error) {
+					return "second", ctx.SendMessage("", "second")
 				}, workflow.WithHandlerOverwrite(true))
 			return rb, nil
 		},
 	}
+	var sent []any
 	ctx := &workflow.Context{
 		Context:  t.Context(),
 		AddEvent: func(workflow.Event) error { return nil },
+		SendMessage: func(_ string, message any) error {
+			sent = append(sent, message)
+			return nil
+		},
 	}
 
 	got, err := executor.Execute(ctx, "input")
@@ -725,6 +750,9 @@ func TestAddHandlerRaw_WithHandlerOverwrite(t *testing.T) {
 	}
 	if got != "second" {
 		t.Fatalf("Execute result = %v, want second", got)
+	}
+	if !slices.Equal(sent, []any{"second"}) {
+		t.Fatalf("sent messages = %v, want [second]", sent)
 	}
 }
 
@@ -736,18 +764,23 @@ func TestAddCatchAll_WithHandlerOverwrite(t *testing.T) {
 		AutoYieldOutputHandlerResultObject: new(false),
 		ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 			rb.RouteBuilder.
-				AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
-					return "first", nil
+				AddCatchAll(func(ctx *workflow.Context, _ workflow.PortableValue) (any, error) {
+					return "first", ctx.SendMessage("", "first")
 				}).
-				AddCatchAll(func(*workflow.Context, workflow.PortableValue) (any, error) {
-					return "second", nil
+				AddCatchAll(func(ctx *workflow.Context, _ workflow.PortableValue) (any, error) {
+					return "second", ctx.SendMessage("", "second")
 				}, workflow.WithHandlerOverwrite(true))
 			return rb, nil
 		},
 	}
+	var sent []any
 	ctx := &workflow.Context{
 		Context:  t.Context(),
 		AddEvent: func(workflow.Event) error { return nil },
+		SendMessage: func(_ string, message any) error {
+			sent = append(sent, message)
+			return nil
+		},
 	}
 
 	got, err := executor.Execute(ctx, "input")
@@ -756,6 +789,9 @@ func TestAddCatchAll_WithHandlerOverwrite(t *testing.T) {
 	}
 	if got != "second" {
 		t.Fatalf("Execute result = %v, want second", got)
+	}
+	if !slices.Equal(sent, []any{"second"}) {
+		t.Fatalf("sent messages = %v, want [second]", sent)
 	}
 }
 

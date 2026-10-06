@@ -70,11 +70,25 @@ func TestMessageMerger_PreservesFunctionCallResultOrder(t *testing.T) {
 	if len(response.Messages) != 2 {
 		t.Fatalf("message count = %d, want 2", len(response.Messages))
 	}
-	if _, ok := response.Messages[0].Contents[0].(*message.FunctionCallContent); !ok {
+	if len(response.Messages[0].Contents) != 1 {
+		t.Fatalf("first content count = %d, want 1", len(response.Messages[0].Contents))
+	}
+	if len(response.Messages[1].Contents) != 1 {
+		t.Fatalf("second content count = %d, want 1", len(response.Messages[1].Contents))
+	}
+	call, ok := response.Messages[0].Contents[0].(*message.FunctionCallContent)
+	if !ok {
 		t.Fatalf("first content = %T, want *message.FunctionCallContent", response.Messages[0].Contents[0])
 	}
-	if _, ok := response.Messages[1].Contents[0].(*message.FunctionResultContent); !ok {
+	result, ok := response.Messages[1].Contents[0].(*message.FunctionResultContent)
+	if !ok {
 		t.Fatalf("second content = %T, want *message.FunctionResultContent", response.Messages[1].Contents[0])
+	}
+	if call.CallID != callID {
+		t.Fatalf("function call ID = %q, want %q", call.CallID, callID)
+	}
+	if result.CallID != callID {
+		t.Fatalf("function result call ID = %q, want %q", result.CallID, callID)
 	}
 }
 
@@ -106,6 +120,12 @@ func TestMessageMerger_PreservesIdentifierlessMessageOrder(t *testing.T) {
 	}
 	if got := response.Messages[0].String(); got != "before" {
 		t.Fatalf("first message = %q, want %q", got, "before")
+	}
+	if len(response.Messages[1].Contents) != 1 {
+		t.Fatalf("second content count = %d, want 1", len(response.Messages[1].Contents))
+	}
+	if len(response.Messages[2].Contents) != 1 {
+		t.Fatalf("third content count = %d, want 1", len(response.Messages[2].Contents))
 	}
 	if _, ok := response.Messages[1].Contents[0].(*message.FunctionCallContent); !ok {
 		t.Fatalf("second content = %T, want *message.FunctionCallContent", response.Messages[1].Contents[0])
@@ -199,6 +219,9 @@ func TestMessageMerger_FoldsIdentifierlessReasoningIntoFollowingMessage(t *testi
 	assertMessageContentTexts(t, msg, "thinking about the question", "The reformulated question.")
 	assertTextReasoningContent(t, msg.Contents[0], "thinking about the question")
 	assertTextContent(t, msg.Contents[1], "The reformulated question.")
+	if got := msg.String(); got != "The reformulated question." {
+		t.Fatalf("message text = %q, want %q", got, "The reformulated question.")
+	}
 }
 
 func TestMessageMerger_DoesNotFoldIdentifierlessReasoningIntoDifferentRole(t *testing.T) {
@@ -227,6 +250,9 @@ func TestMessageMerger_DoesNotFoldIdentifierlessReasoningIntoDifferentRole(t *te
 	}
 	if response.Messages[0].Role != message.RoleAssistant {
 		t.Fatalf("first role = %q, want %q", response.Messages[0].Role, message.RoleAssistant)
+	}
+	if len(response.Messages[0].Contents) != 1 {
+		t.Fatalf("first content count = %d, want 1", len(response.Messages[0].Contents))
 	}
 	assertTextReasoningContent(t, response.Messages[0].Contents[0], "thinking")
 	if response.Messages[1].Role != message.RoleTool {
@@ -295,6 +321,12 @@ func TestMessageMerger_PreservesMessageOrderWhenReasoningLacksCreatedAt(t *testi
 	if len(response.Messages) != 2 {
 		t.Fatalf("message count = %d, want 2", len(response.Messages))
 	}
+	if len(response.Messages[0].Contents) != 1 {
+		t.Fatalf("first content count = %d, want 1", len(response.Messages[0].Contents))
+	}
+	if len(response.Messages[1].Contents) != 1 {
+		t.Fatalf("second content count = %d, want 1", len(response.Messages[1].Contents))
+	}
 	assertTextReasoningContent(t, response.Messages[0].Contents[0], "Thinking about the question")
 	assertTextContent(t, response.Messages[1].Contents[0], "Here is the answer.")
 }
@@ -337,6 +369,9 @@ func TestMessageMerger_MergesReasoningAndTextIntoSingleMessageWhenReasoningLacks
 		t.Fatalf("message count = %d, want 1", len(response.Messages))
 	}
 	msg := response.Messages[0]
+	if msg.Role != message.RoleAssistant {
+		t.Fatalf("role = %q, want %q", msg.Role, message.RoleAssistant)
+	}
 	if msg.ID != messageID {
 		t.Fatalf("message ID = %q, want %q", msg.ID, messageID)
 	}
@@ -423,8 +458,14 @@ func TestMessageMerger_FoldsIdentifierlessReasoningIntoFollowingMessageAcrossRes
 	if msg.Role != message.RoleAssistant {
 		t.Fatalf("role = %q, want %q", msg.Role, message.RoleAssistant)
 	}
+	if len(msg.Contents) != 2 {
+		t.Fatalf("content count = %d, want 2", len(msg.Contents))
+	}
 	assertTextReasoningContent(t, msg.Contents[0], "thinking about the question")
 	assertTextContent(t, msg.Contents[1], "The reformulated question.")
+	if got := msg.String(); got != "The reformulated question." {
+		t.Fatalf("message text = %q, want %q", got, "The reformulated question.")
+	}
 }
 
 func addTextUpdate(merger *messageMerger, responseID string, text string, messageID string, createdAt time.Time) {

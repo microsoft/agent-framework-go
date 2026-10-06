@@ -58,26 +58,37 @@ func TestMessageIndex_GroupsToolCallsAtomically(t *testing.T) {
 		textMessage(message.RoleAssistant, "done"),
 	}
 
-	index := compaction.CreateMessageIndex(messages, nil)
-
-	gotKinds := make([]compaction.GroupKind, len(index.Groups))
-	for i, group := range index.Groups {
-		gotKinds[i] = group.Kind
-	}
 	wantKinds := []compaction.GroupKind{
 		compaction.GroupKindSystem,
 		compaction.GroupKindUser,
 		compaction.GroupKindToolCall,
 		compaction.GroupKindAssistantText,
 	}
-	if !slices.Equal(gotKinds, wantKinds) {
-		t.Fatalf("unexpected group kinds: got %v want %v", gotKinds, wantKinds)
-	}
-	if got := index.Groups[2].MessageCount; got != 3 {
-		t.Fatalf("expected tool-call group to contain reasoning, call, and result messages, got %d", got)
-	}
-	if index.Groups[2].TurnIndex == nil || *index.Groups[2].TurnIndex != 1 {
-		t.Fatalf("expected tool-call group to belong to turn 1")
+	for _, inputLength := range []int{len(messages), len(messages) - 1} {
+		index := compaction.CreateMessageIndex(messages[:inputLength], nil)
+		gotKinds := make([]compaction.GroupKind, len(index.Groups))
+		for i, group := range index.Groups {
+			gotKinds[i] = group.Kind
+		}
+		expectedKinds := wantKinds
+		if inputLength == len(messages)-1 {
+			expectedKinds = wantKinds[:3]
+		}
+		if !slices.Equal(gotKinds, expectedKinds) {
+			t.Fatalf("unexpected group kinds for %d messages: got %v want %v", inputLength, gotKinds, expectedKinds)
+		}
+		if got := index.Groups[2].MessageCount; got != 3 {
+			t.Fatalf("expected tool-call group to contain reasoning, call, and result messages, got %d", got)
+		}
+		if index.Groups[2].TurnIndex == nil || *index.Groups[2].TurnIndex != 1 {
+			t.Fatalf("expected tool-call group to belong to turn 1")
+		}
+		if index.Groups[0].TurnIndex != nil {
+			t.Errorf("system group turn = %v, want nil", *index.Groups[0].TurnIndex)
+		}
+		if index.Groups[1].TurnIndex == nil || *index.Groups[1].TurnIndex != 1 {
+			t.Error("expected user group to belong to turn 1")
+		}
 	}
 }
 
@@ -126,10 +137,10 @@ func TestMessageIndex_SummaryPropertyValueParsing(t *testing.T) {
 }
 
 func TestTruncationStrategy_ExcludesOldestGroups(t *testing.T) {
-	index := compaction.CreateMessageIndex(turnMessages(3), nil)
+	index := compaction.CreateMessageIndex(turnMessages(2), nil)
 	strategy := &compaction.TruncationStrategy{
 		Trigger:                compaction.GroupsExceed(2),
-		MinimumPreservedGroups: new(2),
+		MinimumPreservedGroups: new(1),
 	}
 
 	compacted, err := strategy.Compact(t.Context(), index)
@@ -139,9 +150,17 @@ func TestTruncationStrategy_ExcludesOldestGroups(t *testing.T) {
 	if !compacted {
 		t.Fatal("expected compaction")
 	}
+	if got := index.IncludedGroupCount(); got != 2 {
+		t.Fatalf("expected included group count 2, got %d", got)
+	}
+	for i, want := range []bool{true, true, false, false} {
+		if got := index.Groups[i].IsExcluded; got != want {
+			t.Fatalf("group %d exclusion: got %v want %v", i, got, want)
+		}
+	}
 
 	got := messageTexts(index.IncludedMessages())
-	want := []string{"u3", "a3"}
+	want := []string{"u2", "a2"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("unexpected included messages: got %v want %v", got, want)
 	}
@@ -233,7 +252,7 @@ func TestTruncationStrategy_ZeroValueUsesDefaults(t *testing.T) {
 func TestSlidingWindowStrategy_ExcludesOldestTurns(t *testing.T) {
 	index := compaction.CreateMessageIndex(turnMessages(3), nil)
 	strategy := &compaction.SlidingWindowStrategy{
-		Trigger:               compaction.TurnsExceed(1),
+		Trigger:               compaction.TurnsExceed(2),
 		MinimumPreservedTurns: new(1),
 	}
 
@@ -244,15 +263,63 @@ func TestSlidingWindowStrategy_ExcludesOldestTurns(t *testing.T) {
 	if !compacted {
 		t.Fatal("expected compaction")
 	}
+	for i, want := range []bool{true, true, false, false, false, false} {
+		if got := index.Groups[i].IsExcluded; got != want {
+			t.Fatalf("group %d exclusion: got %v want %v", i, got, want)
+		}
+	}
 
 	got := messageTexts(index.IncludedMessages())
-	want := []string{"u3", "a3"}
+	want := []string{"u2", "a2", "u3", "a3"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("unexpected included messages: got %v want %v", got, want)
 	}
 }
 
 func TestSlidingWindowStrategy_PreservesTurnZeroGroups(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		trigger compaction.Trigger
+	}{
+		{name: "zero floor with always trigger", trigger: compaction.Always()},
+		{name: "zero floor with turn threshold trigger", trigger: compaction.TurnsExceed(1)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			index := compaction.CreateMessageIndex([]*message.Message{
+				textMessage(message.RoleAssistant, "preface"),
+				textMessage(message.RoleUser, "u1"),
+				textMessage(message.RoleAssistant, "a1"),
+				textMessage(message.RoleUser, "u2"),
+				textMessage(message.RoleAssistant, "a2"),
+			}, nil)
+			strategy := &compaction.SlidingWindowStrategy{
+				Trigger:               tt.trigger,
+				Target:                compaction.Never(),
+				MinimumPreservedTurns: new(0),
+			}
+
+			compacted, err := strategy.Compact(t.Context(), index)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !compacted {
+				t.Fatal("expected compaction")
+			}
+			wantExcluded := []bool{false, true, true, true, true}
+			if got := len(index.Groups); got != len(wantExcluded) {
+				t.Fatalf("unexpected group count: got %d want %d", got, len(wantExcluded))
+			}
+			for i, want := range wantExcluded {
+				if got := index.Groups[i].IsExcluded; got != want {
+					t.Fatalf("group %d exclusion: got %v want %v", i, got, want)
+				}
+			}
+			if got, want := messageTexts(index.IncludedMessages()), []string{"preface"}; !slices.Equal(got, want) {
+				t.Fatalf("unexpected included messages: got %v want %v", got, want)
+			}
+		})
+	}
+
 	index := compaction.CreateMessageIndex([]*message.Message{
 		textMessage(message.RoleAssistant, "preface"),
 		textMessage(message.RoleUser, "u1"),
@@ -494,14 +561,14 @@ func TestToolResultStrategy_ZeroValueUsesDefaults(t *testing.T) {
 }
 
 func TestSummarizationStrategy_InsertsSummaryAndPreservesRecentGroups(t *testing.T) {
-	index := compaction.CreateMessageIndex(turnMessages(3), nil)
+	index := compaction.CreateMessageIndex(turnMessages(2), nil)
 	var summarized []string
 	summarizer := compaction.SummarizerFunc(func(_ context.Context, messages []*message.Message) (string, error) {
 		summarized = messageTexts(messages)
 		return "older context", nil
 	})
 	strategy := &compaction.SummarizationStrategy{
-		Trigger:                compaction.GroupsExceed(2),
+		Trigger:                compaction.GroupsExceed(0),
 		Summarizer:             summarizer,
 		MinimumPreservedGroups: new(2),
 		SummarizationPrompt:    new("summarize"),
@@ -515,11 +582,11 @@ func TestSummarizationStrategy_InsertsSummaryAndPreservesRecentGroups(t *testing
 		t.Fatal("expected compaction")
 	}
 
-	if want := []string{"summarize", "u1", "a1", "u2", "a2"}; !slices.Equal(summarized, want) {
+	if want := []string{"summarize", "u1", "a1"}; !slices.Equal(summarized, want) {
 		t.Fatalf("unexpected summarizer input: got %v want %v", summarized, want)
 	}
 	got := messageTexts(index.IncludedMessages())
-	want := []string{"[Summary]\nolder context", "u3", "a3"}
+	want := []string{"[Summary]\nolder context", "u2", "a2"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("unexpected included messages: got %v want %v", got, want)
 	}
@@ -572,18 +639,29 @@ func TestSummarizationStrategy_ZeroValueWithoutSummarizerIsNoOp(t *testing.T) {
 func TestSummarizationStrategy_RestoresGroupsWhenSummarizerFails(t *testing.T) {
 	index := compaction.CreateMessageIndex(turnMessages(2), nil)
 	expected := errors.New("summarizer failed")
+	called := false
 	strategy := &compaction.SummarizationStrategy{
-		Trigger:                compaction.GroupsExceed(2),
-		Summarizer:             compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) { return "", expected }),
+		Trigger: compaction.GroupsExceed(0),
+		Summarizer: compaction.SummarizerFunc(func(context.Context, []*message.Message) (string, error) {
+			called = true
+			return "", expected
+		}),
 		MinimumPreservedGroups: new(1),
 	}
 
+	originalIncluded := index.IncludedMessages()
 	compacted, err := strategy.Compact(t.Context(), index)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if !called {
+		t.Fatal("expected failing summarizer to be called")
+	}
 	if compacted {
 		t.Fatal("expected no compaction when summarizer fails")
+	}
+	if got := index.IncludedMessages(); !slices.Equal(got, originalIncluded) {
+		t.Fatalf("expected original included message references in order, got %#v want %#v", got, originalIncluded)
 	}
 	if got := messageTexts(index.IncludedMessages()); !slices.Equal(got, []string{"u1", "a1", "u2", "a2"}) {
 		t.Fatalf("expected groups to be restored, got %v", got)

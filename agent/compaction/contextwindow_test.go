@@ -4,6 +4,7 @@ package compaction_test
 
 import (
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent/compaction"
@@ -16,8 +17,7 @@ type charCounter struct{}
 func (charCounter) CountTokens(text string) int { return len(text) }
 
 // buildToolCallMessages creates a sequence of user + tool-call + tool-result + assistant messages.
-// Each turn produces a group of 3 messages (assistant call, tool result, and assistant reply),
-// preceded by a user message.
+// Each turn produces three groups: user, atomic tool call/result, and assistant reply.
 func buildToolCallMessages(n int) []*message.Message {
 	msgs := make([]*message.Message, 0, n*4)
 	for i := range n {
@@ -55,6 +55,7 @@ func TestContextWindowStrategy_InvalidMaxOutputTokens(t *testing.T) {
 	}{
 		{"negative", 1000, -1},
 		{"equal", 1000, 1000},
+		{"immediately_above", 1000, 1001},
 		{"greater", 1000, 1500},
 	}
 	for _, tc := range cases {
@@ -67,6 +68,9 @@ func TestContextWindowStrategy_InvalidMaxOutputTokens(t *testing.T) {
 			_, err := s.Compact(t.Context(), index)
 			if err == nil {
 				t.Fatalf("expected error for MaxOutputTokens=%d with MaxContextWindowTokens=%d", tc.maxOutput, tc.maxCtx)
+			}
+			if !strings.Contains(err.Error(), "MaxOutputTokens") {
+				t.Fatalf("expected MaxOutputTokens validation error, got %v", err)
 			}
 		})
 	}
@@ -107,7 +111,7 @@ func TestContextWindowStrategy_InvalidThresholds(t *testing.T) {
 }
 
 func TestContextWindowStrategy_NoCompactionWhenUnderBudget(t *testing.T) {
-	// Build messages with a tiny token footprint; budget is set very large.
+	// Keep removable tool groups so the preservation floor cannot mask threshold gating.
 	msgs := buildToolCallMessages(3)
 	index := compaction.CreateMessageIndex(msgs, charCounter{})
 	initialCount := index.IncludedGroupCount()
@@ -129,21 +133,18 @@ func TestContextWindowStrategy_NoCompactionWhenUnderBudget(t *testing.T) {
 }
 
 func TestContextWindowStrategy_EvictsToolResultsBeforeTruncating(t *testing.T) {
-	// Each "u" and "a" message is 1 char each; tool call/result are 1 char too.
-	// With charCounter each token = 1 character.
-	// Build enough messages so the index exceeds the tool-eviction threshold.
+	// Text uses charCounter; tool-call/result contents still use byte-count estimates.
 	msgs := buildToolCallMessages(5)
 	msgs = append(msgs, textMessage(message.RoleUser, "final"))
 
 	index := compaction.CreateMessageIndex(msgs, charCounter{})
-	totalTokens := index.IncludedTokenCount()
 
-	// Set budget such that tool-eviction fires (threshold = 0.1 so even a small count triggers).
+	// Eviction fires above 10 tokens; the expanded summaries stay below truncation's 990.
 	s := &compaction.ContextWindowStrategy{
-		MaxContextWindowTokens: totalTokens + 1,
+		MaxContextWindowTokens: 1000,
 		MaxOutputTokens:        0,
-		ToolEvictionThreshold:  0.01, // always fires
-		TruncationThreshold:    0.99, // never fires on this dataset
+		ToolEvictionThreshold:  0.01,
+		TruncationThreshold:    0.99,
 	}
 	compacted, err := s.Compact(t.Context(), index)
 	if err != nil {

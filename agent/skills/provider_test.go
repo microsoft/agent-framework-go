@@ -116,8 +116,10 @@ func (s *blockingSource) unblock() {
 
 func TestProvider_CustomPromptTemplate_MissingSkillsPlaceholderPanics(t *testing.T) {
 	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic for template missing {skills}")
+		recovered := recover()
+		err, ok := recovered.(error)
+		if !ok || err.Error() != "custom prompt template must contain the \"{skills}\" placeholder" {
+			t.Fatalf("expected missing {skills} placeholder error, got %v", recovered)
 		}
 	}()
 
@@ -164,39 +166,59 @@ func providerFromFileSource(source *fsskills.Source, opts *skills.ContextProvide
 }
 
 func TestProvider_FromFileSourceWithOptions_DiscoversSkills(t *testing.T) {
-	root := t.TempDir()
-	createSkillDir(t, root, "opts-skill", "Options skill", "Options body.")
-	provider := providerFromFileSource(
-		fsskills.NewSourceOptions(fsskills.SourceOptions{
-			ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
-				return nil, nil
-			},
-		}, os.DirFS(root)),
-		&skills.ContextProviderOptions{DisableCaching: true},
-	)
+	for _, test := range []struct {
+		name    string
+		options *skills.ContextProviderOptions
+	}{
+		{name: "default caching"},
+		{name: "caching disabled", options: &skills.ContextProviderOptions{DisableCaching: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			createSkillDir(t, root, "opts-skill", "Options skill", "Options body.")
+			provider := providerFromFileSource(
+				fsskills.NewSourceOptions(fsskills.SourceOptions{
+					ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+						return nil, nil
+					},
+				}, os.DirFS(root)),
+				test.options,
+			)
 
-	instructions, _ := captureProviderContext(t, provider)
-	if !strings.Contains(instructions, "opts-skill") {
-		t.Fatalf("expected opts-skill in instructions, got %q", instructions)
+			instructions, _ := captureProviderContext(t, provider)
+			if !strings.Contains(instructions, "opts-skill") {
+				t.Fatalf("expected opts-skill in instructions, got %q", instructions)
+			}
+		})
 	}
 }
 
 func TestProvider_FromFileSourceWithMultipleFileSystems_DiscoversMultipleSkills(t *testing.T) {
-	root := t.TempDir()
-	createSkillDir(t, filepath.Join(root, "multi-opts-1"), "skill-x", "Skill X", "Body X.")
-	createSkillDir(t, filepath.Join(root, "multi-opts-2"), "skill-y", "Skill Y", "Body Y.")
-	provider := providerFromFileSource(
-		fsskills.NewSourceOptions(fsskills.SourceOptions{
-			ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
-				return nil, nil
-			},
-		}, os.DirFS(filepath.Join(root, "multi-opts-1")), os.DirFS(filepath.Join(root, "multi-opts-2"))),
-		&skills.ContextProviderOptions{DisableCaching: true},
-	)
+	for _, test := range []struct {
+		name    string
+		options *skills.ContextProviderOptions
+	}{
+		{name: "default caching"},
+		{name: "caching disabled", options: &skills.ContextProviderOptions{DisableCaching: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			createSkillDir(t, filepath.Join(root, "multi-opts-1"), "skill-x", "Skill X", "Body X.")
+			createSkillDir(t, filepath.Join(root, "multi-opts-2"), "skill-y", "Skill Y", "Body Y.")
+			provider := providerFromFileSource(
+				fsskills.NewSourceOptions(fsskills.SourceOptions{
+					ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+						return nil, nil
+					},
+				}, os.DirFS(filepath.Join(root, "multi-opts-1")), os.DirFS(filepath.Join(root, "multi-opts-2"))),
+				test.options,
+			)
 
-	instructions, _ := captureProviderContext(t, provider)
-	if !strings.Contains(instructions, "skill-x") || !strings.Contains(instructions, "skill-y") {
-		t.Fatalf("expected both skills in instructions, got %q", instructions)
+			instructions, _ := captureProviderContext(t, provider)
+			if !strings.Contains(instructions, "skill-x") || !strings.Contains(instructions, "skill-y") {
+				t.Fatalf("expected both skills in instructions, got %q", instructions)
+			}
+		})
 	}
 }
 
@@ -378,8 +400,9 @@ func TestProvider_DefaultCaching_LoadsSourceOnce(t *testing.T) {
 	source := &countingSource{skills: []*skills.Skill{skill}}
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
 
-	_, _ = captureProviderContext(t, provider)
-	_, _ = captureProviderContext(t, provider)
+	for range 2 {
+		_, _ = captureProviderContext(t, provider)
+	}
 
 	if source.count != 1 {
 		t.Fatalf("expected source to be loaded once, got %d", source.count)
@@ -449,9 +472,10 @@ func TestProvider_DisableCaching_LoadsSourceEachTime(t *testing.T) {
 
 	_, _ = captureProviderContext(t, provider)
 	_, _ = captureProviderContext(t, provider)
+	_, _ = captureProviderContext(t, provider)
 
-	if source.count < 2 {
-		t.Fatalf("expected source to be loaded at least twice, got %d", source.count)
+	if source.count != 3 {
+		t.Fatalf("expected source to be loaded exactly three times, got %d", source.count)
 	}
 }
 
@@ -685,6 +709,7 @@ func TestProvider_SkillMemberLookupErrors(t *testing.T) {
 }
 
 func TestProvider_RunSkillScript_PropagatesErrorByDefault(t *testing.T) {
+	wantErr := errors.New("boom-script")
 	skill := mustInlineSkill(
 		skills.Frontmatter{Name: "script-skill", Description: "Script skill"},
 		"Body.",
@@ -692,7 +717,7 @@ func TestProvider_RunSkillScript_PropagatesErrorByDefault(t *testing.T) {
 		[]skills.Script{{
 			Name: "explode",
 			Run: func(context.Context, *skills.Skill, []string) (any, error) {
-				return nil, errors.New("boom-script")
+				return nil, wantErr
 			},
 		}},
 	)
@@ -704,8 +729,14 @@ func TestProvider_RunSkillScript_PropagatesErrorByDefault(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected script error to propagate, got result %#v", result)
 	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("expected the original script error, got %v", err)
+	}
 	if err.Error() != "boom-script" {
 		t.Fatalf("expected boom-script error, got %v", err)
+	}
+	if result != nil {
+		t.Fatalf("expected no result after script failure, got %#v", result)
 	}
 }
 
@@ -1046,8 +1077,9 @@ func TestProvider_SkillFilter_CanFilterOutAllSkills(t *testing.T) {
 		t.Fatal(err)
 	}
 	tools := slices.Collect(agent.AllOptions(options, agent.WithTool))
-	if len(messages) != 0 || len(tools) != 0 {
-		t.Fatalf("expected empty provider context when filter removes all skills, got messages=%d tools=%d", len(messages), len(tools))
+	instructions, _ := agent.GetOption(options, agent.WithInstructions)
+	if instructions != "" || len(messages) != 0 || len(tools) != 0 {
+		t.Fatalf("expected empty provider context when filter removes all skills, got instructions=%q messages=%d tools=%d", instructions, len(messages), len(tools))
 	}
 }
 

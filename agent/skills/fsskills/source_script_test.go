@@ -27,6 +27,9 @@ func TestFileSource_WithScriptFiles_DiscoversScripts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
 	scriptsFound := loaded[0].Scripts
 	if len(scriptsFound) != 1 {
 		t.Fatalf("expected 1 script, got %d", len(scriptsFound))
@@ -51,22 +54,17 @@ func TestFileSource_WithMultipleScriptExtensions_DiscoversAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
 	scriptNames := make([]string, 0, len(loaded[0].Scripts))
 	for _, script := range loaded[0].Scripts {
 		scriptNames = append(scriptNames, script.Name)
 	}
 	slices.Sort(scriptNames)
-	if len(scriptNames) != 6 {
-		t.Fatalf("expected 6 scripts, got %d", len(scriptNames))
-	}
-	for _, expected := range []string{"scripts/run.cs", "scripts/run.csx", "scripts/run.js", "scripts/run.ps1", "scripts/run.py", "scripts/run.sh"} {
-		if scriptNames[0] == "" {
-			break
-		}
-		found := slices.Contains(scriptNames, expected)
-		if !found {
-			t.Fatalf("expected script %q to be discovered, got %#v", expected, scriptNames)
-		}
+	want := []string{"scripts/run.cs", "scripts/run.csx", "scripts/run.js", "scripts/run.ps1", "scripts/run.py", "scripts/run.sh"}
+	if !slices.Equal(scriptNames, want) {
+		t.Fatalf("script names = %v, want %v", scriptNames, want)
 	}
 }
 
@@ -85,6 +83,9 @@ func TestFileSource_NonScriptExtensionsAreNotDiscovered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
 	if len(loaded[0].Scripts) != 0 {
 		t.Fatalf("expected no scripts, got %d", len(loaded[0].Scripts))
 	}
@@ -98,6 +99,9 @@ func TestFileSource_NoScriptFiles_ReturnsEmptyScripts(t *testing.T) {
 	loaded, err := source.Skills(t.Context())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
 	}
 	if len(loaded[0].Scripts) != 0 {
 		t.Fatalf("expected no scripts, got %d", len(loaded[0].Scripts))
@@ -118,9 +122,17 @@ func TestFileSource_ScriptsInAnyDirectory_AreDiscovered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// With depth-based scanning, scripts in any directory within search depth are discovered.
-	if len(loaded[0].Scripts) != 2 {
-		t.Fatalf("expected 2 scripts, got %d: %v", len(loaded[0].Scripts), loaded[0].Scripts)
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	scriptNames := make([]string, 0, len(loaded[0].Scripts))
+	for _, script := range loaded[0].Scripts {
+		scriptNames = append(scriptNames, script.Name)
+	}
+	slices.Sort(scriptNames)
+	want := []string{"convert.py", "tools/helper.sh"}
+	if !slices.Equal(scriptNames, want) {
+		t.Fatalf("script names = %v, want %v", scriptNames, want)
 	}
 }
 
@@ -218,7 +230,10 @@ func TestFileSource_ScriptExecution_FailsWithoutLinkInspection(t *testing.T) {
 }
 
 func TestFileSource_NullRunner_DoesNotPanic(t *testing.T) {
-	_ = fsskills.NewSource(os.DirFS(t.TempDir()))
+	source := fsskills.NewSource(os.DirFS(t.TempDir()))
+	if source == nil {
+		t.Fatal("expected a source without a script runner")
+	}
 }
 
 func TestFileSource_ScriptsWithNoRunner_ReturnsErrorOnRun(t *testing.T) {
@@ -232,8 +247,8 @@ func TestFileSource_ScriptsWithNoRunner_ReturnsErrorOnRun(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = loaded[0].Scripts[0].Run(t.Context(), loaded[0], nil)
-	if err == nil {
-		t.Fatal("expected script run to fail without a runner")
+	if err == nil || err.Error() != "script \"scripts/run.sh\" cannot be executed because no file script runner was provided" {
+		t.Fatalf("expected missing file script runner error, got %v", err)
 	}
 }
 
@@ -243,23 +258,61 @@ func TestFileSource_CustomScriptExtensions_OnlyDiscoversMatching(t *testing.T) {
 	skillDir := filepath.Join(root, "custom-ext-skill")
 	createRelativeFile(t, skillDir, "scripts/run.py", "print('py')")
 	createRelativeFile(t, skillDir, "scripts/run.rb", "puts 'rb'")
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		AllowedScriptExtensions: []string{".rb"},
-		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
-			return nil, nil
-		},
-	}, os.DirFS(root))
+	createRelativeFile(t, skillDir, "scripts/run.rb.txt", "not a Ruby script")
 
-	loaded, err := source.Skills(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	scriptsFound := loaded[0].Scripts
-	if len(scriptsFound) != 1 {
-		t.Fatalf("expected 1 script, got %d", len(scriptsFound))
-	}
-	if scriptsFound[0].Name != "scripts/run.rb" {
-		t.Fatalf("expected scripts/run.rb, got %q", scriptsFound[0].Name)
+	for _, tt := range []struct {
+		name       string
+		extensions []string
+		want       []string
+	}{
+		{
+			name:       "ruby only",
+			extensions: []string{".rb"},
+			want:       []string{"scripts/run.rb"},
+		},
+		{
+			name:       "case-insensitive extension",
+			extensions: []string{".RB"},
+			want:       []string{"scripts/run.rb"},
+		},
+		{
+			name:       "multiple custom extensions",
+			extensions: []string{".rb", ".py"},
+			want:       []string{"scripts/run.py", "scripts/run.rb"},
+		},
+		{
+			name: "nil uses defaults",
+			want: []string{"scripts/run.py"},
+		},
+		{
+			name:       "empty disables scripts",
+			extensions: []string{},
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+				AllowedScriptExtensions: tt.extensions,
+				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+					return nil, nil
+				},
+			}, os.DirFS(root))
+
+			loaded, err := source.Skills(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(loaded) != 1 {
+				t.Fatalf("expected 1 skill, got %d", len(loaded))
+			}
+			scriptNames := make([]string, 0, len(loaded[0].Scripts))
+			for _, script := range loaded[0].Scripts {
+				scriptNames = append(scriptNames, script.Name)
+			}
+			slices.Sort(scriptNames)
+			if !slices.Equal(scriptNames, tt.want) {
+				t.Fatalf("script names = %v, want %v", scriptNames, tt.want)
+			}
+		})
 	}
 }
 
@@ -290,23 +343,40 @@ func TestFileSource_ScriptAtConfigurableDepth_DiscoversWithSearchDepth(t *testin
 	root := t.TempDir()
 	createSkillDir(t, root, "nested-script-skill", "Nested script directory", "Body.")
 	createRelativeFile(t, filepath.Join(root, "nested-script-skill"), "f1/f2/f3/run.py", "print('nested')")
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		SearchDepth: new(4),
-		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
-			return nil, nil
-		},
-	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	scriptsFound := loaded[0].Scripts
-	if len(scriptsFound) != 1 {
-		t.Fatalf("expected 1 script, got %d", len(scriptsFound))
-	}
-	if scriptsFound[0].Name != "f1/f2/f3/run.py" {
-		t.Fatalf("expected f1/f2/f3/run.py, got %q", scriptsFound[0].Name)
+	for _, tt := range []struct {
+		name  string
+		depth *int
+		want  []string
+	}{
+		{name: "default depth"},
+		{name: "below script depth", depth: new(3)},
+		{name: "at script depth", depth: new(4), want: []string{"f1/f2/f3/run.py"}},
+		{name: "higher depth", depth: new(5), want: []string{"f1/f2/f3/run.py"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+				SearchDepth: tt.depth,
+				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+					return nil, nil
+				},
+			}, os.DirFS(root))
+
+			loaded, err := source.Skills(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(loaded) != 1 {
+				t.Fatalf("expected 1 skill, got %d", len(loaded))
+			}
+			scriptNames := make([]string, 0, len(loaded[0].Scripts))
+			for _, script := range loaded[0].Scripts {
+				scriptNames = append(scriptNames, script.Name)
+			}
+			if !slices.Equal(scriptNames, tt.want) {
+				t.Fatalf("script names = %v, want %v", scriptNames, tt.want)
+			}
+		})
 	}
 }
 
@@ -327,6 +397,9 @@ func TestFileSource_ScriptsInMultipleSubdirectories_AllDiscovered(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
 	expected := []string{"f2/run.py", "scripts/run.py"}
 	found := make(map[string]bool)
 	for _, s := range loaded[0].Scripts {
@@ -340,13 +413,26 @@ func TestFileSource_ScriptsInMultipleSubdirectories_AllDiscovered(t *testing.T) 
 }
 
 func TestFileSource_InvalidScriptExtension_Panics(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic for invalid script extension")
-		}
-	}()
+	tests := []struct {
+		name string
+		ext  string
+		want string
+	}{
+		{"missing dot", "txt", "invalid extension \"txt\": must start with '.'"},
+		{"empty", "", "invalid extension \"\": must start with '.'"},
+		{"one space", " ", "invalid extension \" \": must start with '.'"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if got := recover(); got != tt.want {
+					t.Fatalf("panic = %v, want %q", got, tt.want)
+				}
+			}()
 
-	_ = fsskills.NewSourceOptions(fsskills.SourceOptions{AllowedScriptExtensions: []string{"txt"}}, os.DirFS(t.TempDir()))
+			_ = fsskills.NewSourceOptions(fsskills.SourceOptions{AllowedScriptExtensions: []string{tt.ext}}, os.DirFS(t.TempDir()))
+		})
+	}
 }
 
 func TestFileSource_ScriptAtSkillRoot_Discovered(t *testing.T) {
@@ -363,6 +449,12 @@ func TestFileSource_ScriptAtSkillRoot_Discovered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if loaded[0].Frontmatter.Name != "root-script-skill" {
+		t.Fatalf("expected root-script-skill, got %q", loaded[0].Frontmatter.Name)
+	}
 	scriptsFound := loaded[0].Scripts
 	if len(scriptsFound) != 1 {
 		t.Fatalf("expected 1 script, got %d", len(scriptsFound))
@@ -377,24 +469,66 @@ func TestFileSource_ScriptFilter_IncludesOnlyMatchingScripts(t *testing.T) {
 	createSkillDir(t, root, "backslash-skill", "Script filter test", "Body.")
 	createRelativeFile(t, filepath.Join(root, "backslash-skill"), "scripts/run.py", "print('hello')")
 	createRelativeFile(t, filepath.Join(root, "backslash-skill"), "scripts/skip.py", "print('skip')")
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptFilter: func(ctx fsskills.FilterContext) bool {
-			return ctx.RelativeFilePath == "scripts/run.py"
-		},
-		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
-			return nil, nil
-		},
-	}, os.DirFS(root))
+	createRelativeFile(t, filepath.Join(root, "backslash-skill"), "f2/run.py", "print('f2')")
 
-	loaded, err := source.Skills(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded[0].Scripts) != 1 {
-		t.Fatalf("expected 1 script, got %d", len(loaded[0].Scripts))
-	}
-	if loaded[0].Scripts[0].Name != "scripts/run.py" {
-		t.Fatalf("expected scripts/run.py, got %q", loaded[0].Scripts[0].Name)
+	for _, tt := range []struct {
+		name   string
+		filter func(fsskills.FilterContext) bool
+		want   []string
+	}{
+		{
+			name: "exact path",
+			filter: func(ctx fsskills.FilterContext) bool {
+				return ctx.RelativeFilePath == "scripts/run.py"
+			},
+			want: []string{"scripts/run.py"},
+		},
+		{
+			name: "exclude directory",
+			filter: func(ctx fsskills.FilterContext) bool {
+				return !strings.HasPrefix(ctx.RelativeFilePath, "f2/")
+			},
+			want: []string{"scripts/run.py", "scripts/skip.py"},
+		},
+		{
+			name:   "include all",
+			filter: func(fsskills.FilterContext) bool { return true },
+			want:   []string{"f2/run.py", "scripts/run.py", "scripts/skip.py"},
+		},
+		{
+			name:   "exclude all",
+			filter: func(fsskills.FilterContext) bool { return false },
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+				ScriptFilter: func(ctx fsskills.FilterContext) bool {
+					if ctx.SkillName != "backslash-skill" {
+						t.Fatalf("filter skill name = %q, want backslash-skill", ctx.SkillName)
+					}
+					return tt.filter(ctx)
+				},
+				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+					return nil, nil
+				},
+			}, os.DirFS(root))
+
+			loaded, err := source.Skills(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(loaded) != 1 {
+				t.Fatalf("expected 1 skill, got %d", len(loaded))
+			}
+			scriptNames := make([]string, 0, len(loaded[0].Scripts))
+			for _, script := range loaded[0].Scripts {
+				scriptNames = append(scriptNames, script.Name)
+			}
+			slices.Sort(scriptNames)
+			if !slices.Equal(scriptNames, tt.want) {
+				t.Fatalf("script names = %v, want %v", scriptNames, tt.want)
+			}
+		})
 	}
 }
 
@@ -428,7 +562,9 @@ func TestFileScript_RunWithNonFileSkill_ReturnsError(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "script-owner", "Script owner", "Body.")
 	createRelativeFile(t, filepath.Join(root, "script-owner"), "scripts/run.py", "print('ok')")
+	runnerCalled := false
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+		runnerCalled = true
 		return "result", nil
 	}}, os.DirFS(root))
 
@@ -436,15 +572,51 @@ func TestFileScript_RunWithNonFileSkill_ReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
+	if len(loaded[0].Scripts) != 1 {
+		t.Fatalf("expected 1 script, got %d", len(loaded[0].Scripts))
+	}
+	script := loaded[0].Scripts[0]
 	nonFileSkill := &skills.Skill{
 		Frontmatter: skills.Frontmatter{Name: "my-skill", Description: "A skill"},
 		GetContent: func(context.Context) (string, error) {
 			return "Instructions.", nil
 		},
 	}
-	_, err = loaded[0].Scripts[0].Run(t.Context(), nonFileSkill, nil)
-	if err == nil {
-		t.Fatal("expected file script to reject non-file skill owner")
+	result, err := script.Run(t.Context(), nonFileSkill, nil)
+	if err == nil || !strings.Contains(err.Error(), "backing fs.FS") {
+		t.Fatalf("expected backing filesystem error, got %v", err)
+	}
+	if result != nil {
+		t.Fatalf("expected no result for invalid owner, got %#v", result)
+	}
+	if runnerCalled {
+		t.Fatal("script runner was called with an invalid owner")
+	}
+
+	nonFileSkill.Frontmatter.Name = "script-owner"
+	for _, tt := range []struct {
+		name  string
+		owner *skills.Skill
+	}{
+		{name: "same-named non-file skill", owner: nonFileSkill},
+		{name: "nil skill"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			runnerCalled = false
+			result, err := script.Run(t.Context(), tt.owner, nil)
+			if err == nil || !strings.Contains(err.Error(), "backing fs.FS") {
+				t.Fatalf("expected backing filesystem error, got %v", err)
+			}
+			if result != nil {
+				t.Fatalf("expected no result for invalid owner, got %#v", result)
+			}
+			if runnerCalled {
+				t.Fatal("script runner was called with an invalid owner")
+			}
+		})
 	}
 }
 
@@ -470,6 +642,7 @@ func TestFileSkill_WithScripts_ContentIncludesAvailableScriptsBlock(t *testing.T
 	createSkillDir(t, root, "schema-content-skill", "A test skill", "Instructions here.")
 	createRelativeFile(t, filepath.Join(root, "schema-content-skill"), "build.sh", "echo build")
 	createRelativeFile(t, filepath.Join(root, "schema-content-skill"), "deploy.sh", "echo deploy")
+	const originalRawContent = "---\nname: schema-content-skill\ndescription: A test skill\n---\nInstructions here."
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
 		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
 			return nil, nil
@@ -483,6 +656,9 @@ func TestFileSkill_WithScripts_ContentIncludesAvailableScriptsBlock(t *testing.T
 	content, err := loaded[0].GetContent(t.Context())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.HasPrefix(content, originalRawContent) {
+		t.Fatalf("expected content to start with original SKILL.md content %q, got: %s", originalRawContent, content)
 	}
 	if !strings.Contains(content, "<available_scripts>") {
 		t.Fatalf("expected <available_scripts> block in content, got: %s", content)
@@ -498,6 +674,9 @@ func TestFileSkill_WithScripts_ContentIncludesAvailableScriptsBlock(t *testing.T
 	}
 	if !strings.Contains(content, "</available_scripts>") {
 		t.Fatalf("expected </available_scripts> in content, got: %s", content)
+	}
+	if !strings.Contains(content, "<available_resources />") {
+		t.Fatalf("expected empty <available_resources /> block when skill has no resources, got: %s", content)
 	}
 }
 
@@ -569,6 +748,9 @@ func TestFileSkill_ScriptContent_IncludesDefaultArraySchema(t *testing.T) {
 	// The default schema {"type":"array","items":{"type":"string"}} should appear in the content.
 	if !strings.Contains(content, `"type":"array"`) {
 		t.Fatalf("expected default array schema in content, got: %s", content)
+	}
+	if !strings.Contains(content, `{"type":"array","items":{"type":"string"}}`) {
+		t.Fatalf("expected complete default array-of-string schema in content, got: %s", content)
 	}
 	// Quotes in JSON schema should be preserved (not escaped as &quot;).
 	if strings.Contains(content, "&quot;") {

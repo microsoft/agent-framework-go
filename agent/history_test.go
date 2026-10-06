@@ -5,6 +5,7 @@ package agent_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"testing"
 
@@ -122,6 +123,7 @@ func TestNewInMemoryHistoryProvider_ProvidePassesOriginalMessages(t *testing.T) 
 	session := agenttest.CreateSession()
 	request := message.NewText("request")
 	response := message.NewText("response")
+	response.Role = message.RoleAssistant
 
 	if err := invokeHistoryProviderInvoked(provider, t.Context(), []*message.Message{request}, []*message.Message{response}, agent.WithSession(session)); err != nil {
 		t.Fatalf("unexpected error storing history: %v", err)
@@ -138,11 +140,23 @@ func TestNewInMemoryHistoryProvider_ProvidePassesOriginalMessages(t *testing.T) 
 	if messages[2] != newRequest {
 		t.Fatal("expected original request message to be preserved last")
 	}
+	if got := messages[2].String(); got != "new request" {
+		t.Fatalf("new request text = %q, want new request", got)
+	}
 	if messages[0].String() != "request" || messages[1].String() != "response" {
 		t.Fatalf("unexpected output order/content")
 	}
 	if messages[0].Source.ID != "InMemoryHistoryProvider" || messages[1].Source.ID != "InMemoryHistoryProvider" {
 		t.Fatal("expected history messages to have provider source ID")
+	}
+	if messages[0].Role != message.RoleUser || messages[1].Role != message.RoleAssistant || messages[2].Role != message.RoleUser {
+		t.Fatalf("message roles = [%q %q %q], want [user assistant user]", messages[0].Role, messages[1].Role, messages[2].Role)
+	}
+	if messages[0].Source.Type != agent.SourceTypeHistoryProvider || messages[1].Source.Type != agent.SourceTypeHistoryProvider {
+		t.Fatal("expected loaded history messages to have history-provider source type")
+	}
+	if got := messages[2].Source.Type; got != message.SourceTypeExternal {
+		t.Fatalf("new request source type = %q, want external", got)
 	}
 }
 
@@ -220,12 +234,15 @@ func TestNewInMemoryHistoryProvider_StateInitializer_SeedsMissingState(t *testin
 		t.Fatalf("expected seed message source ID k, got %q", messages[0].Source.ID)
 	}
 
-	_, err = invokeHistoryProvider(provider, t.Context(), nil, agent.WithSession(session))
+	messages, err = invokeHistoryProvider(provider, t.Context(), nil, agent.WithSession(session))
 	if err != nil {
 		t.Fatalf("unexpected error reading initialized history: %v", err)
 	}
 	if initializerCalls != 1 {
 		t.Fatalf("expected initialized state to be reused, got %d initializer calls", initializerCalls)
+	}
+	if got := messageStrings(messages); len(got) != 1 || got[0] != "seed" {
+		t.Fatalf("initialized history = %v, want [seed]", got)
 	}
 }
 
@@ -235,13 +252,18 @@ func TestNewInMemoryHistoryProvider_DefaultStoreInputRequestMessageFilter_Exclud
 
 	user := message.NewText("user")
 	historyMsg := message.NewText("history")
+	historyMsg.Role = message.RoleSystem
 	historyMsg.Source = message.Source{Type: agent.SourceTypeHistoryProvider, ID: "k"}
 	otherHistoryMsg := message.NewText("other history")
+	otherHistoryMsg.Role = message.RoleSystem
 	otherHistoryMsg.Source = message.Source{Type: agent.SourceTypeHistoryProvider, ID: "other"}
 	ctxMsg := message.NewText("ctx")
+	ctxMsg.Role = message.RoleSystem
 	ctxMsg.Source = message.Source{Type: agent.SourceTypeContextProvider, ID: "provider-A"}
+	response := message.NewText("response")
+	response.Role = message.RoleAssistant
 
-	if err := invokeHistoryProviderInvoked(provider, t.Context(), []*message.Message{user, historyMsg, otherHistoryMsg, ctxMsg}, nil, agent.WithSession(session)); err != nil {
+	if err := invokeHistoryProviderInvoked(provider, t.Context(), []*message.Message{user, historyMsg, otherHistoryMsg, ctxMsg}, []*message.Message{response}, agent.WithSession(session)); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -249,8 +271,11 @@ func TestNewInMemoryHistoryProvider_DefaultStoreInputRequestMessageFilter_Exclud
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(messages) != 2 || messages[0].String() != "user" || messages[1].String() != "ctx" {
-		t.Fatal("expected default request filter to exclude all history-provider messages")
+	if len(messages) != 3 || messages[0].String() != "user" || messages[1].String() != "ctx" || messages[2].String() != "response" {
+		t.Fatalf("stored history = %v, want [user ctx response] excluding both history-provider messages", messageStrings(messages))
+	}
+	if messages[0].Role != message.RoleUser || messages[1].Role != message.RoleSystem || messages[2].Role != message.RoleAssistant {
+		t.Fatalf("stored roles = [%q %q %q], want [user system assistant]", messages[0].Role, messages[1].Role, messages[2].Role)
 	}
 }
 
@@ -286,6 +311,15 @@ func TestHistoryProvider_Invoking_DoesNotMutateProvidedMessageSlice(t *testing.T
 	}
 	if providedMessages[0] != provided || backing[1] != sentinel {
 		t.Fatal("expected history provider not to modify the provided message backing array")
+	}
+	if messages[0] == filtered {
+		t.Fatal("expected replacement message to be cloned")
+	}
+	if got := messageStrings(messages); !slices.Equal(got, []string{"filtered", "request"}) {
+		t.Fatalf("output messages = %v, want [filtered request]", got)
+	}
+	if got := provided.String(); got != "provided" {
+		t.Fatalf("original provided text = %q, want provided", got)
 	}
 }
 

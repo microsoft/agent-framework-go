@@ -39,6 +39,9 @@ func TestObservability_CreatesWorkflowEndToEndSpans(t *testing.T) {
 	runWorkflow(t, inproc.Default, wf, "hello")
 
 	spans := tracer.Spans()
+	if len(spans) != 9 {
+		t.Fatalf("span count = %d, want 9; spans: %v", len(spans), workflowtest.SpanNames(spans))
+	}
 	wantCounts := map[string]int{
 		"workflow.build":     1,
 		"workflow.session":   1,
@@ -67,6 +70,9 @@ func TestObservability_CreatesWorkflowBuildSpan(t *testing.T) {
 		t.Fatalf("span count = %d, want 1; spans: %v", len(spans), workflowtest.SpanNames(spans))
 	}
 	buildSpan := workflowtest.FindSpanWithPrefix(t, spans, "workflow.build")
+	if got := buildSpan.Name(); got != "workflow.build" {
+		t.Fatalf("build span name = %q, want workflow.build", got)
+	}
 	buildSpan.RequireEvent(t, "build.started")
 	buildSpan.RequireEvent(t, "build.validation_completed")
 	buildSpan.RequireEvent(t, "build.completed")
@@ -237,13 +243,17 @@ func TestObservability_UnserializableSensitiveDataDoesNotFailWorkflow(t *testing
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	outputs := collectOutputValues(run.OutgoingEvents())
+	events := collectEvents(run.OutgoingEvents())
 	if err := run.Close(context.Background()); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
-	if len(outputs) != 1 || outputs[0] != "done" {
-		t.Fatalf("outputs = %#v, want []string{\"done\"}", outputs)
+	if hasErrorEvents(events) {
+		t.Fatalf("unexpected error events: %#v", events)
+	}
+	outputs := outputEvents(events)
+	if len(outputs) != 1 || outputs[0].Output != "done" {
+		t.Fatalf("outputs = %#v, want one done output", outputs)
 	}
 	if len(received) != 1 || received[0].Value != "HELLO" {
 		t.Fatalf("received = %#v, want one delivered payload with value HELLO", received)
@@ -315,6 +325,12 @@ func TestObservability_RunSpansAreEnded(t *testing.T) {
 			runWorkflow(t, testCase.env, wf, "hello")
 
 			spans := tracer.Spans()
+			if got := workflowtest.CountSpansWithPrefix(spans, "workflow.session"); got != 1 {
+				t.Fatalf("workflow.session span count = %d, want 1; spans: %v", got, workflowtest.SpanNames(spans))
+			}
+			if got := workflowtest.CountSpansWithPrefix(spans, "workflow_invoke"); got != 1 {
+				t.Fatalf("workflow_invoke span count = %d, want 1; spans: %v", got, workflowtest.SpanNames(spans))
+			}
 			workflowtest.FindSpanWithPrefix(t, spans, "workflow.session").RequireEnded(t)
 			workflowtest.FindSpanWithPrefix(t, spans, "workflow_invoke").RequireEnded(t)
 		})
@@ -339,6 +355,12 @@ func TestObservability_StreamingRunSpansAreEnded(t *testing.T) {
 	}
 
 	spans := tracer.Spans()
+	if got := workflowtest.CountSpansWithPrefix(spans, "workflow.session"); got != 1 {
+		t.Fatalf("workflow.session span count = %d, want 1; spans: %v", got, workflowtest.SpanNames(spans))
+	}
+	if got := workflowtest.CountSpansWithPrefix(spans, "workflow_invoke"); got != 1 {
+		t.Fatalf("workflow_invoke span count = %d, want 1; spans: %v", got, workflowtest.SpanNames(spans))
+	}
 	workflowtest.FindSpanWithPrefix(t, spans, "workflow.session").RequireEnded(t)
 	workflowtest.FindSpanWithPrefix(t, spans, "workflow_invoke").RequireEnded(t)
 }
@@ -382,7 +404,20 @@ func TestObservability_AllSpansAreEndedAfterWorkflowCompletion(t *testing.T) {
 	wf := newTelemetryWorkflow(t, tracer, workflow.TelemetryOptions{})
 	runWorkflow(t, inproc.Lockstep, wf, "hello")
 
-	for _, span := range tracer.Spans() {
+	spans := tracer.Spans()
+	for prefix, want := range map[string]int{
+		"workflow.build":     1,
+		"workflow.session":   1,
+		"workflow_invoke":    1,
+		"edge_group.process": 2,
+		"executor.process":   2,
+		"message.send":       2,
+	} {
+		if got := workflowtest.CountSpansWithPrefix(spans, prefix); got != want {
+			t.Fatalf("span count for %q = %d, want %d; spans: %v", prefix, got, want, workflowtest.SpanNames(spans))
+		}
+	}
+	for _, span := range spans {
 		span.RequireEnded(t)
 	}
 }
