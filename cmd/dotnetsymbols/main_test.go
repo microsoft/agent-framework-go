@@ -112,8 +112,8 @@ func TestLocalAssemblyWithTestMetadata(t *testing.T) {
 	}
 	data := testAssemblyWithTests(t, testAssemblyOptions{})
 	tests := filepath.Join(t.TempDir(), "Tests.dll")
-	copy := filepath.Join(t.TempDir(), "DifferentFileName.dll")
-	for _, path := range []string{tests, copy} {
+	duplicate := filepath.Join(t.TempDir(), "DifferentFileName.dll")
+	for _, path := range []string{tests, duplicate} {
 		if err := os.WriteFile(path, data, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -121,7 +121,7 @@ func TestLocalAssemblyWithTestMetadata(t *testing.T) {
 	// Metadata extraction must not invoke Git, a .NET SDK, or a test runner.
 	t.Setenv("PATH", t.TempDir())
 	var out, diagnostics bytes.Buffer
-	args := []string{"-assembly", file, "-namespace", "Example.Child", "-test-assembly", tests, "-test-assembly", copy}
+	args := []string{"-assembly", file, "-namespace", "Example.Child", "-test-assembly", tests, "-test-assembly", duplicate}
 	if err := run(args, &out, &diagnostics); err != nil {
 		t.Fatal(err)
 	}
@@ -162,10 +162,10 @@ func TestLocalAssemblyWithTestMetadata(t *testing.T) {
 	if err := run(args, &out, &diagnostics); err == nil || !strings.Contains(err.Error(), "no supported test declarations") || out.Len() != 0 {
 		t.Fatalf("failed test extraction = %v, output %q", err, out.String())
 	}
-	if err := os.WriteFile(copy, append(data, 0), 0o600); err != nil {
+	if err := os.WriteFile(duplicate, append(data, 0), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	args[len(args)-1] = copy
+	args[len(args)-1] = duplicate
 	if err := run(args, &out, &diagnostics); err == nil || !strings.Contains(err.Error(), "multiple different inputs for test assembly") || out.Len() != 0 {
 		t.Fatalf("conflicting test build = %v, output %q", err, out.String())
 	}

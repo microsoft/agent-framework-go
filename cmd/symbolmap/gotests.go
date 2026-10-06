@@ -65,7 +65,7 @@ func indexGoTests(root string) (goTestInventory, error) {
 		return goTestInventory{}, fmt.Errorf("parse Go test module: %w", err)
 	}
 	if module.Module == nil || !modulePattern.MatchString(module.Module.Mod.Path) {
-		return goTestInventory{}, errors.New("Go test root must contain a valid module directive")
+		return goTestInventory{}, errors.New("go test root must contain a valid module directive")
 	}
 	index := goTestInventory{
 		goTestMetadata: goTestMetadata{Module: module.Module.Mod.Path, Scope: goTestDiscoveryScope},

@@ -2265,9 +2265,10 @@ func TestTestReconciliationPreservesInputs(t *testing.T) {
 		}
 		index.Commit = "4444444444444444444444444444444444444444"
 		index.Dirty = new(true)
-		if commit == "" {
+		switch commit {
+		case "":
 			index.Commit = ""
-		} else if commit == "5555555555555555555555555555555555555555" {
+		case "5555555555555555555555555555555555555555":
 			index.Commit = "6666666666666666666666666666666666666666"
 		}
 		wantIndex := index

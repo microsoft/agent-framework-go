@@ -1097,16 +1097,6 @@ func firstRequest(t *testing.T, events func(func(workflow.Event) bool)) *workflo
 	return nil
 }
 
-func collectRequests(events func(func(workflow.Event) bool)) []*workflow.ExternalRequest {
-	var requests []*workflow.ExternalRequest
-	for evt := range events {
-		if reqEvt, ok := evt.(workflow.RequestInfoEvent); ok {
-			requests = append(requests, reqEvt.Request)
-		}
-	}
-	return requests
-}
-
 func requestsFromEvents(events []workflow.Event) []*workflow.ExternalRequest {
 	var requests []*workflow.ExternalRequest
 	for _, evt := range events {
