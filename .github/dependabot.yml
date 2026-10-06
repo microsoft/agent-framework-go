@@ -30,3 +30,11 @@ updates:
       all:
         patterns:
           - '*'
+  - package-ecosystem: gomod
+    directory: /_catalog
+    schedule:
+      interval: daily
+    groups:
+      all:
+        patterns:
+          - '*'

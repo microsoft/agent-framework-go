@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/symbolcatalog"
 	"github.com/microsoft/go-winmd/winmd"
 )
 
@@ -435,7 +436,7 @@ func genericArity(number uint32) string {
 	return "``" + strconv.FormatUint(uint64(number), 10)
 }
 
-func parameterTypes(parameters []parameterInfo) string {
+func parameterTypes(parameters []symbolcatalog.Parameter) string {
 	types := make([]string, len(parameters))
 	for i, parameter := range parameters {
 		types[i] = parameter.Type
@@ -443,7 +444,7 @@ func parameterTypes(parameters []parameterInfo) string {
 	return strings.Join(types, ",")
 }
 
-func methodIdentity(name string, arity uint32, parameters []parameterInfo, result string, varArgs bool) string {
+func methodIdentity(name string, arity uint32, parameters []symbolcatalog.Parameter, result string, varArgs bool) string {
 	args := parameterTypes(parameters)
 	if varArgs {
 		if args != "" {
@@ -457,7 +458,7 @@ func methodIdentity(name string, arity uint32, parameters []parameterInfo, resul
 	return name + genericArity(arity) + "(" + args + ") -> " + result
 }
 
-func propertyIdentity(name string, parameters []parameterInfo, result string) string {
+func propertyIdentity(name string, parameters []symbolcatalog.Parameter, result string) string {
 	if len(parameters) != 0 {
 		name += "(" + parameterTypes(parameters) + ")"
 	}

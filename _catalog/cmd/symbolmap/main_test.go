@@ -18,38 +18,39 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/symbolcatalog"
 )
 
 // Decode the command's public JSON rather than inspecting its internal catalog.
 type reportedMapping struct {
-	Area      string   `json:"area"`
-	Kind      string   `json:"kind"`
-	Namespace string   `json:"namespace"`
-	Dotnet    string   `json:"dotnet"`
-	Go        string   `json:"go"`
-	GoSymbols []string `json:"go_symbols"`
-	Status    string   `json:"status"`
-	Note      string   `json:"note"`
-	Assembly  string   `json:"assembly,omitempty"`
-	Review    string   `json:"review,omitempty"`
+	Area       string   `json:"area"`
+	Kind       string   `json:"kind"`
+	Namespace  string   `json:"namespace"`
+	Dotnet     string   `json:"dotnet"`
+	Go         string   `json:"go"`
+	GoSymbols  []string `json:"go_symbols"`
+	Status     string   `json:"status"`
+	Unreviewed bool     `json:"unreviewed,omitempty"`
+	Note       string   `json:"note"`
+	Assembly   string   `json:"assembly,omitempty"`
 }
 
 type reportedMappings struct {
 	Baseline map[string]any    `json:"baseline"`
-	Reviews  map[string]any    `json:"reviews,omitempty"`
 	Mappings []reportedMapping `json:"mappings"`
 	Page     *pageInfo         `json:"page,omitempty"`
 }
 
 type reportedSummary struct {
-	Baseline      map[string]any `json:"baseline"`
-	Reviews       map[string]any `json:"reviews,omitempty"`
-	DotnetSymbols int            `json:"dotnet_symbols"`
-	GoSymbols     int            `json:"go_symbols"`
-	GoOnlySymbols int            `json:"go_only_symbols,omitempty"`
-	ByStatus      map[string]int `json:"by_status"`
-	ByKind        map[string]int `json:"by_kind"`
-	ByArea        map[string]int `json:"by_area"`
+	Baseline          map[string]any `json:"baseline"`
+	DotnetSymbols     int            `json:"dotnet_symbols"`
+	UnreviewedSymbols int            `json:"unreviewed_symbols,omitempty"`
+	GoSymbols         int            `json:"go_symbols"`
+	GoOnlySymbols     int            `json:"go_only_symbols,omitempty"`
+	ByStatus          map[string]int `json:"by_status"`
+	ByKind            map[string]int `json:"by_kind"`
+	ByArea            map[string]int `json:"by_area"`
 }
 
 const (
@@ -121,9 +122,12 @@ const (
 )
 
 func TestRepositoryCatalog(t *testing.T) {
-	// Exercise the default path from the repository root, without Git or source
+	// Exercise the default path from the catalog module root, without Git or source
 	// line assertions that would require maintaining a second symbol inventory.
 	t.Chdir(filepath.Join("..", ".."))
+	if _, err := os.Stat(defaultCatalogFile); errors.Is(err, os.ErrNotExist) {
+		t.Skip("development catalog is not included in module downloads")
+	}
 	var got struct {
 		Baseline map[string]any    `json:"baseline"`
 		Mappings []json.RawMessage `json:"mappings"`
@@ -137,7 +141,7 @@ func TestRepositoryCatalog(t *testing.T) {
 }
 
 func TestRepositoryIndexedViews(t *testing.T) {
-	root, err := filepath.Abs(filepath.Join("..", ".."))
+	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,23 +159,28 @@ func TestRepositoryIndexedViews(t *testing.T) {
 		t.Fatalf("default Go page is incomplete: %+v", goPage.Page)
 	}
 
-	t.Chdir(root)
-	var reconciliation reconciliationSummary
-	decodeOutput(t, commandOutput(t, "reconcile", "-summary", "-check", "-json"), &reconciliation)
-	if reconciliation.InventoryDeclarations == 0 || reconciliation.AssessedDeclarations == 0 {
-		t.Fatalf("reconciliation is incomplete: %+v", reconciliation)
-	}
-	if reconciliation.Counts["needs-reconciliation"] != 0 || reconciliation.Counts["invalid-go-target"] != 0 {
-		t.Fatalf("strict reconciliation contains failing states: %v", reconciliation.Counts)
-	}
-	var queue reconciliationReport
-	decodeOutput(t, commandOutput(t, "reconcile", "-state", "unreviewed", "-area", "workflows"), &queue)
-	if queue.Page == nil || queue.Page.Total <= defaultPageLimit || queue.Page.Returned != defaultPageLimit || len(queue.Rows) != defaultPageLimit || queue.Counts["unreviewed"] != queue.Page.Total {
-		t.Fatalf("default review queue page is incomplete: page=%+v rows=%d counts=%v", queue.Page, len(queue.Rows), queue.Counts)
-	}
+	t.Chdir(filepath.Join(root, "_catalog"))
+	t.Run("catalog reconciliation", func(t *testing.T) {
+		if _, err := os.Stat(defaultCatalogFile); errors.Is(err, os.ErrNotExist) {
+			t.Skip("development catalog is not included in module downloads")
+		}
+		var reconciliation reconciliationSummary
+		decodeOutput(t, commandOutput(t, "reconcile", "-summary", "-check", "-json"), &reconciliation)
+		if reconciliation.InventoryDeclarations == 0 || reconciliation.AssessedDeclarations == 0 {
+			t.Fatalf("reconciliation is incomplete: %+v", reconciliation)
+		}
+		if reconciliation.Counts["needs-reconciliation"] != 0 || reconciliation.Counts["invalid-go-target"] != 0 {
+			t.Fatalf("strict reconciliation contains failing states: %v", reconciliation.Counts)
+		}
+		var queue reconciliationReport
+		decodeOutput(t, commandOutput(t, "reconcile", "-state", "unreviewed", "-area", "workflows"), &queue)
+		if queue.Page == nil || queue.Page.Total <= defaultPageLimit || queue.Page.Returned != defaultPageLimit || len(queue.Rows) != defaultPageLimit || queue.Counts["unreviewed"] != queue.Page.Total {
+			t.Fatalf("default review queue page is incomplete: page=%+v rows=%d counts=%v", queue.Page, len(queue.Rows), queue.Counts)
+		}
+	})
 
 	var out, diagnostics bytes.Buffer
-	err = run([]string{"reconcile", "-file", writeCatalog(t, sampleCatalogJSON), "-summary"}, &out, &diagnostics)
+	err = run([]string{"reconcile", "-file", writeCatalog(t, catalogWithInventory(t, sampleCatalogJSON, sampleAPIInventoryJSON)), "-summary"}, &out, &diagnostics)
 	if err == nil || !strings.Contains(err.Error(), "does not match catalog go_module") || out.Len() != 0 {
 		t.Fatalf("wrong Go module must fail without a report: %v, %q", err, out.String())
 	}
@@ -189,9 +198,15 @@ func TestReconcileStates(t *testing.T) {
 		}
 	}
 	report := mappingsReport{
-		Baseline: baseline{DotnetCommit: sourceCommit, GoCommit: goCommit},
+		Baseline: symbolcatalog.Baseline{DotnetCommit: sourceCommit, GoCommit: goCommit},
 		Mappings: []mappingRow{
 			row("Agent", "agent.Agent"),
+			func() mappingRow {
+				r := row("Agent", "agent.Agent.Run")
+				r.Kind, r.Member, r.Dotnet = "method", "Run(string)", "Agent.Run(string)"
+				r.Go = new("a.Run(value)")
+				return r
+			}(),
 			row("BrokenTarget", "agent.Missing"),
 			row("OutsideGo", "provider/example.Agent"),
 			row("Missing", "agent.Agent"),
@@ -202,11 +217,18 @@ func TestReconcileStates(t *testing.T) {
 			}(),
 		},
 	}
-	inv := declarationInventory{
+	inv := symbolcatalog.Inventory{
 		SchemaVersion: 1, IdentityFormat: "ecma335-v1", SHA256: "inventory",
-		Assemblies: map[string]declarationAssembly{"Core": {InformationalVersion: "1.0.0+" + sourceCommit}},
-		Types: map[string]declarationType{
-			"Example.Agent":        {Assembly: "Core", Kind: "class"},
+		Assemblies: map[string]symbolcatalog.Assembly{"Core": {InformationalVersion: "1.0.0+" + sourceCommit}},
+		Types: map[string]symbolcatalog.Declaration{
+			"Example.Agent": {
+				Assembly: "Core", Kind: "class",
+				Methods: map[string]symbolcatalog.Method{
+					"Run(System.String) -> System.String": {
+						ReturnType: "System.String", Parameters: []symbolcatalog.Parameter{{Type: "System.String"}},
+					},
+				},
+			},
 			"Example.BrokenTarget": {Assembly: "Core", Kind: "class"},
 			"Example.OutsideGo":    {Assembly: "Core", Kind: "class"},
 			"Example.Unreviewed":   {Assembly: "Core", Kind: "class"},
@@ -214,23 +236,32 @@ func TestReconcileStates(t *testing.T) {
 	}
 	api := goInventory{
 		Module: "example.org/sdk", Commit: goCommit, Packages: []string{"agent"},
-		Symbols: map[string]goSymbol{"agent.Agent": {Kind: "type", Signature: "type agent.Agent struct"}},
+		Symbols: map[string]goSymbol{
+			"agent.Agent":     {Kind: "type", Signature: "type agent.Agent struct"},
+			"agent.Agent.Run": {Kind: "method", Signature: "func (agent.Agent).Run(string) string"},
+		},
 	}
 	got := reconcile(report, inv, api, false)
 	want := map[string]int{
-		"linked": 1, "unreviewed": 1, "needs-reconciliation": 1,
+		"linked": 2, "unreviewed": 1, "needs-reconciliation": 1,
 		"invalid-go-target": 1, "outside-inventory-scope": 1, "go-outside-scope": 1,
 	}
 	if !reflect.DeepEqual(got.Counts, want) {
 		t.Fatalf("reconciliation states = %v, want %v", got.Counts, want)
 	}
-	if got.InventoryDeclarations != 4 || got.AssessedDeclarations != 5 {
+	if got.InventoryDeclarations != 5 || got.AssessedDeclarations != 6 {
 		t.Fatalf("reconciliation totals = %d inventory, %d assessed", got.InventoryDeclarations, got.AssessedDeclarations)
+	}
+	if row := got.Rows[0]; row.Dotnet != "Agent.Run(string) -> string" || row.Member != "Run(string) -> string" || row.State != "linked" {
+		t.Errorf("short source method did not resolve to its complete return label: %+v", row)
+	}
+	if report.Mappings[1].Member != "Run(string)" {
+		t.Fatal("reconciliation changed the short source method key")
 	}
 
 	duplicate := row("Agent", "agent.Agent")
 	conflict := reconcile(mappingsReport{Baseline: report.Baseline, Mappings: []mappingRow{report.Mappings[0], duplicate}}, inv, api, true)
-	if conflict.Counts["needs-reconciliation"] != 2 || conflict.Counts["unreviewed"] != 4 {
+	if conflict.Counts["needs-reconciliation"] != 2 || conflict.Counts["unreviewed"] != 5 {
 		t.Fatalf("duplicate claims states = %v", conflict.Counts)
 	}
 	var output bytes.Buffer
@@ -242,6 +273,48 @@ func TestReconcileStates(t *testing.T) {
 	decodeOutput(t, output.String(), &page)
 	if page.Page == nil || page.Page.Total != len(got.Rows) || page.Page.Returned != 1 || len(page.Rows) != 1 || !reflect.DeepEqual(page.Counts, got.Counts) {
 		t.Fatalf("paginated reconciliation changed counts: page=%+v rows=%d counts=%v", page.Page, len(page.Rows), page.Counts)
+	}
+	for _, obsolete := range []string{"reviews", "review"} {
+		if strings.Contains(output.String(), `"`+obsolete+`":`) {
+			t.Fatalf("reconciliation retained obsolete %q metadata: %s", obsolete, output.String())
+		}
+	}
+	for _, brief := range []bool{false, true} {
+		var text bytes.Buffer
+		if err := writeReconciliation(&text, got, reportFilter{}, pageOptions{}, false, brief, false); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(text.String(), "REVIEW") || strings.Contains(text.String(), "Review ") {
+			t.Fatalf("reconciliation text retained named review metadata: %s", text.String())
+		}
+		for _, want := range []string{sourceCommit, goCommit, ".NET inventory: schema 1; identity ecma335-v1; SHA256 inventory.", "Go inventory: module example.org/sdk"} {
+			if !strings.Contains(text.String(), want) {
+				t.Fatalf("reconciliation text lost baseline or extraction provenance %q: %s", want, text.String())
+			}
+		}
+	}
+	for _, test := range []struct {
+		name, source, goCommit   string
+		sourceChanged, goChanged *bool
+	}{
+		{"original commits", sourceCommit, goCommit, new(false), new(false)},
+		{"changed source", strings.Repeat("3", 40), goCommit, new(true), new(false)},
+		{"changed Go", sourceCommit, strings.Repeat("4", 40), new(false), new(true)},
+		{"unknown commits", "", "", nil, nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			inventory := inv
+			inventory.Assemblies = maps.Clone(inv.Assemblies)
+			inventory.Assemblies["Core"] = symbolcatalog.Assembly{InformationalVersion: "1.0.0+" + test.source}
+			index := api
+			index.Commit = test.goCommit
+			current := reconcile(report, inventory, index, false)
+			for _, row := range current.Rows {
+				if row.State == "linked" && (!reflect.DeepEqual(row.ReviewSourceChanged, test.sourceChanged) || !reflect.DeepEqual(row.ReviewGoChanged, test.goChanged)) {
+					t.Fatalf("commit comparisons did not use the original baseline: %+v", row)
+				}
+			}
+		})
 	}
 }
 
@@ -260,6 +333,143 @@ func TestFlattenMappings(t *testing.T) {
 		`"go": "agent.Config{Enabled: true}", "go_symbols": ["agent.Config.Enabled"], "status": "mapped"`,
 		`"go": "", "go_symbols": [], "status": "unmapped"`, 1)
 	readMappings(t, "-file", writeCatalog(t, emptyExample))
+	t.Run("mapped notes optional", func(t *testing.T) {
+		data := strings.Replace(sampleCatalogJSON, `"go_symbols": ["agent.New"], "status": "adapted"`, `"go_symbols": ["agent.New"], "status": "mapped"`, 1)
+		for _, note := range []string{
+			"Execution runtime counterpart.", "Name accessor.", "Serialization belongs to Session.",
+			"Go constructor function.", "Configuration field.", "Default name constant.",
+		} {
+			data = strings.Replace(data, `, "note": "`+note+`"`, "", 1)
+		}
+		output := commandOutput(t, "mappings", "-file", writeCatalog(t, data), "-status", "mapped", "-limit=0")
+		var got reportedMappings
+		decodeOutput(t, output, &got)
+		var want []reportedMapping
+		for _, row := range expectedMappings() {
+			if row.Kind == "constructor" {
+				row.Status = "mapped"
+			}
+			if row.Status == "mapped" {
+				row.Note = ""
+				want = append(want, row)
+			}
+		}
+		if !reflect.DeepEqual(got.Mappings, want) || strings.Contains(output, `"note":`) {
+			t.Fatalf("mapped entries without notes changed or emitted empty notes: %s", output)
+		}
+	})
+}
+
+func TestUnreviewedMappings(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+	const namespaces = `{"Example":{"Placeholder":{"area":"agents","assembly":"Core","mapping":{"go":"","go_symbols":[],"status":"unmapped","note":"No counterpart found."}}}}`
+	data := strings.Replace(sampleCatalogJSON, sampleNamespacesJSON, namespaces, 1)
+	inventory := strings.Replace(sampleAPIInventoryJSON, `"kind":"class"`, `"kind":"class","methods":{"Pending() -> System.Void":{"return_type":"System.Void"}},"properties":{"Name -> System.String":{"type":"System.String"}}`, 1)
+	inventory = strings.Replace(inventory, `"types":{`, `"types":{"Example.Unreviewed":{"assembly":"Core","kind":"class"},`, 1)
+	file := writeCatalog(t, catalogWithInventory(t, data, inventory))
+	got := readMappings(t, "-file", file, "-limit=0")
+	assertBaseline(t, got.Baseline)
+	if len(got.Mappings) != 4 || got.Page.Total != 4 {
+		t.Fatalf("default mappings omitted declarations: %+v", got)
+	}
+	want := []reportedMapping{{
+		Area: "agents", Kind: "type", Namespace: "Example", Dotnet: "Placeholder",
+		GoSymbols: []string{}, Status: "unmapped", Note: "No counterpart found.", Assembly: "Core",
+	}}
+	wantUnreviewed := map[string]string{"Unreviewed": "type", "Placeholder.Pending() -> void": "method", "Placeholder.Name": "property"}
+	unreviewed := make(map[string]string)
+	for _, row := range got.Mappings {
+		if !row.Unreviewed {
+			if !reflect.DeepEqual(row, want[0]) {
+				t.Fatalf("extraction changed the existing assessment: %+v", row)
+			}
+			continue
+		}
+		if row.Status != "unmapped" || row.Go != "" || len(row.GoSymbols) != 0 || row.Note != "" || row.Namespace != "Example" || row.Assembly != "Core" {
+			t.Fatalf("an extracted placeholder inherited an assessment or counterpart: %+v", row)
+		}
+		unreviewed[row.Dotnet] = row.Kind
+	}
+	if !reflect.DeepEqual(unreviewed, wantUnreviewed) {
+		t.Fatalf("unreviewed declarations = %v, want %v", unreviewed, wantUnreviewed)
+	}
+	assessed := readMappings(t, "-file", file, "-assessed", "-limit=0")
+	if !reflect.DeepEqual(assessed.Mappings, want) || !reflect.DeepEqual(assessed.Baseline, got.Baseline) {
+		t.Fatalf("-assessed changed the recorded assessment or retained placeholders: %+v", assessed)
+	}
+	if all := readMappings(t, "-file", file, "-assessed=false", "-limit=0"); !reflect.DeepEqual(all, got) {
+		t.Fatal("-assessed=false must retain unreviewed declarations")
+	}
+	for _, extra := range [][]string{nil, {"-assessed"}, {"-assessed=false"}} {
+		args := append([]string{"-file", file, "-limit=0"}, extra...)
+		gaps := readMappingsView(t, "gaps", args...)
+		if !reflect.DeepEqual(gaps.Mappings, want) {
+			t.Fatalf("gaps treated unreviewed placeholders as assessed gaps: %+v", gaps)
+		}
+	}
+	for _, test := range []struct {
+		name         string
+		args         []string
+		all, pending int
+	}{
+		{"default", nil, 4, 3},
+		{"assessed", []string{"-assessed"}, 1, 0},
+		{"explicit false", []string{"-assessed=false"}, 4, 3},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var summary reportedSummary
+			decodeOutput(t, commandOutput(t, append([]string{"mappings", "-file", file, "-summary"}, test.args...)...), &summary)
+			assertBaseline(t, summary.Baseline)
+			if summary.DotnetSymbols != test.all || summary.UnreviewedSymbols != test.pending || summary.GoSymbols != 0 || summary.ByStatus["unmapped"] != test.all {
+				t.Fatalf("summary confused extracted declarations with assessments: %+v", summary)
+			}
+		})
+	}
+	root := writeGoCheckout(t, "example.org/sdk", map[string]string{"agent/agent.go": "package agent\n"})
+	args := []string{"reconcile", "-file", file, "-go-root", root, "-go-package", "./agent", "-check"}
+	var report reconciliationReport
+	decodeOutput(t, commandOutput(t, append(slices.Clone(args), "-limit=0")...), &report)
+	var baseline symbolcatalog.Baseline
+	decodeOutput(t, sampleBaselineJSON, &baseline)
+	if report.InventoryDeclarations != 4 || report.AssessedDeclarations != 1 || len(report.Rows) != 4 || report.Counts["linked"] != 1 || report.Counts["unreviewed"] != 3 || !reflect.DeepEqual(report.Baseline, baseline) {
+		t.Fatalf("reconciliation counted placeholders as assessments or advanced the baseline: %+v", report)
+	}
+	unreviewed = make(map[string]string)
+	for _, row := range report.Rows {
+		if row.State != "unreviewed" {
+			if row.Dotnet != "Placeholder" || row.ReviewSourceChanged == nil || *row.ReviewSourceChanged || row.ReviewGoChanged != nil {
+				t.Fatalf("reconciliation lost the original assessment baseline: %+v", row)
+			}
+			continue
+		}
+		if row.Status != "" || row.Note != "" || len(row.GoSymbols) != 0 || row.ReviewSourceChanged != nil || row.ReviewGoChanged != nil {
+			t.Fatalf("unreviewed reconciliation inherited assessment metadata: %+v", row)
+		}
+		unreviewed[row.Dotnet] = row.Kind
+	}
+	if !reflect.DeepEqual(unreviewed, wantUnreviewed) {
+		t.Fatalf("reconciliation lost unreviewed declarations: %v", unreviewed)
+	}
+	var summary reconciliationSummary
+	decodeOutput(t, commandOutput(t, append(slices.Clone(args), "-assessed", "-summary")...), &summary)
+	if summary.InventoryDeclarations != 4 || summary.AssessedDeclarations != 1 || summary.Counts["linked"] != 1 || summary.Counts["unreviewed"] != 0 || !reflect.DeepEqual(summary.Baseline, baseline) {
+		t.Fatalf("-assessed reconciliation changed totals or the baseline: %+v", summary)
+	}
+	t.Run("assessed method return", func(t *testing.T) {
+		const method = `{"go":"a.Pending()","go_symbols":["agent.Agent.Pending"],"status":"adapted","note":"Go method counterpart."}`
+		assessedData := strings.Replace(data, `"mapping":`, `"methods":{"Pending()":`+method+`},"mapping":`, 1)
+		assessedFile := writeCatalog(t, catalogWithInventory(t, assessedData, inventory))
+		got := readMappings(t, "-file", assessedFile, "-kind", "method", "-assessed", "-limit=0")
+		assertBaseline(t, got.Baseline)
+		want := []reportedMapping{{
+			Area: "agents", Kind: "method", Namespace: "Example", Dotnet: "Placeholder.Pending() -> void",
+			Go: "a.Pending()", GoSymbols: []string{"agent.Agent.Pending"}, Status: "adapted",
+			Note: "Go method counterpart.", Assembly: "Core",
+		}}
+		if !reflect.DeepEqual(got.Mappings, want) {
+			t.Fatalf("merged method lost its return label or assessment: %+v", got.Mappings)
+		}
+	})
 }
 
 func TestMappingPages(t *testing.T) {
@@ -519,22 +729,28 @@ func TestSummary(t *testing.T) {
 
 func TestGoOnlyReports(t *testing.T) {
 	data := catalogWithGoOnly(sampleCatalogJSON, `{
-		"agent.LocalOptions": {"note":"Go-specific configuration.","review":"go-specific"},
-		"agent.OnlyInGo": {"note":"Go-specific helper.","review":"go-specific"},
-		"provider/other.Extra": {"note":"Go-specific provider helper.","review":"go-specific"}
+		"agent.LocalOptions": {"note":"Go-specific configuration."},
+		"agent.OnlyInGo": {"note":"Go-specific helper."},
+		"provider/other.Extra": {"note":"Go-specific provider helper."}
 	}`)
 	file := writeCatalog(t, data)
 	read := func(args ...string) goOnlyReport {
 		var report goOnlyReport
-		decodeOutput(t, commandOutput(t, append([]string{"go-only", "-file", file}, args...)...), &report)
+		output := commandOutput(t, append([]string{"go-only", "-file", file}, args...)...)
+		decodeOutput(t, output, &report)
+		if strings.Contains(output, `"reviews":`) || strings.Contains(output, `"review":`) {
+			t.Fatalf("Go-only report retained obsolete review metadata: %s", output)
+		}
 		return report
 	}
 	got := read("-symbol", "AGENT.", "-limit", "1")
-	if got.Page.Total != 2 || got.Page.Returned != 1 || got.Page.NextOffset == nil || *got.Page.NextOffset != 1 || got.GoOnly["agent.LocalOptions"].Review != "go-specific" {
+	if got.Page.Total != 2 || got.Page.Returned != 1 || got.Page.NextOffset == nil || *got.Page.NextOffset != 1 || got.GoOnly["agent.LocalOptions"].Note != "Go-specific configuration." {
 		t.Fatalf("unexpected Go-only first page: %+v", got)
 	}
-	if len(got.Reviews) != 1 || got.GoOnly["agent.LocalOptions"].Note == "" {
-		t.Fatalf("missing review evidence: %+v", got)
+	var baseline symbolcatalog.Baseline
+	decodeOutput(t, sampleBaselineJSON, &baseline)
+	if !reflect.DeepEqual(got.Baseline, baseline) {
+		t.Fatalf("Go-only report changed the original baseline: %+v", got)
 	}
 	got = read("-symbol", "agent.", "-limit", "1", "-offset", "1")
 	if got.Page.Total != 2 || got.Page.NextOffset != nil || got.GoOnly["agent.OnlyInGo"].Note != "Go-specific helper." {
@@ -561,10 +777,13 @@ func TestGoOnlyReports(t *testing.T) {
 		t.Fatal("Go-only entries changed the .NET mapping rows")
 	}
 	text := commandOutput(t, "go-only", "-file", file, "-json=false")
-	for _, want := range []string{"Go-only assessments", "agent.OnlyInGo", "go-specific", "Go-specific helper."} {
+	for _, want := range []string{"Go-only assessments", "agent.OnlyInGo", "Go-specific helper."} {
 		if !strings.Contains(text, want) {
 			t.Errorf("text output missing %q: %s", want, text)
 		}
+	}
+	if strings.Contains(text, "REVIEW") {
+		t.Fatalf("Go-only text report retained a review column: %s", text)
 	}
 	got = read("-file", writeCatalog(t, sampleCatalogJSON))
 	if got.GoOnly == nil || len(got.GoOnly) != 0 || got.Page.Total != 0 {
@@ -574,16 +793,15 @@ func TestGoOnlyReports(t *testing.T) {
 
 func TestInvalidGoOnlyAssessments(t *testing.T) {
 	for _, test := range []struct{ name, entries, want string }{
-		{"unqualified", `{"OnlyInGo":{"note":"Go helper.","review":"go-specific"}}`, "invalid qualified Go symbol"},
-		{"unexported", `{"agent.onlyInGo":{"note":"Go helper.","review":"go-specific"}}`, "invalid qualified Go symbol"},
-		{"empty note", `{"agent.OnlyInGo":{"note":" ","review":"go-specific"}}`, "note must not be empty"},
-		{"missing review", `{"agent.OnlyInGo":{"note":"Go helper."}}`, "existing review batch"},
-		{"unknown review", `{"agent.OnlyInGo":{"note":"Go helper.","review":"unknown"}}`, "existing review batch"},
-		{"no implicit baseline", `{"agent.OnlyInGo":{"note":"Go helper.","review":"baseline"}}`, "existing review batch"},
+		{"unqualified", `{"OnlyInGo":{"note":"Go helper."}}`, "invalid qualified Go symbol"},
+		{"unexported", `{"agent.onlyInGo":{"note":"Go helper."}}`, "invalid qualified Go symbol"},
+		{"empty note", `{"agent.OnlyInGo":{"note":" "}}`, "note must not be empty"},
+		{"obsolete review", `{"agent.OnlyInGo":{"note":"Go helper.","review":"baseline"}}`, `unknown field "review"`},
+		{"obsolete null review", `{"agent.OnlyInGo":{"note":"Go helper.","review":null}}`, `unknown field "review"`},
 		{"null entry", `{"agent.OnlyInGo":null}`, "note must not be empty"},
-		{"no mapping status", `{"agent.OnlyInGo":{"note":"Go helper.","review":"go-specific","status":"unmapped"}}`, "unknown field"},
-		{"mapped counterpart", `{"agent.Agent":{"note":"Go helper.","review":"go-specific"}}`, "also assessed as go_only"},
-		{"duplicate key", `{"agent.OnlyInGo":{"note":"Go helper.","review":"go-specific"},"agent.OnlyInGo":{"note":"Another note.","review":"go-specific"}}`, "duplicate JSON key"},
+		{"no mapping status", `{"agent.OnlyInGo":{"note":"Go helper.","status":"unmapped"}}`, "unknown field"},
+		{"mapped counterpart", `{"agent.Agent":{"note":"Go helper."}}`, "also assessed as go_only"},
+		{"duplicate key", `{"agent.OnlyInGo":{"note":"Go helper."},"agent.OnlyInGo":{"note":"Another note."}}`, "duplicate JSON key"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			assertInvalidCatalog(t, catalogWithGoOnly(sampleCatalogJSON, test.entries), test.want)
@@ -601,10 +819,10 @@ func TestGoOnlyReconciliation(t *testing.T) {
 		"provider/other/other.go": "package other\nfunc Extra() {}\n",
 	})
 	minimal := `{"schema_version":0,"baseline":` + sampleBaselineJSON + `,"namespaces":{"Example":{"Placeholder":{"area":"agents","assembly":"Core","mapping":{"go":"","go_symbols":[],"status":"unmapped","note":"No counterpart found."}}}}}`
-	entries := `{"agent.OnlyInGo":{"note":"Go helper.","review":"go-specific"},"agent.Missing":{"note":"Removed Go helper.","review":"go-specific"},"provider/other.Extra":{"note":"Go provider helper.","review":"go-specific"}}`
-	file := writeCatalog(t, catalogWithGoOnly(minimal, entries))
-	inventory := writeCatalog(t, `{"schema_version":1,"identity_format":"ecma335-v1","assemblies":{"Core":{"informational_version":"1.0.0+1111111111111111111111111111111111111111"}},"types":{"Example.Placeholder":{"assembly":"Core","kind":"class"}}}`)
-	args := []string{"reconcile", "-file", file, "-inventory", inventory, "-go-root", root}
+	entries := `{"agent.OnlyInGo":{"note":"Go helper."},"agent.Missing":{"note":"Removed Go helper."},"provider/other.Extra":{"note":"Go provider helper."}}`
+	inventory := `{"schema_version":1,"identity_format":"ecma335-v1","assemblies":{"Core":{"informational_version":"1.0.0+1111111111111111111111111111111111111111"}},"types":{"Example.Placeholder":{"assembly":"Core","kind":"class"}}}`
+	file := writeCatalog(t, catalogWithInventory(t, catalogWithGoOnly(minimal, entries), inventory))
+	args := []string{"reconcile", "-file", file, "-go-root", root}
 	var report reconciliationReport
 	decodeOutput(t, commandOutput(t, args...), &report)
 	if report.InventoryDeclarations != 1 || report.AssessedDeclarations != 1 || len(report.Rows) != 1 || report.Counts["linked"] != 1 {
@@ -628,8 +846,8 @@ func TestGoOnlyReconciliation(t *testing.T) {
 	if summary.GoOnly.Present != 1 || !reflect.DeepEqual(summary.GoOnly.UnindexedGoTargets, []string{"provider/other.Extra"}) {
 		t.Fatalf("unindexed symbols were treated as missing or validated: %+v", summary.GoOnly)
 	}
-	validFile := writeCatalog(t, catalogWithGoOnly(minimal, `{"agent.OnlyInGo":{"note":"Go helper.","review":"go-specific"},"provider/other.Extra":{"note":"Go provider helper.","review":"go-specific"}}`))
-	validArgs := []string{"reconcile", "-file", validFile, "-inventory", inventory, "-go-root", root, "-check", "-summary"}
+	validFile := writeCatalog(t, catalogWithInventory(t, catalogWithGoOnly(minimal, `{"agent.OnlyInGo":{"note":"Go helper."},"provider/other.Extra":{"note":"Go provider helper."}}`), inventory))
+	validArgs := []string{"reconcile", "-file", validFile, "-go-root", root, "-check", "-summary"}
 	summary = reconciliationSummary{}
 	decodeOutput(t, commandOutput(t, validArgs...), &summary)
 	if summary.GoOnly.Assessed != 2 || summary.GoOnly.Present != 2 {
@@ -811,6 +1029,14 @@ func TestInvalidCatalog(t *testing.T) {
 	}{
 		{"version", `"schema_version": 0`, `"schema_version": 1`, "schema_version"},
 		{"missing version", `"schema_version": 0,`, ``, "schema_version"},
+		{"obsolete reviews", `"namespaces":`, `"reviews":{},"namespaces":`, `unknown field "reviews"`},
+		{"obsolete null reviews", `"namespaces":`, `"reviews":null,"namespaces":`, `unknown field "reviews"`},
+		{"obsolete Go test queue", `"namespaces":`, `"go_tests":{"unreviewed":[],"reviewed":[]},"namespaces":`, `unknown field "go_tests"`},
+		{"obsolete null Go test queue", `"namespaces":`, `"go_tests":null,"namespaces":`, `unknown field "go_tests"`},
+		{"obsolete type review", `"mapping": {"go": "agent.Agent{}",`, `"mapping": {"review":"baseline","go": "agent.Agent{}",`, `unknown field "review"`},
+		{"obsolete method review", `"go": "session.MarshalJSON()"`, `"go": "session.MarshalJSON()", "review":"baseline"`, `unknown field "review"`},
+		{"obsolete property review", `"Name": {"go_symbols":`, `"Name": {"review":"baseline","go_symbols":`, `unknown field "review"`},
+		{"obsolete null review", `"mapping": {"go": "agent.Agent{}",`, `"mapping": {"review":null,"go": "agent.Agent{}",`, `unknown field "review"`},
 		{"date", `2026-09-23`, `2026-02-30`, "baseline"},
 		{"dotnet commit", `1111111111111111111111111111111111111111`, `main`, "dotnet_commit"},
 		{"Go commit", `2222222222222222222222222222222222222222`, `HEAD`, "go_commit"},
@@ -830,8 +1056,11 @@ func TestInvalidCatalog(t *testing.T) {
 		{"area", `"area": "workflows"`, `"area": "samples"`, "invalid area"},
 		{"status", `"status": "adapted"`, `"status": "aligned"`, "invalid status"},
 		{"child status required", `"go_symbols": ["agent.Agent.Name"], "status": "mapped"`, `"go_symbols": ["agent.Agent.Name"]`, "invalid status"},
-		{"child note required", `, "note": "Name accessor."`, ``, "note"},
-		{"blank note", `"note": "Name accessor."`, `"note": " \t "`, "note"},
+		{"adapted note required", `, "note": "Session option factory."`, ``, "note"},
+		{"blank adapted note", `"note": "Session option factory."`, `"note": " \t "`, "note"},
+		{"partial note required", `, "note": "Background execution is unavailable."`, ``, "note"},
+		{"unmapped note required", `, "note": "No counterpart inventoried."`, ``, "note"},
+		{"intentional note required", `, "note": "Provider-specific metadata is intentional."`, ``, "note"},
 		{"child Go required", `"mapping": {"go": "agent.Agent{}", `, `"mapping": {`, "non-null string"},
 		{"null Go", `"go": "agent.Agent{}"`, `"go": null`, "non-null string"},
 		{"empty mapped Go", `"go": "agent.Agent{}"`, `"go": ""`, "empty go"},
@@ -1009,9 +1238,9 @@ func TestInvalidInput(t *testing.T) {
 		{"trailing object", sampleCatalogJSON + `{}`, "single JSON object"},
 		{"trailing garbage", sampleCatalogJSON + `invalid`, "single JSON object"},
 		{"malformed JSON", `{`, ""},
-		{"empty input", ``, "EOF"},
-		{"array root", `[]`, "cannot unmarshal array"},
-		{"null root", `null`, "schema_version"},
+		{"empty input", ``, "single JSON object"},
+		{"array root", `[]`, "single JSON object"},
+		{"null root", `null`, "single JSON object"},
 		{"null type", strings.Replace(sampleCatalogJSON, sampleNamespacesJSON, `{"Example":{"Agent":null}}`, 1), "invalid area"},
 		{"null member", strings.Replace(sampleCatalogJSON, sampleNamespacesJSON, `{"Example":{"Agent":{"area":"agents","methods":{"Run()":null}}}}`, 1), "invalid status"},
 	} {
@@ -1041,11 +1270,17 @@ func TestInvalidOptionsAndHelp(t *testing.T) {
 		{"mappings", "-priority", "1"},
 		{"mappings", "-state", "linked"},
 		{"mappings", "-check"},
+		{"mappings", "-inventory", "ignored.json"},
+		{"mappings", "-assessed=invalid"},
+		{"gaps", "-inventory", "ignored.json"},
+		{"gaps", "-assessed=invalid"},
 		{"gaps", "-summary"},
 		{"mappings", "-limit", "-1"},
 		{"mappings", "-offset", "-1"},
 		{"go", "-limit", "-1"},
 		{"reconcile", "-offset", "-1"},
+		{"reconcile", "-inventory", "ignored.json"},
+		{"reconcile", "-assessed=invalid"},
 		{"mappings", "-summary", "-limit", "0"},
 		{"go", "-summary", "-offset", "0"},
 		{"reconcile", "-summary", "-limit", "10"},
@@ -1055,21 +1290,27 @@ func TestInvalidOptionsAndHelp(t *testing.T) {
 		{"go", "-file", "ignored.json"},
 		{"go", "-area", "agents"},
 		{"go", "-inventory", "ignored.json"},
+		{"go", "-assessed"},
 		{"go", "-check"},
 		{"go", "-go-package", " "},
 		{"go-only", "-summary"},
 		{"go-only", "-go-root", "."},
 		{"go-only", "-type", "Agent"},
+		{"go-only", "-inventory", "ignored.json"},
+		{"go-only", "-assessed"},
 		{"go-only", "-limit", "-1"},
 		{"changes"},
 		{"changes", "-old-root", " "},
 		{"changes", "-old-root", ".", "-limit", "-1"},
 		{"changes", "-old-root", ".", "-summary", "-limit", "0"},
 		{"changes", "-old-root", ".", "-file", "ignored.json"},
+		{"changes", "-old-root", ".", "-inventory", "ignored.json"},
+		{"changes", "-old-root", ".", "-assessed"},
 		{"changes", "-old-root", ".", "-check"},
 		{"reconcile", "-state", "ready"},
 		{"go-tests", "-file", "ignored.json"},
 		{"go-tests", "-inventory", "ignored.json"},
+		{"go-tests", "-assessed"},
 		{"go-tests", "-check"},
 		{"go-tests", "-go-package", "./..."},
 		{"go-tests", "-tags", "alternate"},
@@ -1079,6 +1320,8 @@ func TestInvalidOptionsAndHelp(t *testing.T) {
 		{"go-tests", "-summary", "-limit", "0"},
 		{"tests", "-area", "agents"},
 		{"tests", "-kind", "method"},
+		{"tests", "-inventory", "ignored.json"},
+		{"tests", "-assessed"},
 		{"tests", "-go-package", "./..."},
 		{"tests", "-tags", "alternate"},
 		{"tests", "-status", "mapped"},
@@ -1116,14 +1359,14 @@ func TestInvalidOptionsAndHelp(t *testing.T) {
 		present []string
 		absent  []string
 	}{
-		{"mappings", []string{"-file", "-area", "-kind", "-status", "-type", "-symbol", "-json", "-summary", "-limit", "-offset"}, []string{"-go-root", "-inventory", "-check"}},
-		{"gaps", []string{"-file", "-area", "-status", "-limit", "-offset"}, []string{"-go-root", "-summary"}},
-		{"go-only", []string{"-file", "-symbol", "-json", "-limit", "-offset"}, []string{"-go-root", "-summary", "-type", "-status"}},
-		{"go", []string{"-go-root", "-go-package", "-tags", "-summary", "-symbol", "-json", "-limit", "-offset"}, []string{"-file", "-area", "-inventory", "-check"}},
-		{"changes", []string{"-old-root", "-go-root", "-go-package", "-tags", "-summary", "-symbol", "-json", "-limit", "-offset"}, []string{"-file", "-inventory", "-check"}},
-		{"reconcile", []string{"-file", "-inventory", "-go-root", "-check", "-state", "-summary", "-limit", "-offset"}, nil},
-		{"go-tests", []string{"-go-root", "-summary", "-symbol", "-json", "-limit", "-offset"}, []string{"-file", "-inventory", "-check", "-go-package", "-tags", "-area", "-kind", "-type", "-status"}},
-		{"tests", []string{"-file", "-inventory", "-go-root", "-assembly", "-namespace", "-type", "-symbol", "-state", "-summary", "-check", "-json", "-limit", "-offset"}, []string{"-area", "-kind", "-go-package", "-tags", "-status"}},
+		{"mappings", []string{"-file", "-assessed", "-area", "-kind", "-status", "-type", "-symbol", "-json", "-summary", "-limit", "-offset"}, []string{"-go-root", "-inventory", "-check"}},
+		{"gaps", []string{"-file", "-assessed", "-area", "-status", "-limit", "-offset"}, []string{"-go-root", "-inventory", "-summary"}},
+		{"go-only", []string{"-file", "-symbol", "-json", "-limit", "-offset"}, []string{"-go-root", "-inventory", "-assessed", "-summary", "-type", "-status"}},
+		{"go", []string{"-go-root", "-go-package", "-tags", "-summary", "-symbol", "-json", "-limit", "-offset"}, []string{"-file", "-area", "-inventory", "-assessed", "-check"}},
+		{"changes", []string{"-old-root", "-go-root", "-go-package", "-tags", "-summary", "-symbol", "-json", "-limit", "-offset"}, []string{"-file", "-inventory", "-assessed", "-check"}},
+		{"reconcile", []string{"-file", "-assessed", "-go-root", "-check", "-state", "-summary", "-limit", "-offset"}, []string{"-inventory"}},
+		{"go-tests", []string{"-go-root", "-summary", "-symbol", "-json", "-limit", "-offset"}, []string{"-file", "-inventory", "-assessed", "-check", "-go-package", "-tags", "-area", "-kind", "-type", "-status"}},
+		{"tests", []string{"-file", "-go-root", "-assembly", "-namespace", "-type", "-symbol", "-state", "-summary", "-check", "-json", "-limit", "-offset"}, []string{"-inventory", "-assessed", "-area", "-kind", "-go-package", "-tags", "-status"}},
 	} {
 		t.Run(command.name, func(t *testing.T) {
 			var out, help bytes.Buffer
@@ -1137,7 +1380,7 @@ func TestInvalidOptionsAndHelp(t *testing.T) {
 				}
 			}
 			for _, text := range command.absent {
-				if strings.Contains(help.String(), text) {
+				if strings.Contains(help.String(), "\n  "+text+" ") || strings.Contains(help.String(), "\n  "+text+"\n") {
 					t.Errorf("%s help unexpectedly includes %q: %s", command.name, text, help.String())
 				}
 			}
@@ -1257,11 +1500,11 @@ func assertSelectedMappings(t *testing.T, got reportedMappings, symbols []string
 func assertInvalidCatalog(t *testing.T, data, want string) {
 	t.Helper()
 	file := writeCatalog(t, data)
-	for _, view := range []string{"mappings", "summary", "gaps"} {
+	for _, view := range []string{"mappings", "summary", "gaps", "go-only", "reconcile", "tests"} {
 		var out, diagnostics bytes.Buffer
 		// No fixture symbols match this filter. Validation must still inspect
 		// the entire catalog before any view applies its filters.
-		err := run(mappingViewArgs(view, "-file", file, "-area", "hosting", "-json"), &out, &diagnostics)
+		err := run(mappingViewArgs(view, "-file", file, "-symbol", "not-present", "-json"), &out, &diagnostics)
 		if err == nil || (want != "" && !strings.Contains(err.Error(), want)) {
 			t.Fatalf("%s error = %v, want %q", view, err, want)
 		}
@@ -1272,8 +1515,28 @@ func assertInvalidCatalog(t *testing.T, data, want string) {
 }
 
 func catalogWithGoOnly(data, entries string) string {
-	const review = `{"checked_at":"2026-09-29","dotnet_commit":"1111111111111111111111111111111111111111","go_commit":"2222222222222222222222222222222222222222","inventory_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","scope":"Source-inspected Go-specific APIs."}`
-	return strings.Replace(data, `"namespaces":`, `"reviews":{"go-specific":`+review+`},"go_only":`+entries+`,"namespaces":`, 1)
+	return strings.Replace(data, `"namespaces":`, `"go_only":`+entries+`,"namespaces":`, 1)
+}
+
+func catalogWithInventory(t *testing.T, data, inventoryJSON string) string {
+	t.Helper()
+	c, err := symbolcatalog.Decode([]byte(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, err := symbolcatalog.DecodeInventory([]byte(inventoryJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err = symbolcatalog.Merge(c, inv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := symbolcatalog.Encode(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(encoded)
 }
 
 func writeGoCheckout(t *testing.T, module string, files map[string]string) string {
@@ -1358,10 +1621,6 @@ func catalogWithTests(data, entries string) string {
 	return strings.Replace(data, `"namespaces":`, `"tests":`+entries+`,"namespaces":`, 1)
 }
 
-func catalogWithGoTestQueue(data, queue string) string {
-	return strings.Replace(data, `"namespaces":`, `"go_tests":`+queue+`,"namespaces":`, 1)
-}
-
 func inventoryWithTests(section string) string {
 	return strings.TrimSuffix(sampleAPIInventoryJSON, "}") + `,"tests":` + section + `}`
 }
@@ -1394,7 +1653,7 @@ import "testing"
 func TestRoot(*testing.T) { panic("source discovery must not run tests") }
 `,
 	})
-	return []string{"tests", "-file", writeCatalog(t, catalogWithTests(sampleCatalogJSON, entries)), "-inventory", writeCatalog(t, inventory), "-go-root", root}
+	return []string{"tests", "-file", writeCatalog(t, catalogWithInventory(t, catalogWithTests(sampleCatalogJSON, entries), inventory)), "-go-root", root}
 }
 
 func TestGoTestsSourceDiscovery(t *testing.T) {
@@ -1501,29 +1760,29 @@ func TestGoTestsPages(t *testing.T) {
 	root := writeGoCheckout(t, "example.org/sdk", map[string]string{"sample/all_test.go": source.String()})
 	t.Chdir(root)
 	var first goTestInventory
-	decodeOutput(t, commandOutput(t, "go-tests"), &first)
+	decodeOutput(t, commandOutput(t, "go-tests", "-go-root", "."), &first)
 	if first.Page == nil || first.Page.Total != 26 || first.Page.Limit != defaultPageLimit || first.Page.Returned != defaultPageLimit || first.Page.NextOffset == nil || *first.Page.NextOffset != 20 || first.TestFunctions != 26 {
 		t.Fatalf("default test page lost counts: %+v", first)
 	}
 	var second goTestInventory
-	decodeOutput(t, commandOutput(t, "go-tests", "-offset=20"), &second)
+	decodeOutput(t, commandOutput(t, "go-tests", "-go-root", ".", "-offset=20"), &second)
 	if second.Page.Total != 26 || second.Page.Returned != 6 || second.Page.NextOffset != nil || second.TestFunctions != 26 {
 		t.Fatalf("last test page lost counts: %+v", second)
 	}
 	var filtered goTestInventory
-	decodeOutput(t, commandOutput(t, "go-tests", "-symbol", "SAMPLE.TEST0", "-limit=2", "-offset=3"), &filtered)
+	decodeOutput(t, commandOutput(t, "go-tests", "-go-root", ".", "-symbol", "SAMPLE.TEST0", "-limit=2", "-offset=3"), &filtered)
 	if filtered.Page.Total != 10 || filtered.TestFunctions != 10 || filtered.Page.Returned != 2 || filtered.Page.NextOffset == nil || *filtered.Page.NextOffset != 5 || !reflect.DeepEqual(filtered.Tests, []string{"sample.Test03", "sample.Test04"}) {
 		t.Fatalf("filtering must precede paging: %+v", filtered)
 	}
 	var summary goTestMetadata
-	text := commandOutput(t, "go-tests", "-symbol", "sample.Test0", "-summary")
+	text := commandOutput(t, "go-tests", "-go-root", ".", "-symbol", "sample.Test0", "-summary")
 	decodeOutput(t, text, &summary)
 	if summary.TestFunctions != 10 || summary.Module != first.Module || summary.Scope != first.Scope || strings.Contains(text, `"tests"`) || strings.Contains(text, `"page"`) {
 		t.Fatalf("summary must count every selected test without rows or paging: %s", text)
 	}
 	for _, args := range [][]string{{"-offset=100"}, {"-symbol", "not-present"}} {
 		var empty goTestInventory
-		decodeOutput(t, commandOutput(t, append([]string{"go-tests"}, args...)...), &empty)
+		decodeOutput(t, commandOutput(t, append([]string{"go-tests", "-go-root", "."}, args...)...), &empty)
 		if empty.Tests == nil || len(empty.Tests) != 0 || empty.Page.NextOffset != nil {
 			t.Fatalf("empty page must contain an array and no next offset: %+v", empty)
 		}
@@ -1649,7 +1908,6 @@ func TestInvalidTestMappingIdentities(t *testing.T) {
 		{"full signature", strings.Replace(valid, `RunAsync`, `RunAsync(System.Boolean) -> System.Void`, 1), "invalid test name"},
 		{"whitespace", strings.Replace(valid, `RunAsync`, `Run Async`, 1), "invalid test name"},
 		{"qualified method", strings.Replace(valid, `RunAsync`, `AgentTests.RunAsync`, 1), "invalid test name"},
-		{"null leaf", singleTestMapping(`null`), "invalid qualified Go test function"},
 		{"duplicate method", strings.Replace(valid, `"RunAsync":`, `"RunAsync":`+validTestMappingJSON+`,"RunAsync":`, 1), "duplicate JSON key"},
 		{"escaped duplicate method", strings.Replace(valid, `"RunAsync":`, `"Run\u0041sync":`+validTestMappingJSON+`,"RunAsync":`, 1), "duplicate JSON key"},
 		{"duplicate type", `{"Core.Tests":{"Example.Tests.AgentTests":{"RunAsync":` + validTestMappingJSON + `},"Example.Tests.AgentTests":{"RunAsync":` + validTestMappingJSON + `}}}`, "duplicate JSON key"},
@@ -1670,136 +1928,6 @@ func TestInvalidTestMappingIdentities(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestGoTestQueueValidation(t *testing.T) {
-	for _, test := range []struct{ name, queue, want string }{
-		{"array section", `[]`, "cannot unmarshal array"},
-		{"missing group", `{}`, "unreviewed must be a non-null array"},
-		{"null group", `{"unreviewed":null}`, "unreviewed must be a non-null array"},
-		{"object group", `{"unreviewed":{}}`, "cannot unmarshal object"},
-		{"unknown state", `{"mapped":[]}`, "unknown field"},
-		{"unexpected review", `{"unreviewed":[],"review":"tests-reviewed"}`, "unknown field"},
-		{"unexpected note", `{"unreviewed":[],"note":"Pending tests."}`, "unknown field"},
-		{"unexpected status", `{"unreviewed":[],"status":"unreviewed"}`, "unknown field"},
-		{"duplicate group", `{"unreviewed":[],"unreviewed":[]}`, "duplicate JSON key"},
-		{"duplicate name", `{"unreviewed":["agent.TestCombined","agent.TestCombined"]}`, "duplicate unreviewed Go test"},
-		{"object reviewed group", `{"unreviewed":[],"reviewed":{}}`, "cannot unmarshal object"},
-		{"duplicate reviewed group", `{"unreviewed":[],"reviewed":[],"reviewed":[]}`, "duplicate JSON key"},
-		{"duplicate reviewed name", `{"unreviewed":[],"reviewed":["agent.TestOther","agent.TestOther"]}`, "duplicate reviewed Go test"},
-		{"review states overlap", `{"unreviewed":["agent.TestOther"],"reviewed":["agent.TestOther"]}`, "both unreviewed and reviewed"},
-		{"reviewed helper name", `{"unreviewed":[],"reviewed":["agent.Helper"]}`, "invalid qualified Go test function"},
-		{"reviewed runtime subtest", `{"unreviewed":[],"reviewed":["agent.TestOther/case"]}`, "invalid qualified Go test function"},
-		{"mapped target reviewed", `{"unreviewed":[],"reviewed":["agent.TestCombined"]}`, "already mapped"},
-		{"null name", `{"unreviewed":[null]}`, "invalid qualified Go test function"},
-		{"helper name", `{"unreviewed":["agent.Helper"]}`, "invalid qualified Go test function"},
-		{"runtime subtest", `{"unreviewed":["agent.TestCombined/case"]}`, "invalid qualified Go test function"},
-		{"mapped target in queue", `{"unreviewed":["agent.TestCombined"]}`, "already mapped"},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			data := catalogWithTests(sampleCatalogJSON, singleTestMapping(validTestMappingJSON))
-			file := writeCatalog(t, catalogWithGoTestQueue(data, test.queue))
-			for _, command := range []string{"mappings", "summary", "gaps", "go-only", "reconcile", "tests"} {
-				var out, diagnostics bytes.Buffer
-				err := run(mappingViewArgs(command, "-file", file, "-symbol", "not-present"), &out, &diagnostics)
-				if err == nil || !strings.Contains(err.Error(), test.want) || out.Len() != 0 {
-					t.Fatalf("%s ignored an invalid Go test queue: %v, %q", command, err, out.String())
-				}
-			}
-		})
-	}
-}
-
-func TestGoTestQueueReconciliation(t *testing.T) {
-	const pending = `{"unreviewed":["..TestRoot","agent.TestCombined","examples/demo.TestRetry","internal/check.TestAlternate"]}`
-	args := testCommandArgs(t, `{}`, inventoryWithTests(sampleTestSectionJSON))
-	read := func(queue string, extra ...string) (testReconciliationReport, string) {
-		t.Helper()
-		invocation := slices.Clone(args)
-		invocation[2] = writeCatalog(t, catalogWithGoTestQueue(sampleCatalogJSON, queue))
-		output := commandOutput(t, append(invocation, extra...)...)
-		var report testReconciliationReport
-		decodeOutput(t, output, &report)
-		return report, output
-	}
-	got, output := read(pending, "-limit=1", "-check")
-	if got.GoTests == nil || got.GoTests.Unreviewed != 4 || len(got.GoTests.InvalidGoTests) != 0 || got.Go.TestFunctions != 4 {
-		t.Fatalf("Go test queue was not reconciled against source: %+v", got)
-	}
-	if got.InventoryTests != 9 || got.MappedTests != 0 || got.Counts["unreviewed"] != 9 || len(got.Rows) != 1 {
-		t.Fatalf("queued Go tests invented .NET pairs or changed paging: %+v", got)
-	}
-	if strings.Contains(output, "agent.TestCombined") {
-		t.Fatalf("queue summary unexpectedly included all pending names: %s", output)
-	}
-	const reviewed = `{"unreviewed":["..TestRoot","agent.TestCombined"],"reviewed":["examples/demo.TestRetry","internal/check.TestAlternate"]}`
-	reviewedReport, reviewedOutput := read(reviewed, "-limit=1", "-check")
-	if reviewedReport.GoTests == nil || reviewedReport.GoTests.Unreviewed != 2 || reviewedReport.GoTests.Reviewed != 2 || len(reviewedReport.GoTests.InvalidGoTests) != 0 {
-		t.Fatalf("reviewed and pending Go test counts were not preserved: %+v", reviewedReport.GoTests)
-	}
-	if reviewedReport.MappedTests != 0 || !reflect.DeepEqual(reviewedReport.Counts, got.Counts) || reviewedReport.InventoryTests != got.InventoryTests || len(reviewedReport.Rows) != 1 {
-		t.Fatalf("reviewed Go tests invented pairs or changed .NET counts or paging: %+v", reviewedReport)
-	}
-	if strings.Contains(reviewedOutput, "examples/demo.TestRetry") {
-		t.Fatalf("queue summary unexpectedly included reviewed names: %s", reviewedOutput)
-	}
-	mixedArgs := slices.Clone(args)
-	mixedQueue := strings.Replace(reviewed, `,"agent.TestCombined"`, "", 1)
-	mixedArgs[2] = writeCatalog(t, catalogWithGoTestQueue(catalogWithTests(sampleCatalogJSON, singleTestMapping(validTestMappingJSON)), mixedQueue))
-	var mixed testReconciliationReport
-	decodeOutput(t, commandOutput(t, append(mixedArgs, "-limit=0", "-check")...), &mixed)
-	if mixed.GoTests == nil || mixed.GoTests.Unreviewed != 1 || mixed.GoTests.Reviewed != 2 || len(mixed.GoTests.InvalidGoTests) != 0 || mixed.MappedTests != 1 || mixed.Counts["linked"] != 1 || mixed.Counts["unreviewed"] != 8 {
-		t.Fatalf("disjoint test pairs and reviewed and pending Go tests must coexist: %+v", mixed)
-	}
-	filtered, _ := read(pending, "-symbol=not-present", "-summary", "-check")
-	if !reflect.DeepEqual(filtered.GoTests, got.GoTests) || filtered.Counts["unreviewed"] != 0 {
-		t.Fatalf(".NET filters changed the unfiltered Go queue: %+v", filtered)
-	}
-	filteredReviewed, _ := read(reviewed, "-symbol=not-present", "-summary", "-check")
-	if !reflect.DeepEqual(filteredReviewed.GoTests, reviewedReport.GoTests) || filteredReviewed.Counts["unreviewed"] != 0 {
-		t.Fatalf(".NET filters changed the unfiltered Go review lists: %+v", filteredReviewed)
-	}
-	allReviewed, _ := read(`{"unreviewed":[],"reviewed":["..TestRoot","agent.TestCombined","examples/demo.TestRetry","internal/check.TestAlternate"]}`, "-summary", "-check")
-	if allReviewed.GoTests == nil || allReviewed.GoTests.Unreviewed != 0 || allReviewed.GoTests.Reviewed != 4 || allReviewed.MappedTests != 0 {
-		t.Fatalf("fully reviewed unpaired Go tests were not represented correctly: %+v", allReviewed)
-	}
-	empty, _ := read(`{"unreviewed":[],"reviewed":[]}`, "-summary", "-check")
-	if empty.GoTests == nil || empty.GoTests.Unreviewed != 0 || empty.GoTests.Reviewed != 0 || len(empty.GoTests.InvalidGoTests) != 0 {
-		t.Fatalf("empty queue was not represented as zero pending tests: %+v", empty)
-	}
-	absent, _ := read(`null`, "-summary", "-check")
-	if absent.GoTests != nil {
-		t.Fatalf("absent queue unexpectedly added Go review metadata: %+v", absent)
-	}
-	args[2] = writeCatalog(t, catalogWithGoTestQueue(sampleCatalogJSON, pending))
-	text := commandOutput(t, append(slices.Clone(args), "-json=false", "-summary", "-check")...)
-	if !strings.Contains(text, "Go test review queue: 4 unreviewed (unfiltered)") || !strings.Contains(text, "No .NET counterparts are implied") {
-		t.Fatalf("text report omitted the separate Go review queue: %s", text)
-	}
-	args[2] = writeCatalog(t, catalogWithGoTestQueue(sampleCatalogJSON, reviewed))
-	text = commandOutput(t, append(slices.Clone(args), "-json=false", "-summary", "-check")...)
-	if !strings.Contains(text, "2 unreviewed (unfiltered), 2 reviewed (unfiltered)") {
-		t.Fatalf("text report omitted the reviewed Go test count: %s", text)
-	}
-	missing := strings.Replace(strings.Replace(reviewed, "examples/demo.TestRetry", "examples/demo.TestMissing", 1), "..TestRoot", "..TestMissing", 1)
-	args[2] = writeCatalog(t, catalogWithGoTestQueue(sampleCatalogJSON, missing))
-	for _, filters := range [][]string{{"-symbol=not-present", "-summary"}, {"-state=linked", "-limit=1"}, {"-offset=100"}} {
-		var out, diagnostics bytes.Buffer
-		invocation := append(append(slices.Clone(args), filters...), "-check")
-		err := run(invocation, &out, &diagnostics)
-		if err == nil || !strings.Contains(err.Error(), "test reconciliation check failed") || out.Len() == 0 {
-			t.Fatalf("missing queued Go test was hidden by filters: %v, %q", err, out.String())
-		}
-		var report testReconciliationReport
-		decodeOutput(t, out.String(), &report)
-		if report.GoTests == nil || report.GoTests.Unreviewed != 2 || report.GoTests.Reviewed != 2 || !reflect.DeepEqual(report.GoTests.InvalidGoTests, []string{"..TestMissing", "examples/demo.TestMissing"}) {
-			t.Fatalf("missing reviewed or pending Go tests were not identified: %+v", report.GoTests)
-		}
-	}
-	text = commandOutput(t, append(slices.Clone(args), "-json=false", "-summary")...)
-	if !strings.Contains(text, "Missing queued Go tests: ..TestMissing, examples/demo.TestMissing") {
-		t.Fatalf("text report omitted the missing queue target: %s", text)
 	}
 }
 
@@ -1841,21 +1969,38 @@ func TestTestInventoryValidation(t *testing.T) {
 		{"duplicate name", strings.Replace(sampleTestSectionJSON, `"Pending"`, `"Pending","Pending"`, 1), "duplicate test name"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			file := writeCatalog(t, inventoryWithTests(test.section))
-			for _, command := range []string{"reconcile", "tests"} {
-				var out, diagnostics bytes.Buffer
-				err := run([]string{command, "-file", writeCatalog(t, sampleCatalogJSON), "-inventory", file, "-go-root", filepath.Join(t.TempDir(), "not-needed"), "-symbol", "not-present", "-summary"}, &out, &diagnostics)
-				if err == nil || !strings.Contains(err.Error(), test.want) || out.Len() != 0 {
-					t.Fatalf("%s ignored malformed test inventory or emitted a partial report: %v, %q", command, err, out.String())
-				}
+			if _, err := symbolcatalog.DecodeInventory([]byte(inventoryWithTests(test.section))); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("malformed test inventory error = %v, want %q", err, test.want)
 			}
 		})
 	}
 	// New test validation must not tighten the old API metadata reader.
 	compatible := strings.Replace(inventoryWithTests(sampleTestSectionJSON), `"kind":"class"`, `"kind":"class","future_optional_metadata":true`, 1)
-	inv, err := loadDeclarationInventory(writeCatalog(t, compatible))
+	inv, err := symbolcatalog.DecodeInventory([]byte(compatible))
 	if err != nil || inv.Tests == nil || inv.Tests.IdentityFormat != "test-name-v1" || len(inv.Types) != 1 {
 		t.Fatalf("compatible API metadata or valid tests rejected: %+v, %v", inv, err)
+	}
+	data := catalogWithInventory(t, catalogWithTests(sampleCatalogJSON, sampleTestMappingsJSON), compatible)
+	for _, test := range []struct{ name, old, replacement, want string }{
+		{"unified API metadata", `"dotnet": {`, `"dotnet": {"future_optional_metadata":true,`, "unknown field"},
+		{"unified test metadata", `"identity_format": "test-name-v1"`, `"identity_format": "test-name-v1", "unknown":true`, "unknown field"},
+		{"unified test identity", `"identity_format": "test-name-v1"`, `"identity_format": "ecma335-v1"`, "dotnet.tests"},
+		{"unified test commit", strings.Repeat("3", 40), "main", "full source revision"},
+		{"unified test hash", strings.Repeat("b", 64), strings.Repeat("g", 64), "assembly SHA256"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if !strings.Contains(data, test.old) {
+				t.Fatal("test replacement does not match the catalog")
+			}
+			file := writeCatalog(t, strings.Replace(data, test.old, test.replacement, 1))
+			for _, command := range []string{"reconcile", "tests"} {
+				var out, diagnostics bytes.Buffer
+				err := run([]string{command, "-file", file, "-go-root", filepath.Join(t.TempDir(), "not-needed"), "-symbol", "not-present", "-summary"}, &out, &diagnostics)
+				if err == nil || !strings.Contains(err.Error(), test.want) || out.Len() != 0 {
+					t.Fatalf("%s ignored malformed unified test metadata or emitted a partial report: %v, %q", command, err, out.String())
+				}
+			}
+		})
 	}
 	// Unavailable source revisions remain unknown, while a full SHA256 revision
 	// is accepted alongside the usual SHA1 revision.
@@ -1865,7 +2010,7 @@ func TestTestInventoryValidation(t *testing.T) {
 			field = ""
 		}
 		section := strings.ReplaceAll(sampleTestSectionJSON, `"commit":"3333333333333333333333333333333333333333",`, field)
-		got, err := loadDeclarationInventory(writeCatalog(t, inventoryWithTests(section)))
+		got, err := symbolcatalog.DecodeInventory([]byte(inventoryWithTests(section)))
 		if err != nil || got.Tests == nil || got.Tests.Assemblies["Core.Tests"].Commit != commit {
 			t.Fatalf("test commit %q rejected or inferred: %+v, %v", commit, got.Tests, err)
 		}
@@ -1873,16 +2018,14 @@ func TestTestInventoryValidation(t *testing.T) {
 }
 
 func TestTestMappingsPreserveAPIReports(t *testing.T) {
-	const apiReviewJSON = `{"checked_at":"2026-09-29","dotnet_commit":"1111111111111111111111111111111111111111","go_commit":"2222222222222222222222222222222222222222","inventory_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","scope":"Reviewed API mappings."}`
-	absentData := strings.Replace(sampleCatalogJSON, `"namespaces":`, `"reviews":{"api-reviewed":`+apiReviewJSON+`},"namespaces":`, 1)
-	absentData = strings.Replace(absentData, `"note": "Name accessor."`, `"note": "Name accessor.", "review": "api-reviewed"`, 1)
+	absentData := sampleCatalogJSON
 	emptyData := catalogWithTests(absentData, `{}`)
 	fullData := catalogWithTests(absentData, sampleTestMappingsJSON)
 	absent, empty, full := writeCatalog(t, absentData), writeCatalog(t, emptyData), writeCatalog(t, fullData)
-	queued := writeCatalog(t, catalogWithGoTestQueue(fullData, `{"unreviewed":["cmd/tool.TestQueued"],"reviewed":["cmd/tool.TestReviewed"]}`))
+	unpaired := writeCatalog(t, catalogWithTests(absentData, singleTestMapping(`null`)))
 	for _, args := range [][]string{{"mappings", "-limit=0"}, {"mappings", "-summary"}, {"gaps", "-limit=0"}, {"go-only", "-limit=0"}} {
 		before := commandOutput(t, append(slices.Clone(args), "-file", absent)...)
-		for _, file := range []string{empty, full, queued} {
+		for _, file := range []string{empty, full, unpaired} {
 			after := commandOutput(t, append(slices.Clone(args), "-file", file)...)
 			if after != before {
 				t.Fatalf("%v changed API output because of optional test pairs", args)
@@ -1891,33 +2034,27 @@ func TestTestMappingsPreserveAPIReports(t *testing.T) {
 			if err := json.Unmarshal([]byte(after), &sections); err != nil {
 				t.Fatal(err)
 			}
-			if sections["tests"] != nil || sections["go_tests"] != nil {
-				t.Fatalf("%v injected test metadata into the API report: %s", args, after)
+			if sections["tests"] != nil || sections["go_tests"] != nil || sections["reviews"] != nil || strings.Contains(after, `"review":`) {
+				t.Fatalf("%v injected test or obsolete review metadata into the API report: %s", args, after)
 			}
 		}
 	}
 	var summary reportedSummary
 	decodeOutput(t, commandOutput(t, "mappings", "-file", full, "-summary"), &summary)
-	var wantReviews map[string]any
-	decodeOutput(t, `{"api-reviewed":`+apiReviewJSON+`}`, &wantReviews)
-	if summary.DotnetSymbols != 15 || summary.GoSymbols != 13 || summary.GoOnlySymbols != 0 || !reflect.DeepEqual(summary.Reviews, wantReviews) {
-		t.Fatalf("test mappings changed API counts or named reviews: %+v", summary)
+	assertBaseline(t, summary.Baseline)
+	if summary.DotnetSymbols != 15 || summary.GoSymbols != 13 || summary.GoOnlySymbols != 0 {
+		t.Fatalf("test mappings changed API counts: %+v", summary)
 	}
 	mappings := readMappings(t, "-file", full, "-limit=0")
-	wantMappings := expectedMappings()
-	for i := range wantMappings {
-		if wantMappings[i].Dotnet == agentType+".Name" {
-			wantMappings[i].Review = "api-reviewed"
-		}
+	assertBaseline(t, mappings.Baseline)
+	if !reflect.DeepEqual(mappings.Mappings, expectedMappings()) {
+		t.Fatalf("test pairs changed API notes, statuses, targets, or examples: %+v", mappings)
 	}
-	if !reflect.DeepEqual(mappings.Mappings, wantMappings) || !reflect.DeepEqual(mappings.Reviews, wantReviews) {
-		t.Fatalf("test pairs changed API notes, statuses, or named reviews: %+v", mappings)
-	}
-	before, err := loadDeclarationInventory(writeCatalog(t, sampleAPIInventoryJSON))
+	before, err := symbolcatalog.DecodeInventory([]byte(sampleAPIInventoryJSON))
 	if err != nil || before.Tests != nil {
 		t.Fatalf("the tests section must remain optional for API reconciliation: %v", err)
 	}
-	after, err := loadDeclarationInventory(writeCatalog(t, inventoryWithTests(sampleTestSectionJSON)))
+	after, err := symbolcatalog.DecodeInventory([]byte(inventoryWithTests(sampleTestSectionJSON)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1925,19 +2062,15 @@ func TestTestMappingsPreserveAPIReports(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, err := c.flatten()
-	if err != nil {
-		t.Fatal(err)
-	}
-	report := mappingsReport{Baseline: c.Baseline, Reviews: c.Reviews, Mappings: rows}
+	report := mappingsReport{Baseline: c.Baseline, Mappings: flattenMappings(c)}
 	api := goInventory{Module: c.Baseline.GoModule, Symbols: map[string]goSymbol{}, Packages: []string{}}
 	original := reconcile(report, before, api, true)
 	extended := reconcile(report, after, api, true)
 	if extended.InventoryDeclarations != 1 || extended.AssessedDeclarations != original.AssessedDeclarations || !reflect.DeepEqual(extended.Counts, original.Counts) || !reflect.DeepEqual(extended.Rows, original.Rows) {
 		t.Fatal("optional test assembly declarations changed API reconciliation")
 	}
-	if !reflect.DeepEqual(original.Reviews, c.Reviews) || !reflect.DeepEqual(extended.Reviews, c.Reviews) {
-		t.Fatal("optional test assembly declarations changed named API reviews")
+	if !reflect.DeepEqual(original.Baseline, c.Baseline) || !reflect.DeepEqual(extended.Baseline, c.Baseline) {
+		t.Fatal("optional test assembly declarations changed the original API baseline")
 	}
 }
 
@@ -2004,6 +2137,11 @@ func TestTestReconciliationOneToOne(t *testing.T) {
 	if raw.MappedTests != 4 {
 		t.Fatalf("the report must expose the pair count as mapped_tests: %s", output)
 	}
+	for _, obsolete := range []string{"reviews", "go_tests", "review"} {
+		if strings.Contains(output, `"`+obsolete+`":`) {
+			t.Fatalf("test report retained obsolete %q metadata: %s", obsolete, output)
+		}
+	}
 	for _, row := range raw.Rows {
 		if row["go"] != nil || row["go_tests"] != nil || row["invalid_go_tests"] != nil {
 			t.Fatalf("test pairs must not contain API examples or target arrays: %v", row)
@@ -2040,11 +2178,72 @@ func TestTestReconciliationOneToOne(t *testing.T) {
 		if !brief && !strings.Contains(strings.Join(strings.Fields(text), " "), "ASSEMBLY .NET TEST GO TEST STATE REASON") {
 			t.Errorf("test text report omitted the one-to-one row columns: %s", text)
 		}
-		for _, removed := range []string{"STATUS", "NOTE", "REVIEW", "GO TESTS"} {
+		for _, removed := range []string{"STATUS", "NOTE", "REVIEW", "GO TESTS", "Go test review queue", "Missing queued Go tests"} {
 			if strings.Contains(text, removed) {
 				t.Errorf("test text report retained %q metadata: %s", removed, text)
 			}
 		}
+	}
+}
+
+func TestTestReconciliationNullLeaves(t *testing.T) {
+	args := testCommandArgs(t, singleTestMapping(`null`), inventoryWithTests(sampleTestSectionJSON))
+	args[4] = writeGoCheckout(t, "example.org/sdk", map[string]string{
+		"agent/agent_test.go": "package agent\nimport \"testing\"\nfunc TestRunAsync(*testing.T) {}\nfunc TestPending(*testing.T) {}\n",
+	})
+	before, err := os.ReadFile(args[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := symbolcatalog.Decode(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"Core.Tests/Example.Tests.AgentTests.MoreCases",
+		"Core.Tests/Example.Tests.AgentTests.NoGo",
+		"Core.Tests/Example.Tests.AgentTests.Pending",
+		"Core.Tests/Example.Tests.AgentTests.PlatformSpecific",
+		"Core.Tests/Example.Tests.AgentTests.RejectsNull",
+		"Core.Tests/Example.Tests.AgentTests.RunAsync",
+		"Core.Tests/Example.Tests." + sampleTestNestedType + "." + sampleTestGenericMethod,
+		"Core.Tests/GlobalTests.All",
+		"Other.Tests/Example.Tests.AgentTests.RunAsync",
+	}
+	names := make([]string, 0)
+	for assembly, types := range c.Tests {
+		for owner, methods := range types {
+			for method, target := range methods {
+				if target != nil {
+					t.Fatalf("extraction paired an unreviewed test: %s %s.%s", assembly, owner, method)
+				}
+				names = append(names, assembly+"/"+owner+"."+method)
+			}
+		}
+	}
+	slices.Sort(names)
+	if !reflect.DeepEqual(names, want) {
+		t.Fatalf("single-file null declarations = %v, want %v", names, want)
+	}
+	output := commandOutput(t, append(args, "-limit=0", "-check")...)
+	var got testReconciliationReport
+	decodeOutput(t, output, &got)
+	if got.InventoryTests != len(want) || got.MappedTests != 0 || got.Go.TestFunctions != 2 || got.Counts["unreviewed"] != len(want) || len(got.Rows) != len(want) {
+		t.Fatalf("null declarations were omitted or paired by name: %+v", got)
+	}
+	names = names[:0]
+	for _, row := range got.Rows {
+		if row.State != "unreviewed" || row.GoTest != "" || row.InvalidGoTest != "" || row.Reason != "" {
+			t.Fatalf("a null leaf became a pair or reconciliation failure: %+v", row)
+		}
+		names = append(names, row.Assembly+"/"+row.Dotnet)
+	}
+	if !reflect.DeepEqual(names, want) || strings.Contains(output, `"go_test":`) || strings.Contains(output, `"suggested_go":`) {
+		t.Fatalf("single-file report omitted null identities or guessed counterparts: %s", output)
+	}
+	after, err := os.ReadFile(args[2])
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("test reporting changed the unified catalog: %v", err)
 	}
 }
 
@@ -2239,19 +2438,13 @@ func TestTestReconciliationPreservesInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.flatten(); err != nil {
-		t.Fatal(err)
-	}
-	pairs, err := c.flattenTests()
-	if err != nil {
-		t.Fatal(err)
-	}
+	pairs := flattenTests(c)
 	wantPairs := maps.Clone(pairs)
-	inv, err := loadDeclarationInventory(args[4])
+	inv, err := c.Declarations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	index, err := indexGoTests(args[6])
+	index, err := indexGoTests(args[4])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2308,7 +2501,7 @@ func TestTestReconciliationPreservesInputs(t *testing.T) {
 					t.Fatalf("test source metadata was lost or inferred from API metadata: %+v", got.Inventory)
 				}
 			}
-			for _, removed := range []string{"review", "reviews", "status", "note", "review_source_changed", "review_go_changed", "by_status", "assessed_tests", "go_test_targets"} {
+			for _, removed := range []string{"review", "reviews", "go_tests", "invalid_go_tests", "status", "note", "review_source_changed", "review_go_changed", "by_status", "assessed_tests", "go_test_targets"} {
 				if strings.Contains(out.String(), `"`+removed+`":`) {
 					t.Errorf("test JSON retained removed %q metadata: %s", removed, out.String())
 				}
@@ -2323,8 +2516,8 @@ func TestTestReportWriteErrors(t *testing.T) {
 	for _, invocation := range [][]string{
 		append(slices.Clone(args), "-json=false"),
 		append(slices.Clone(args), "-summary"),
-		{"go-tests", "-go-root", args[6]},
-		{"go-tests", "-go-root", args[6], "-summary", "-json=false"},
+		{"go-tests", "-go-root", args[4]},
+		{"go-tests", "-go-root", args[4], "-summary", "-json=false"},
 	} {
 		var diagnostics bytes.Buffer
 		if err := run(invocation, errorReportWriter{want}, &diagnostics); !errors.Is(err, want) {

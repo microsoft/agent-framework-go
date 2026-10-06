@@ -1,23 +1,25 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-package main
+package symbolcatalog
 
 import (
+	"fmt"
 	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 )
 
-// Names are presentation only. Every index retains all canonical identities;
-// neither an overload nor an external type is evidence for resolving ambiguity.
-type dotnetNames struct {
-	inv          declarationInventory
-	full, suffix map[string][]string
-	namespaces   map[string]bool
-	classes      map[string]int // 1: reference, -1: value, absent: unknown
-	members      map[dnGroup]map[string]declarationMethod
-	labels       map[dnGroup]map[string]string
+// Names resolves source-like labels without discarding canonical identities.
+// Neither an overload nor an external type resolves an ambiguous declaration.
+type Names struct {
+	inv           Inventory
+	full, suffix  map[string][]string
+	namespaces    map[string]bool
+	classes       map[string]int // 1: reference, -1: value, absent: unknown
+	members       map[dnGroup]map[string]Method
+	labels        map[dnGroup]map[string]string
+	catalogOwners map[string]string
 }
 
 type (
@@ -53,10 +55,14 @@ var (
 	dnToken      = regexp.MustCompile("[\\p{L}_][\\p{L}\\p{Nd}_]*(?:`[1-9][0-9]*)?(?:[.+][\\p{L}_][\\p{L}\\p{Nd}_]*(?:`[1-9][0-9]*)?)*")
 )
 
-func newDotnetNames(inv declarationInventory) *dotnetNames {
-	n := &dotnetNames{
+func NewNames(inv Inventory) *Names {
+	n := &Names{
 		inv: inv, full: map[string][]string{}, suffix: map[string][]string{},
-		namespaces: map[string]bool{}, classes: map[string]int{}, members: map[dnGroup]map[string]declarationMethod{}, labels: map[dnGroup]map[string]string{},
+		namespaces: map[string]bool{}, classes: map[string]int{}, members: map[dnGroup]map[string]Method{}, labels: map[dnGroup]map[string]string{},
+		catalogOwners: make(map[string]string, len(inv.catalogLabels)),
+	}
+	for owner, label := range inv.catalogLabels {
+		n.catalogOwners[label] = owner
 	}
 	known := map[string]bool{}
 	collect := func(text string) {
@@ -70,7 +76,7 @@ func newDotnetNames(inv declarationInventory) *dotnetNames {
 			known[name] = true
 		}
 	}
-	generics := func(gs []declarationGeneric) {
+	generics := func(gs []Generic) {
 		for _, g := range gs {
 			for _, constraint := range g.Constraints {
 				collect(constraint)
@@ -93,19 +99,19 @@ func newDotnetNames(inv declarationInventory) *dotnetNames {
 		case "class", "interface", "delegate":
 			n.classes[dnDots(owner)] = 1
 		}
-		groups := map[string]map[string]declarationMethod{
+		groups := map[string]map[string]Method{
 			"method": t.Methods, "constructor": t.Constructors,
 			"property": {}, "event": {}, "field": {}, "constant": {},
 		}
 		for key, p := range t.Properties {
-			groups["property"][key] = declarationMethod{Parameters: p.Parameters, ReturnType: p.Type, ReturnAttributes: p.Attributes}
+			groups["property"][key] = Method{Parameters: p.Parameters, ReturnType: p.Type, ReturnAttributes: p.Attributes}
 		}
 		for key, e := range t.Events {
-			groups["event"][key] = declarationMethod{ReturnType: e.Type, ReturnAttributes: e.Attributes}
+			groups["event"][key] = Method{ReturnType: e.Type, ReturnAttributes: e.Attributes}
 		}
-		for kind, fields := range map[string]map[string]declarationField{"field": t.Fields, "constant": t.Constants} {
+		for kind, fields := range map[string]map[string]Field{"field": t.Fields, "constant": t.Constants} {
 			for key, f := range fields {
-				groups[kind][key] = declarationMethod{ReturnType: f.Type, ReturnAttributes: f.Attributes}
+				groups[kind][key] = Method{ReturnType: f.Type, ReturnAttributes: f.Attributes}
 			}
 		}
 		for kind, members := range groups {
@@ -121,7 +127,7 @@ func newDotnetNames(inv declarationInventory) *dotnetNames {
 	}
 	for name := range known {
 		full := dnDots(name)
-		namespace, _ := dnOwner(name)
+		namespace, _ := Owner(name)
 		n.namespaces[namespace] = true
 		if name == "System.Nullable`1" || strings.HasPrefix(name, "System.ValueTuple`") {
 			n.classes[full] = -1
@@ -143,14 +149,20 @@ func newDotnetNames(inv declarationInventory) *dotnetNames {
 
 func dnDots(s string) string { return strings.ReplaceAll(s, "+", ".") }
 
-func dnOwner(name string) (string, string) {
+// Owner separates a canonical CLR namespace from its nested declaring path.
+func Owner(name string) (string, string) {
 	outer, _, _ := strings.Cut(name, "+")
 	i := strings.LastIndexByte(outer, '.')
 	return name[:max(i, 0)], dnDots(name[i+1:])
 }
 
-// dnSplit recognizes separators only outside balanced type/call delimiters.
-func dnSplit(s, separators string) ([]string, bool) {
+// ValidTypeName checks a name-only canonical CLR declaring identity.
+func ValidTypeName(value string) bool {
+	return value != "" && dnToken.FindString(value) == value
+}
+
+// Split recognizes separators only outside balanced type/call delimiters.
+func Split(s, separators string) ([]string, bool) {
 	var parts []string
 	var stack []byte
 	start := 0
@@ -197,7 +209,7 @@ func dnParse(s string, depth int) (t dnType, ok bool) {
 	if s == "" || depth >= 64 {
 		return t, false
 	}
-	if _, balanced := dnSplit(s, ""); !balanced {
+	if _, balanced := Split(s, ""); !balanced {
 		return t, false
 	}
 	last := s[len(s)-1]
@@ -228,7 +240,7 @@ func dnParse(s string, depth int) (t dnType, ok bool) {
 		return dnType{name: s}, err == nil
 	}
 	if strings.HasPrefix(s, "(") && strings.HasSuffix(s, ")") {
-		items, valid := dnSplit(s[1:len(s)-1], ",")
+		items, valid := Split(s[1:len(s)-1], ",")
 		if !valid || len(items) < 2 || len(items) > 7 {
 			return t, false
 		}
@@ -248,10 +260,10 @@ func dnParse(s string, depth int) (t dnType, ok bool) {
 		return t, true
 	}
 	absolute := strings.HasPrefix(s, "global::")
-	parts, valid := dnSplit(strings.TrimPrefix(s, "global::"), ".+")
+	parts, valid := Split(strings.TrimPrefix(s, "global::"), ".+")
 	// CLR nested instantiations bind one argument list to the whole owner.
 	// Source dotted paths infer arity independently on each instantiated part.
-	nested, _ := dnSplit(s, "+")
+	nested, _ := Split(s, "+")
 	clrNested := len(nested) > 1
 	arity := 0
 	for i, part := range parts {
@@ -261,7 +273,7 @@ func dnParse(s string, depth int) (t dnType, ok bool) {
 				return t, false
 			}
 			base = part[:open]
-			items, balanced := dnSplit(part[open+1:len(part)-1], ",")
+			items, balanced := Split(part[open+1:len(part)-1], ",")
 			if !balanced {
 				return t, false
 			}
@@ -303,7 +315,7 @@ func dnExpand(name string, args []string) (string, bool) {
 	return strings.Join(parts, "."), used == len(args)
 }
 
-func dnGenericLabels(gs []declarationGeneric) []string {
+func dnGenericLabels(gs []Generic) []string {
 	names := make([]string, len(gs))
 	for _, g := range gs {
 		if int(g.Number) >= len(names) || names[g.Number] != "" || !dnIdentifier.MatchString(g.Name) || slices.Contains(names, g.Name) {
@@ -314,15 +326,18 @@ func dnGenericLabels(gs []declarationGeneric) []string {
 	return names
 }
 
-func (n *dotnetNames) typeLabel(canonical string) (namespace, name string) {
-	namespace, name = dnOwner(canonical)
+func (n *Names) TypeLabel(canonical string) (namespace, name string) {
+	namespace, name = Owner(canonical)
+	if label, present := n.inv.catalogLabels[canonical]; present {
+		return namespace, strings.TrimPrefix(label, namespace+".")
+	}
 	if expanded, ok := dnExpand(name, dnGenericLabels(n.inv.Types[canonical].GenericParameters)); ok {
 		name = expanded
 	}
 	return namespace, name
 }
 
-func (n *dotnetNames) lookup(name, owner string) []string {
+func (n *Names) lookup(name, owner string) []string {
 	for canonical, alias := range dnPrimitives {
 		if name == alias {
 			return n.full[canonical]
@@ -342,7 +357,7 @@ func (n *dotnetNames) lookup(name, owner string) []string {
 	}
 	candidates := n.suffix[name]
 	if len(candidates) > 1 && owner != "" {
-		namespace, _ := dnOwner(owner)
+		namespace, _ := Owner(owner)
 		for scope := owner; ; {
 			prefix := scope + "+"
 			if scope == namespace {
@@ -373,10 +388,16 @@ func (n *dotnetNames) lookup(name, owner string) []string {
 	return candidates
 }
 
-// resolveOwner accepts only exact declaring paths, never suffix suggestions.
-func (n *dotnetNames) resolveOwner(source string) []string {
+// ResolveOwner accepts only exact declaring paths, never suffix suggestions.
+func (n *Names) ResolveOwner(source string) []string {
 	if _, exact := n.inv.Types[source]; exact {
 		return []string{source}
+	}
+	if n.inv.catalogLabels != nil {
+		if owner, present := n.catalogOwners[source]; present {
+			return []string{owner}
+		}
+		return nil
 	}
 	t, ok := dnParse(source, 0)
 	if !ok {
@@ -391,7 +412,7 @@ func (n *dotnetNames) resolveOwner(source string) []string {
 	return slices.Clone(candidates)
 }
 
-func (n *dotnetNames) resolveType(source string) []string {
+func (n *Names) ResolveType(source string) []string {
 	if _, exact := n.inv.Types[source]; exact && strings.Contains(source, "+") {
 		return []string{source}
 	}
@@ -408,7 +429,7 @@ func (n *dotnetNames) resolveType(source string) []string {
 	return slices.Clone(candidates)
 }
 
-func dnBind(scope *dnScope, gs []declarationGeneric, args []dnType, prefix string) bool {
+func dnBind(scope *dnScope, gs []Generic, args []dnType, prefix string) bool {
 	if len(args) != 0 && len(args) != len(gs) {
 		return false
 	}
@@ -435,7 +456,7 @@ func dnBind(scope *dnScope, gs []declarationGeneric, args []dnType, prefix strin
 	return true
 }
 
-func (n *dotnetNames) render(t dnType, scope dnScope) (string, bool) {
+func (n *Names) render(t dnType, scope dnScope) (string, bool) {
 	if t.name == "" {
 		return "", false
 	}
@@ -465,7 +486,7 @@ func (n *dotnetNames) render(t dnType, scope dnScope) (string, bool) {
 	if alias := dnPrimitives[t.name]; alias != "" && len(args) == 0 && scope.vars[alias] == "" {
 		return alias, true
 	}
-	_, nested := dnOwner(identities[0])
+	_, nested := Owner(identities[0])
 	parts, name := strings.Split(t.name, "."), t.name
 	// Keep the declaring path of nested types even when the leaf is unique.
 	for i := len(parts) - len(strings.Split(nested, ".")); i >= 0; i-- {
@@ -478,7 +499,7 @@ func (n *dotnetNames) render(t dnType, scope dnScope) (string, bool) {
 }
 
 func dnReadSignature(s string) (sig dnSignature, ok bool) {
-	parts, balanced := dnSplit(s, "->")
+	parts, balanced := Split(s, "->")
 	if !balanced || len(parts) > 2 {
 		return sig, false
 	}
@@ -494,7 +515,7 @@ func dnReadSignature(s string) (sig dnSignature, ok bool) {
 			return sig, false
 		}
 		if params := head[i+1 : len(head)-1]; strings.TrimSpace(params) != "" {
-			sig.params, balanced = dnSplit(params, ",")
+			sig.params, balanced = Split(params, ",")
 		}
 		head, sig.call = strings.TrimSpace(head[:i]), true
 	}
@@ -504,6 +525,12 @@ func dnReadSignature(s string) (sig dnSignature, ok bool) {
 	}
 	sig.name, ok = dnParse(strings.ReplaceAll(head, "``", "`"), 0)
 	return sig, ok && balanced
+}
+
+// SignatureName returns only the member name used for unresolved-name hints.
+func SignatureName(value string) (string, bool) {
+	sig, ok := dnReadSignature(value)
+	return sig.name.name, ok
 }
 
 func dnParameter(text, modifier string) (dnType, string, bool) {
@@ -521,14 +548,14 @@ func dnParameter(text, modifier string) (dnType, string, bool) {
 	return t, modifier, ok && slices.Contains([]string{"", "ref", "out", "in"}, modifier)
 }
 
-func dnConstructor(owner string) string {
-	_, name := dnOwner(owner)
+func Constructor(owner string) string {
+	_, name := Owner(owner)
 	name = name[strings.LastIndexByte(name, '.')+1:]
 	name, _, _ = strings.Cut(name, "`")
 	return name
 }
 
-func (n *dotnetNames) label(group dnGroup, key string, m declarationMethod) (string, string) {
+func (n *Names) label(group dnGroup, key string, m Method) (string, string) {
 	sig, ok := dnReadSignature(key)
 	scope := dnScope{group.owner, map[string]string{}, map[string]int{}}
 	if !ok || !dnBind(&scope, n.inv.Types[group.owner].GenericParameters, nil, "!") || !dnBind(&scope, m.GenericParameters, nil, "!!") {
@@ -539,7 +566,7 @@ func (n *dotnetNames) label(group dnGroup, key string, m declarationMethod) (str
 		name, ok = sig.name.name, true
 	}
 	if group.kind == "constructor" && sig.name.name == ".ctor" {
-		name, ok = dnConstructor(group.owner), true
+		name, ok = Constructor(group.owner), true
 	}
 	var params []string
 	for _, p := range m.Parameters {
@@ -571,18 +598,50 @@ func (n *dotnetNames) label(group dnGroup, key string, m declarationMethod) (str
 	return name, result
 }
 
-func (n *dotnetNames) memberLabel(owner, kind, canonicalKey string) string {
+// Complete existing method labels using their own positional generic names.
+// Return types are stored once in keys, never repeated on mapping values.
+func (n *Names) methodLabel(owner, sourceType, label, canonicalKey string) (string, error) {
+	sig, valid := dnReadSignature(label)
+	enclosing, parsed := dnParse(sourceType, 0)
+	m := n.members[dnGroup{owner, "method"}][canonicalKey]
+	scope := dnScope{owner, map[string]string{}, map[string]int{}}
+	if !valid || !parsed || !dnBind(&scope, n.inv.Types[owner].GenericParameters, enclosing.args, "!") || !dnBind(&scope, m.GenericParameters, sig.name.args, "!!") {
+		return "", fmt.Errorf("%s.%s: invalid method generic binding", sourceType, label)
+	}
+	result := m.ReturnType
+	if label == canonicalKey && sig.result != "" {
+		return label, nil // Preserve canonical fallbacks for opaque signatures.
+	}
+	if t, parsed := dnParse(result, 0); parsed {
+		if rendered, ok := n.render(t, scope); ok {
+			result = rendered
+		}
+	}
+	if result == "" {
+		return "", fmt.Errorf("%s.%s: extracted method requires a return type", sourceType, label)
+	}
+	parts, _ := Split(label, "->")
+	return parts[0] + " -> " + result, nil
+}
+
+func (n *Names) MemberLabel(owner, kind, canonicalKey string) string {
+	if n.inv.catalogLabels != nil {
+		return canonicalKey
+	}
 	group := dnGroup{owner, kind}
 	if n.labels[group] == nil {
 		labels := map[string]string{}
 		for key, m := range n.members[group] {
 			label, result := n.label(group, key, m)
-			matches := n.resolveMember(owner, kind, "", label)
+			if kind == "method" && result != "" {
+				label += " -> " + result
+			}
+			matches := n.ResolveMember(owner, kind, "", label)
 			// Check semantic uniqueness, too: M<T>(T) and M<U>(U) do not
 			// identify different overloads merely because parameter names differ.
-			if len(matches) > 1 && result != "" {
+			if kind != "method" && len(matches) > 1 && result != "" {
 				label += " -> " + result
-				matches = n.resolveMember(owner, kind, "", label)
+				matches = n.ResolveMember(owner, kind, "", label)
 			}
 			if len(matches) != 1 || matches[0] != key {
 				label = key
@@ -597,7 +656,7 @@ func (n *dotnetNames) memberLabel(owner, kind, canonicalKey string) string {
 	return canonicalKey
 }
 
-func (n *dotnetNames) nullableReferences(root *dnType, scope dnScope, flags []int) map[*dnType]bool {
+func (n *Names) nullableReferences(root *dnType, scope dnScope, flags []int) map[*dnType]bool {
 	references := map[*dnType]bool{}
 	type slot struct {
 		node     *dnType
@@ -663,11 +722,11 @@ func (n *dotnetNames) nullableReferences(root *dnType, scope dnScope, flags []in
 	return references
 }
 
-func (n *dotnetNames) same(source, canonical dnType, scope dnScope, flags []int) bool {
+func (n *Names) same(source, canonical dnType, scope dnScope, flags []int) bool {
 	return n.sameType(source, &canonical, scope, n.nullableReferences(&canonical, scope, flags))
 }
 
-func (n *dotnetNames) sameType(source dnType, canonical *dnType, scope dnScope, references map[*dnType]bool) bool {
+func (n *Names) sameType(source dnType, canonical *dnType, scope dnScope, references map[*dnType]bool) bool {
 	if source.name == "?" {
 		if canonical.name == "System.Nullable`1" && len(canonical.args) == 1 {
 			return n.sameType(source.args[0], &canonical.args[0], scope, references)
@@ -696,18 +755,21 @@ func (n *dotnetNames) sameType(source dnType, canonical *dnType, scope dnScope, 
 	return true
 }
 
-func (n *dotnetNames) resolveMember(owner, kind, sourceType, member string) []string {
+func (n *Names) ResolveMember(owner, kind, sourceType, member string) []string {
 	members := n.members[dnGroup{owner, kind}]
 	var enclosing dnType
 	if sourceType != "" {
 		var ok bool
 		enclosing, ok = dnParse(sourceType, 0)
-		if types := n.resolveOwner(sourceType); !ok || len(types) != 1 || types[0] != owner {
+		if types := n.ResolveOwner(sourceType); !ok || len(types) != 1 || types[0] != owner {
 			return nil
 		}
 	}
 	if _, exact := members[member]; exact {
 		return []string{member}
+	}
+	if n.inv.catalogLabels != nil {
+		return nil // Catalog labels are authoritative; do not guess from stubs.
 	}
 	sig, ok := dnReadSignature(member)
 	if !ok {
@@ -717,7 +779,7 @@ func (n *dotnetNames) resolveMember(owner, kind, sourceType, member string) []st
 	for key, m := range members {
 		decl, valid := dnReadSignature(key)
 		name := sig.name.name
-		if kind == "constructor" && name == dnConstructor(owner) {
+		if kind == "constructor" && name == Constructor(owner) {
 			name = ".ctor"
 		}
 		params := sig.params

@@ -35,10 +35,15 @@ jobs:
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
       with:
         go-version: ${{ matrix.go-version }}
-        cache-dependency-path: go.sum
+        cache-dependency-path: |
+          go.sum
+          _catalog/go.sum
     
     - name: Run tests
       run: go test -v ${{ matrix.target.name != 'windows-arm64' && '-race' || '' }} -shuffle=on ./...
+
+    - name: Run catalog tooling tests
+      run: go -C _catalog test -v ${{ matrix.target.name != 'windows-arm64' && '-race' || '' }} -shuffle=on ./...
 
   copilot-integration:
     name: GitHub Copilot integration

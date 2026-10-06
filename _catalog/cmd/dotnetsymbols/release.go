@@ -16,6 +16,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/symbolcatalog"
 )
 
 const (
@@ -54,7 +56,7 @@ type packageManifest struct {
 	} `xml:"metadata"`
 }
 
-func loadRelease(result *inventory, options releaseOptions, diagnostics io.Writer) error {
+func loadRelease(result *symbolcatalog.Inventory, options releaseOptions, diagnostics io.Writer) error {
 	version := options.Version
 	if version != "latest" {
 		var err error
@@ -151,7 +153,7 @@ func loadRelease(result *inventory, options releaseOptions, diagnostics io.Write
 		ordered = append(ordered, id)
 	}
 	slices.Sort(ordered)
-	result.Packages = make(map[string]packageInfo)
+	result.Packages = make(map[string]symbolcatalog.Package)
 	for _, id := range ordered {
 		request := byID[id]
 		address, err := url.JoinPath(packageBase, request.ID, request.Version, request.ID+"."+request.Version+".nupkg")
@@ -320,7 +322,7 @@ func readPackageEntry(entry *zip.File, limit int64) (data []byte, err error) {
 	return data, nil
 }
 
-func addPackage(result *inventory, request packageRequest, framework, source, address string, data []byte) error {
+func addPackage(result *symbolcatalog.Inventory, request packageRequest, framework, source, address string, data []byte) error {
 	archive, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
 	if err != nil {
 		return fmt.Errorf("NuGet archive: %w", err)
@@ -373,7 +375,7 @@ func addPackage(result *inventory, request packageRequest, framework, source, ad
 		return fmt.Errorf("no exact assets for %q; available groups: %s", framework, strings.Join(available, ", "))
 	}
 	slices.SortFunc(entries, func(a, b *zip.File) int { return strings.Compare(a.Name, b.Name) })
-	info := packageInfo{
+	info := symbolcatalog.Package{
 		Version: metadata.Version, Source: source, Download: address,
 		SHA256: fmt.Sprintf("%x", sha256.Sum256(data)), Framework: framework, AssetGroup: group,
 		Repository: metadata.Repository.URL, Commit: metadata.Repository.Commit,
@@ -397,7 +399,7 @@ func addPackage(result *inventory, request packageRequest, framework, source, ad
 		if err != nil {
 			return fmt.Errorf("asset %q: %w", entry.Name, err)
 		}
-		if err := result.addAssembly(name, assembly, types); err != nil {
+		if err := addAssembly(result, name, assembly, types); err != nil {
 			return err
 		}
 		info.Assemblies = append(info.Assemblies, name)

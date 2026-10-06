@@ -3,117 +3,14 @@
 package main
 
 import (
-	"bytes"
 	"cmp"
-	"crypto/sha256"
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"maps"
-	"os"
 	"slices"
 	"strings"
 
-	"github.com/microsoft/agent-framework-go/cmd/internal/testinventory"
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/symbolcatalog"
 )
-
-// These models read the metadata needed for identity resolution and provenance.
-// Optional metadata added by the extractor does not change this contract.
-type declarationInventory struct {
-	SchemaVersion  int                            `json:"schema_version"`
-	IdentityFormat string                         `json:"identity_format"`
-	Selection      declarationSelection           `json:"selection"`
-	Packages       map[string]declarationPackage  `json:"packages,omitempty"`
-	Assemblies     map[string]declarationAssembly `json:"assemblies"`
-	Types          map[string]declarationType     `json:"types"`
-	Tests          *testinventory.Inventory       `json:"tests,omitempty"`
-	SHA256         string                         `json:"-"`
-}
-
-type declarationSelection struct {
-	Namespaces       []string `json:"namespaces"`
-	IncludeProtected bool     `json:"include_protected"`
-}
-
-type declarationPackage struct {
-	Version    string   `json:"version"`
-	Source     string   `json:"source"`
-	Download   string   `json:"download"`
-	SHA256     string   `json:"sha256"`
-	Framework  string   `json:"framework"`
-	AssetGroup string   `json:"asset_group"`
-	Repository string   `json:"repository,omitempty"`
-	Commit     string   `json:"commit,omitempty"`
-	Assemblies []string `json:"assemblies"`
-}
-
-type declarationAssembly struct {
-	InformationalVersion string            `json:"informational_version,omitempty"`
-	Version              string            `json:"version"`
-	TargetFramework      string            `json:"target_framework,omitempty"`
-	SHA256               string            `json:"sha256"`
-	ReferenceAssembly    bool              `json:"reference_assembly"`
-	ForwardedTypes       map[string]string `json:"forwarded_types,omitempty"`
-}
-
-type declarationType struct {
-	Assembly          string                         `json:"assembly"`
-	Kind              string                         `json:"kind"`
-	BaseType          string                         `json:"base_type,omitempty"`
-	GenericParameters []declarationGeneric           `json:"generic_parameters,omitempty"`
-	Attributes        declarationAttributes          `json:"attributes,omitzero"`
-	Constructors      map[string]declarationMethod   `json:"constructors,omitempty"`
-	Methods           map[string]declarationMethod   `json:"methods,omitempty"`
-	Properties        map[string]declarationProperty `json:"properties,omitempty"`
-	Events            map[string]declarationEvent    `json:"events,omitempty"`
-	Fields            map[string]declarationField    `json:"fields,omitempty"`
-	Constants         map[string]declarationField    `json:"constants,omitempty"`
-}
-
-type declarationGeneric struct {
-	Name        string   `json:"name"`
-	Number      uint16   `json:"number"`
-	Flags       uint16   `json:"flags,omitempty"`
-	Constraints []string `json:"constraints,omitempty"`
-}
-
-type declarationMethod struct {
-	VarArgs           bool                   `json:"varargs,omitempty"`
-	ReturnType        string                 `json:"return_type"`
-	ReturnAttributes  declarationAttributes  `json:"return_attributes,omitzero"`
-	Parameters        []declarationParameter `json:"parameters,omitempty"`
-	GenericParameters []declarationGeneric   `json:"generic_parameters,omitempty"`
-	Attributes        declarationAttributes  `json:"attributes,omitzero"`
-}
-
-type declarationParameter struct {
-	Type       string                `json:"type"`
-	Modifier   string                `json:"modifier,omitempty"`
-	Attributes declarationAttributes `json:"attributes,omitzero"`
-}
-
-type declarationProperty struct {
-	Type       string                 `json:"type"`
-	Parameters []declarationParameter `json:"parameters,omitempty"`
-	Attributes declarationAttributes  `json:"attributes,omitzero"`
-}
-
-type declarationEvent struct {
-	Type       string                `json:"type"`
-	Attributes declarationAttributes `json:"attributes,omitzero"`
-}
-
-type declarationField struct {
-	Type       string                `json:"type"`
-	Attributes declarationAttributes `json:"attributes,omitzero"`
-}
-
-type declarationAttributes struct {
-	Experimental      string `json:"experimental,omitempty"`
-	CompilerGenerated bool   `json:"compiler_generated,omitempty"`
-	NullableFlags     []int  `json:"nullable_flags,omitempty"`
-}
 
 // Canonical identities are internal join keys, not presentation strings.
 type declarationRef struct {
@@ -140,7 +37,6 @@ type reconciliationRow struct {
 	GoSymbols           []string `json:"go_symbols"`
 	Status              string   `json:"status,omitempty"`
 	Note                string   `json:"note,omitempty"`
-	Review              string   `json:"review,omitempty"`
 	Reason              string   `json:"reason,omitempty"`
 	Candidates          []string `json:"candidates,omitempty"`
 	SuggestedGo         []string `json:"suggested_go,omitempty"`
@@ -154,12 +50,12 @@ type reconciliationRow struct {
 }
 
 type reconciliationInventory struct {
-	SchemaVersion  int                            `json:"schema_version"`
-	IdentityFormat string                         `json:"identity_format"`
-	SHA256         string                         `json:"sha256"`
-	Selection      declarationSelection           `json:"selection"`
-	Packages       map[string]declarationPackage  `json:"packages,omitempty"`
-	Assemblies     map[string]declarationAssembly `json:"assemblies"`
+	SchemaVersion  int                               `json:"schema_version"`
+	IdentityFormat string                            `json:"identity_format"`
+	SHA256         string                            `json:"sha256"`
+	Selection      symbolcatalog.Selection           `json:"selection"`
+	Packages       map[string]symbolcatalog.Package  `json:"packages,omitempty"`
+	Assemblies     map[string]symbolcatalog.Assembly `json:"assemblies"`
 }
 
 type reconciliationGoInventory struct {
@@ -176,8 +72,7 @@ type reconciliationGoInventory struct {
 }
 
 type reconciliationReport struct {
-	Baseline              baseline                  `json:"baseline"`
-	Reviews               map[string]reviewBaseline `json:"reviews,omitempty"`
+	Baseline              symbolcatalog.Baseline    `json:"baseline"`
 	Inventory             reconciliationInventory   `json:"inventory"`
 	Go                    reconciliationGoInventory `json:"go"`
 	InventoryDeclarations int                       `json:"inventory_declarations"`
@@ -189,61 +84,10 @@ type reconciliationReport struct {
 	Page                  *pageInfo                 `json:"page,omitempty"`
 }
 
-func loadDeclarationInventory(file string) (declarationInventory, error) {
-	var inv declarationInventory
-	data, err := os.ReadFile(file)
-	if err != nil {
-		return inv, err
-	}
-	if root := bytes.TrimSpace(data); len(root) == 0 || root[0] != '{' {
-		return inv, fmt.Errorf("%s: expected a single JSON object", file)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	if err := checkJSONKeys(decoder); err != nil {
-		return inv, fmt.Errorf("%s: %w", file, err)
-	}
-	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-		return inv, fmt.Errorf("%s: expected a single JSON object", file)
-	}
-	// Unknown optional API fields are deliberately accepted. Capture tests
-	// separately so their stricter schema is decoded only once. The key check
-	// above still covers the entire input document.
-	input := struct {
-		*declarationInventory
-		Tests json.RawMessage `json:"tests"`
-	}{declarationInventory: &inv}
-	if err := json.Unmarshal(data, &input); err != nil {
-		return declarationInventory{}, fmt.Errorf("%s: %w", file, err)
-	}
-	if inv.SchemaVersion != 1 {
-		return declarationInventory{}, fmt.Errorf("%s: unsupported inventory schema_version %d", file, inv.SchemaVersion)
-	}
-	if inv.IdentityFormat != "ecma335-v1" {
-		return declarationInventory{}, fmt.Errorf("%s: unsupported inventory identity_format %q", file, inv.IdentityFormat)
-	}
-	if len(inv.Assemblies) == 0 || len(inv.Types) == 0 {
-		return declarationInventory{}, fmt.Errorf("%s: inventory assemblies and types must not be empty", file)
-	}
-	for _, name := range slices.Sorted(maps.Keys(inv.Types)) {
-		typ := inv.Types[name]
-		if _, exists := inv.Assemblies[typ.Assembly]; typ.Assembly == "" || !exists {
-			return declarationInventory{}, fmt.Errorf("%s: type %q references unknown assembly %q", file, name, typ.Assembly)
-		}
-	}
-	inv.Tests, err = decodeTestInventory(input.Tests)
-	if err != nil {
-		return declarationInventory{}, fmt.Errorf("%s: %w", file, err)
-	}
-	inv.SHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
-	return inv, nil
-}
-
-func reconcile(report mappingsReport, inv declarationInventory, goAPI goInventory, allGoPackages bool) reconciliationReport {
-	names := newDotnetNames(inv)
+func reconcile(report mappingsReport, inv symbolcatalog.Inventory, goAPI goInventory, allGoPackages bool) reconciliationReport {
+	names := symbolcatalog.NewNames(inv)
 	result := reconciliationReport{
 		Baseline: report.Baseline,
-		Reviews:  report.Reviews,
 		Inventory: reconciliationInventory{
 			SchemaVersion: inv.SchemaVersion, IdentityFormat: inv.IdentityFormat, SHA256: inv.SHA256,
 			Selection: inv.Selection, Packages: inv.Packages, Assemblies: inv.Assemblies,
@@ -276,12 +120,15 @@ func reconcile(report mappingsReport, inv declarationInventory, goAPI goInventor
 			Namespace: source.Namespace, Type: source.Type, Member: source.Member,
 			Assembly: source.Assembly, Area: source.Area, Kind: source.Kind,
 			State: "needs-reconciliation", Go: source.Go, GoSymbols: append([]string{}, source.GoSymbols...),
-			Status: source.Status, Note: source.Note, Review: source.Review,
+			Status: source.Status, Note: source.Note,
 		}
 		if row.Kind == "type" {
 			row.Member = ""
 		}
-		owners := names.resolveOwner(source.typeName)
+		if source.Unreviewed {
+			row.Status = ""
+		}
+		owners := names.ResolveOwner(source.typeName)
 		var ref declarationRef
 		matched := false
 		switch len(owners) {
@@ -299,13 +146,13 @@ func reconcile(report mappingsReport, inv declarationInventory, goAPI goInventor
 			}
 			// A short-name proposal is not an alternative way to claim a type
 			// whose fully qualified source identity failed to resolve.
-			for _, owner := range names.resolveType(source.Type) {
+			for _, owner := range names.ResolveType(source.Type) {
 				row.Candidates = append(row.Candidates, qualifiedDeclarationLabel(names, declarationRef{owner: owner, kind: "type"}))
 			}
 		case 1:
 			owner := owners[0]
 			typ := inv.Types[owner]
-			row.Namespace, row.Type = names.typeLabel(owner)
+			row.Namespace, row.Type = names.TypeLabel(owner)
 			ref = declarationRef{owner: owner, kind: row.Kind}
 			if source.Assembly != "" && source.Assembly != typ.Assembly {
 				row.Reason = fmt.Sprintf("mapping records assembly %q, but the inventory declares this type in %q", source.Assembly, typ.Assembly)
@@ -328,10 +175,13 @@ func reconcile(report mappingsReport, inv declarationInventory, goAPI goInventor
 					}
 				}
 			} else {
-				members := names.resolveMember(owner, row.Kind, source.typeName, row.Member)
+				members := names.ResolveMember(owner, row.Kind, source.typeName, row.Member)
+				if source.unavailable {
+					members = nil
+				}
 				if len(members) == 1 {
 					ref.key, matched = members[0], true
-					row.Member = names.memberLabel(owner, row.Kind, ref.key)
+					row.Member = names.MemberLabel(owner, row.Kind, ref.key)
 				} else {
 					if len(members) == 0 {
 						row.Reason = "member was not resolved on the inventory type; selection, visibility, or baseline differences may be responsible"
@@ -373,13 +223,8 @@ func reconcile(report mappingsReport, inv declarationInventory, goAPI goInventor
 			}
 		}
 		if row.Status != "" {
-			dotnetCommit, goCommit := report.Baseline.DotnetCommit, report.Baseline.GoCommit
-			if row.Review != "" {
-				review := report.Reviews[row.Review]
-				dotnetCommit, goCommit = review.DotnetCommit, review.GoCommit
-			}
-			row.ReviewSourceChanged = reconciliationCommitChanged(dotnetCommit, sourceCommits[row.Assembly])
-			row.ReviewGoChanged = reconciliationCommitChanged(goCommit, goAPI.Commit)
+			row.ReviewSourceChanged = reconciliationCommitChanged(report.Baseline.DotnetCommit, sourceCommits[row.Assembly])
+			row.ReviewGoChanged = reconciliationCommitChanged(report.Baseline.GoCommit, goAPI.Commit)
 			checkReconciliationGoTargets(&row, goAPI, goPackages, allGoPackages)
 		}
 		sourceRows[i] = row
@@ -402,7 +247,7 @@ func reconcile(report mappingsReport, inv declarationInventory, goAPI goInventor
 			sourceRows[i].State = "needs-reconciliation"
 			sourceRows[i].Reason = fmt.Sprintf("%d catalog mappings resolve to the same inventory declaration; no unique assessment was linked", len(indices))
 		}
-		namespace, typeName := names.typeLabel(ref.owner)
+		namespace, typeName := names.TypeLabel(ref.owner)
 		row := reconciliationRow{
 			Namespace: namespace, Type: typeName, Dotnet: typeName,
 			Assembly: inv.Types[ref.owner].Assembly, Kind: ref.kind,
@@ -410,7 +255,7 @@ func reconcile(report mappingsReport, inv declarationInventory, goAPI goInventor
 			State: "unreviewed", GoSymbols: []string{},
 		}
 		if ref.kind != "type" {
-			row.Member = names.memberLabel(ref.owner, ref.kind, ref.key)
+			row.Member = names.MemberLabel(ref.owner, ref.kind, ref.key)
 			row.Dotnet += "." + row.Member
 		}
 		annotateReconciliationDeclaration(&row, inv.Types[ref.owner], ref)
@@ -444,19 +289,13 @@ func reconcile(report mappingsReport, inv declarationInventory, goAPI goInventor
 }
 
 func summarizeReconciliation(report *reconciliationReport) {
-	report.Counts = make(map[string]int, len(reconciliationStates))
-	for _, state := range reconciliationStates {
-		report.Counts[state] = 0
-	}
+	report.Counts = counts(reconciliationStates)
 	report.ByArea = make(map[string]map[string]int)
 	report.AssessedDeclarations = 0
 	for _, row := range report.Rows {
 		report.Counts[row.State]++
 		if report.ByArea[row.Area] == nil {
-			report.ByArea[row.Area] = make(map[string]int, len(reconciliationStates))
-			for _, state := range reconciliationStates {
-				report.ByArea[row.Area][state] = 0
-			}
+			report.ByArea[row.Area] = counts(reconciliationStates)
 		}
 		report.ByArea[row.Area][row.State]++
 		if row.Status != "" {
@@ -465,7 +304,7 @@ func summarizeReconciliation(report *reconciliationReport) {
 	}
 }
 
-func declarationMemberKeys(typ declarationType, kind string) []string {
+func declarationMemberKeys(typ symbolcatalog.Declaration, kind string) []string {
 	switch kind {
 	case "constructor":
 		return slices.Sorted(maps.Keys(typ.Constructors))
@@ -485,32 +324,31 @@ func declarationMemberKeys(typ declarationType, kind string) []string {
 }
 
 // These are names-only suggestions, used only after identity resolution fails.
-func declarationMemberCandidates(typ declarationType, owner, kind, member string) []string {
-	signature, ok := dnReadSignature(member)
+func declarationMemberCandidates(typ symbolcatalog.Declaration, owner, kind, member string) []string {
+	name, ok := symbolcatalog.SignatureName(member)
 	if !ok {
 		return nil
 	}
-	name := signature.name.name
-	if kind == "constructor" && name == dnConstructor(owner) {
+	if kind == "constructor" && name == symbolcatalog.Constructor(owner) {
 		name = ".ctor"
 	}
 	var candidates []string
 	for _, key := range declarationMemberKeys(typ, kind) {
-		candidate, ok := dnReadSignature(key)
-		if ok && candidate.name.name == name {
+		candidate, ok := symbolcatalog.SignatureName(key)
+		if ok && candidate == name {
 			candidates = append(candidates, key)
 		}
 	}
 	return candidates
 }
 
-func qualifiedDeclarationLabel(names *dotnetNames, ref declarationRef) string {
-	namespace, label := names.typeLabel(ref.owner)
+func qualifiedDeclarationLabel(names *symbolcatalog.Names, ref declarationRef) string {
+	namespace, label := names.TypeLabel(ref.owner)
 	if namespace != "" {
 		label = namespace + "." + label
 	}
 	if ref.kind != "type" {
-		label += "." + names.memberLabel(ref.owner, ref.kind, ref.key)
+		label += "." + names.MemberLabel(ref.owner, ref.kind, ref.key)
 	}
 	return label
 }
@@ -537,7 +375,7 @@ func reconciliationArea(namespace string, known map[string]bool) string {
 	}
 }
 
-func annotateReconciliationDeclaration(row *reconciliationRow, typ declarationType, ref declarationRef) {
+func annotateReconciliationDeclaration(row *reconciliationRow, typ symbolcatalog.Declaration, ref declarationRef) {
 	attributes := typ.Attributes
 	method := false
 	switch ref.kind {
@@ -590,7 +428,7 @@ func checkReconciliationGoTargets(row *reconciliationRow, goAPI goInventory, pac
 	}
 }
 
-func declarationSourceCommit(inv declarationInventory, assembly string) string {
+func declarationSourceCommit(inv symbolcatalog.Inventory, assembly string) string {
 	info, exists := inv.Assemblies[assembly]
 	if !exists {
 		return ""

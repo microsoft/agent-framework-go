@@ -3,24 +3,19 @@
 package main
 
 import (
-	"fmt"
 	"io"
 	"maps"
 	"slices"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/symbolcatalog"
 )
 
-type goOnlyAssessment struct {
-	Note   string `json:"note"`
-	Review string `json:"review"`
-}
-
 type goOnlyReport struct {
-	Baseline baseline                    `json:"baseline"`
-	Reviews  map[string]reviewBaseline   `json:"reviews,omitempty"`
-	GoOnly   map[string]goOnlyAssessment `json:"go_only"`
-	Page     pageInfo                    `json:"page"`
+	Baseline symbolcatalog.Baseline                    `json:"baseline"`
+	GoOnly   map[string]symbolcatalog.GoOnlyAssessment `json:"go_only"`
+	Page     pageInfo                                  `json:"page"`
 }
 
 // Go-only assessments have no .NET identity and never enter the .NET row counts.
@@ -32,22 +27,6 @@ type goOnlyReconciliation struct {
 	UnindexedGoTargets []string `json:"unindexed_go_targets,omitempty"`
 }
 
-func (c catalog) validateGoOnly() error {
-	for _, symbol := range slices.Sorted(maps.Keys(c.GoOnly)) {
-		assessment := c.GoOnly[symbol]
-		if !goTargetPattern.MatchString(symbol) {
-			return fmt.Errorf("go_only: invalid qualified Go symbol %q", symbol)
-		}
-		if strings.TrimSpace(assessment.Note) == "" {
-			return fmt.Errorf("go_only %s: note must not be empty", symbol)
-		}
-		if _, ok := c.Reviews[assessment.Review]; !ok || assessment.Review == "" {
-			return fmt.Errorf("go_only %s: review must name an existing review batch", symbol)
-		}
-	}
-	return nil
-}
-
 func writeGoOnlyReport(out io.Writer, report mappingsReport, symbol string, paging pageOptions, asJSON bool) error {
 	selected := make([]string, 0, len(report.GoOnly))
 	for _, name := range slices.Sorted(maps.Keys(report.GoOnly)) {
@@ -56,26 +35,26 @@ func writeGoOnlyReport(out io.Writer, report mappingsReport, symbol string, pagi
 		}
 	}
 	visible, page := pageItems(selected, paging)
-	assessments := make(map[string]goOnlyAssessment, len(visible))
+	assessments := make(map[string]symbolcatalog.GoOnlyAssessment, len(visible))
 	for _, name := range visible {
 		assessments[name] = report.GoOnly[name]
 	}
 	if asJSON {
-		return writeReportJSON(out, goOnlyReport{Baseline: report.Baseline, Reviews: report.Reviews, GoOnly: assessments, Page: page})
+		return writeReportJSON(out, goOnlyReport{Baseline: report.Baseline, GoOnly: assessments, Page: page})
 	}
 	table := tabularReportWriter{Writer: tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)}
-	table.printf("Go-only assessments: no meaningful .NET counterpart was identified in the recorded review scope.\n")
+	table.printf("Go-only assessments: no meaningful .NET counterpart was identified in the catalog's scope.\n")
 	table.printf("Target existence requires reconcile; this view only reads the catalog.\n")
 	table.page(page)
-	table.printf("\nGO SYMBOL\tREVIEW\tNOTE\n")
+	table.printf("\nGO SYMBOL\tNOTE\n")
 	for _, name := range visible {
 		assessment := assessments[name]
-		table.printf("%s\t%s\t%s\n", reportCell(name), reportCell(assessment.Review), reportCell(assessment.Note))
+		table.printf("%s\t%s\n", reportCell(name), reportCell(assessment.Note))
 	}
 	return table.flush()
 }
 
-func reconcileGoOnly(assessments map[string]goOnlyAssessment, api goInventory, packages map[string]bool, allGoPackages bool) *goOnlyReconciliation {
+func reconcileGoOnly(assessments map[string]symbolcatalog.GoOnlyAssessment, api goInventory, packages map[string]bool, allGoPackages bool) *goOnlyReconciliation {
 	if len(assessments) == 0 {
 		return nil
 	}

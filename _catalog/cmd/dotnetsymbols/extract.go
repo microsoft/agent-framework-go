@@ -11,12 +11,13 @@ import (
 	"os"
 	"slices"
 
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/symbolcatalog"
 	"github.com/microsoft/go-winmd/winmd"
 )
 
 type assemblyExtractor struct {
 	metadata           *winmd.Metadata
-	selected           selection
+	selected           symbolcatalog.Selection
 	signatures         *signatureRenderer
 	attributeDecoder   *winmd.CustomAttributeDecoder
 	attributesByParent map[winmd.CodedIndex[winmd.HasCustomAttribute]][]winmd.Index
@@ -34,48 +35,48 @@ type assemblyExtractor struct {
 // extractAssembly reads and hashes the same bytes. No CLR code is loaded or
 // executed, and no referenced assembly or module is opened. Errors discard the
 // entire result rather than returning an apparently complete partial inventory.
-func extractAssembly(file string, selected selection) (string, assemblyInfo, map[string]typeInfo, error) {
+func extractAssembly(file string, selected symbolcatalog.Selection) (string, symbolcatalog.Assembly, map[string]symbolcatalog.Declaration, error) {
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return "", assemblyInfo{}, nil, err
+		return "", symbolcatalog.Assembly{}, nil, err
 	}
 	return extractAssemblyBytes(data, selected)
 }
 
-func extractAssemblyBytes(data []byte, selected selection) (assemblyName string, info assemblyInfo, types map[string]typeInfo, err error) {
+func extractAssemblyBytes(data []byte, selected symbolcatalog.Selection) (assemblyName string, info symbolcatalog.Assembly, types map[string]symbolcatalog.Declaration, err error) {
 	assemblyName, info, extractor, err := readAssembly(data, selected)
 	if err != nil {
-		return "", assemblyInfo{}, nil, err
+		return "", symbolcatalog.Assembly{}, nil, err
 	}
 	forwarded, err := extractor.forwardedTypes()
 	if err != nil {
-		return "", assemblyInfo{}, nil, err
+		return "", symbolcatalog.Assembly{}, nil, err
 	}
-	types = make(map[string]typeInfo)
+	types = make(map[string]symbolcatalog.Declaration)
 	for index := range extractor.metadata.Tables.TypeDef.Indices() {
 		name, err := extractor.signatures.namedType(winmd.CodedIndex[winmd.TypeDefOrRefOrSpec]{Tag: winmd.TypeDefOrRefOrSpec_TypeDef, Index: index}, 0)
 		if err != nil {
-			return "", assemblyInfo{}, nil, err
+			return "", symbolcatalog.Assembly{}, nil, err
 		}
 		if !includesNamespace(name.namespace, selected) {
 			continue
 		}
 		visible, err := extractor.externallyVisible(index)
 		if err != nil {
-			return "", assemblyInfo{}, nil, err
+			return "", symbolcatalog.Assembly{}, nil, err
 		}
 		if !visible {
 			continue
 		}
 		typ, err := extractor.readType(index, assemblyName, name.name)
 		if err != nil {
-			return "", assemblyInfo{}, nil, fmt.Errorf("TypeDef[%d] %s: %w", index, name.name, err)
+			return "", symbolcatalog.Assembly{}, nil, fmt.Errorf("TypeDef[%d] %s: %w", index, name.name, err)
 		}
 		if _, exists := types[name.name]; exists {
-			return "", assemblyInfo{}, nil, fmt.Errorf("TypeDef[%d]: duplicate canonical type %q", index, name.name)
+			return "", symbolcatalog.Assembly{}, nil, fmt.Errorf("TypeDef[%d]: duplicate canonical type %q", index, name.name)
 		}
 		if _, exists := forwarded[name.name]; exists {
-			return "", assemblyInfo{}, nil, fmt.Errorf("TypeDef[%d]: canonical type %q is both defined and forwarded", index, name.name)
+			return "", symbolcatalog.Assembly{}, nil, fmt.Errorf("TypeDef[%d]: canonical type %q is both defined and forwarded", index, name.name)
 		}
 		types[name.name] = typ
 	}
@@ -85,50 +86,50 @@ func extractAssemblyBytes(data []byte, selected selection) (assemblyName string,
 
 // readAssembly shares metadata decoding and provenance between API and test
 // extraction. Selection is applied by the caller, not while opening metadata.
-func readAssembly(data []byte, selected selection) (string, assemblyInfo, *assemblyExtractor, error) {
+func readAssembly(data []byte, selected symbolcatalog.Selection) (string, symbolcatalog.Assembly, *assemblyExtractor, error) {
 	image, err := pe.NewFile(bytes.NewReader(data))
 	if err != nil {
-		return "", assemblyInfo{}, nil, fmt.Errorf("PE: %w", err)
+		return "", symbolcatalog.Assembly{}, nil, fmt.Errorf("PE: %w", err)
 	}
 	metadata, err := winmd.New(image)
 	if err != nil {
-		return "", assemblyInfo{}, nil, fmt.Errorf("CLI metadata: %w", err)
+		return "", symbolcatalog.Assembly{}, nil, fmt.Errorf("CLI metadata: %w", err)
 	}
 	if count := metadata.Tables.Assembly.Len(); count != 1 {
-		return "", assemblyInfo{}, nil, fmt.Errorf("assembly: expected exactly one manifest row, got %d; netmodules are not supported", count)
+		return "", symbolcatalog.Assembly{}, nil, fmt.Errorf("assembly: expected exactly one manifest row, got %d; netmodules are not supported", count)
 	}
 	assembly, err := metadata.Tables.Assembly.At(0)
 	if err != nil {
-		return "", assemblyInfo{}, nil, err
+		return "", symbolcatalog.Assembly{}, nil, err
 	}
 	assemblyName := assembly.Name.String()
 	if assemblyName == "" {
-		return "", assemblyInfo{}, nil, fmt.Errorf("Assembly[0]: empty assembly name")
+		return "", symbolcatalog.Assembly{}, nil, fmt.Errorf("Assembly[0]: empty assembly name")
 	}
 	if count := metadata.Tables.Module.Len(); count != 1 {
-		return "", assemblyInfo{}, nil, fmt.Errorf("module: expected exactly one manifest module, got %d", count)
+		return "", symbolcatalog.Assembly{}, nil, fmt.Errorf("module: expected exactly one manifest module, got %d", count)
 	}
 	if _, err := metadata.Tables.Module.At(0); err != nil {
-		return "", assemblyInfo{}, nil, err
+		return "", symbolcatalog.Assembly{}, nil, err
 	}
 	for index := range metadata.Tables.File.Indices() {
 		file, err := metadata.Tables.File.At(index)
 		if err != nil {
-			return "", assemblyInfo{}, nil, err
+			return "", symbolcatalog.Assembly{}, nil, err
 		}
 		if file.Flags.Content() == winmd.FileContent_ContainsMetaData {
-			return "", assemblyInfo{}, nil, fmt.Errorf("file[%d] %q: multi-module assemblies are not supported", index, file.Name)
+			return "", symbolcatalog.Assembly{}, nil, fmt.Errorf("file[%d] %q: multi-module assemblies are not supported", index, file.Name)
 		}
 	}
 	extractor, err := newAssemblyExtractor(metadata, selected)
 	if err != nil {
-		return "", assemblyInfo{}, nil, err
+		return "", symbolcatalog.Assembly{}, nil, err
 	}
 	assemblyAttributes, err := extractor.readAttributes(winmd.CodedIndex[winmd.HasCustomAttribute]{Tag: winmd.HasCustomAttribute_Assembly, Index: 0})
 	if err != nil {
-		return "", assemblyInfo{}, nil, fmt.Errorf("Assembly[0] %q: %w", assemblyName, err)
+		return "", symbolcatalog.Assembly{}, nil, fmt.Errorf("Assembly[0] %q: %w", assemblyName, err)
 	}
-	info := assemblyInfo{
+	info := symbolcatalog.Assembly{
 		Version:              fmt.Sprintf("%d.%d.%d.%d", assembly.MajorVersion, assembly.MinorVersion, assembly.BuildNumber, assembly.RevisionNumber),
 		InformationalVersion: assemblyAttributes.informationalVersion,
 		TargetFramework:      assemblyAttributes.targetFramework,
@@ -138,7 +139,7 @@ func readAssembly(data []byte, selected selection) (string, assemblyInfo, *assem
 	return assemblyName, info, extractor, nil
 }
 
-func newAssemblyExtractor(metadata *winmd.Metadata, selected selection) (*assemblyExtractor, error) {
+func newAssemblyExtractor(metadata *winmd.Metadata, selected symbolcatalog.Selection) (*assemblyExtractor, error) {
 	signatures, err := newSignatureRenderer(metadata)
 	if err != nil {
 		return nil, err
@@ -305,25 +306,25 @@ func (e *assemblyExtractor) externallyVisible(index winmd.Index) (bool, error) {
 	return false, fmt.Errorf("TypeDef[%d]: cyclic or excessively nested visibility chain", index)
 }
 
-func (e *assemblyExtractor) readType(index winmd.Index, assemblyName, name string) (typeInfo, error) {
+func (e *assemblyExtractor) readType(index winmd.Index, assemblyName, name string) (symbolcatalog.Declaration, error) {
 	typ, err := e.metadata.Tables.TypeDef.At(index)
 	if err != nil {
-		return typeInfo{}, err
+		return symbolcatalog.Declaration{}, err
 	}
-	info := typeInfo{
+	info := symbolcatalog.Declaration{
 		Assembly:     assemblyName,
 		Kind:         "class",
-		Constructors: make(map[string]methodInfo),
-		Methods:      make(map[string]methodInfo),
-		Properties:   make(map[string]propertyInfo),
-		Events:       make(map[string]eventInfo),
-		Fields:       make(map[string]fieldInfo),
-		Constants:    make(map[string]fieldInfo),
+		Constructors: make(map[string]symbolcatalog.Method),
+		Methods:      make(map[string]symbolcatalog.Method),
+		Properties:   make(map[string]symbolcatalog.Property),
+		Events:       make(map[string]symbolcatalog.Event),
+		Fields:       make(map[string]symbolcatalog.Field),
+		Constants:    make(map[string]symbolcatalog.Field),
 	}
 	if typ.Extends.Tag != winmd.TypeDefOrRef_Null {
 		info.BaseType, err = e.signatures.typeDefOrRef(typ.Extends)
 		if err != nil {
-			return typeInfo{}, fmt.Errorf("base type: %w", err)
+			return symbolcatalog.Declaration{}, fmt.Errorf("base type: %w", err)
 		}
 	}
 	if typ.Flags.Semantics() == winmd.TypeSemantics_Interface {
@@ -344,20 +345,20 @@ func (e *assemblyExtractor) readType(index winmd.Index, assemblyName, name strin
 	}
 	info.GenericParameters, err = e.genericParameters(winmd.CodedIndex[winmd.TypeOrMethodDef]{Tag: winmd.TypeOrMethodDef_TypeDef, Index: index})
 	if err != nil {
-		return typeInfo{}, err
+		return symbolcatalog.Declaration{}, err
 	}
 	attrs, err := e.readAttributes(winmd.CodedIndex[winmd.HasCustomAttribute]{Tag: winmd.HasCustomAttribute_TypeDef, Index: index})
 	if err != nil {
-		return typeInfo{}, err
+		return symbolcatalog.Declaration{}, err
 	}
-	info.Attributes = attrs.attributes
+	info.Attributes = attrs.Attributes
 	for row := range typ.MethodList.All() {
 		if e.accessorMethods[row] {
 			continue
 		}
 		method, err := e.metadata.Tables.MethodDef.At(row)
 		if err != nil {
-			return typeInfo{}, err
+			return symbolcatalog.Declaration{}, err
 		}
 		methodName := method.Name.String()
 		if methodName == ".cctor" || !selectedMember(method.Flags.Access(), e.selected.IncludeProtected) {
@@ -365,47 +366,47 @@ func (e *assemblyExtractor) readType(index winmd.Index, assemblyName, name strin
 		}
 		key, member, err := e.readMethod(row, method)
 		if err != nil {
-			return typeInfo{}, fmt.Errorf("MethodDef[%d] %q: %w", row, methodName, err)
+			return symbolcatalog.Declaration{}, fmt.Errorf("MethodDef[%d] %q: %w", row, methodName, err)
 		}
 		destination := info.Methods
 		if methodName == ".ctor" {
 			destination = info.Constructors
 		}
 		if _, exists := destination[key]; exists {
-			return typeInfo{}, fmt.Errorf("MethodDef[%d]: duplicate canonical method %q", row, key)
+			return symbolcatalog.Declaration{}, fmt.Errorf("MethodDef[%d]: duplicate canonical method %q", row, key)
 		}
 		destination[key] = member
 	}
 	for row := range e.propertiesByType[index].All() {
 		key, member, visible, err := e.readProperty(row)
 		if err != nil {
-			return typeInfo{}, fmt.Errorf("property[%d]: %w", row, err)
+			return symbolcatalog.Declaration{}, fmt.Errorf("property[%d]: %w", row, err)
 		}
 		if !visible {
 			continue
 		}
 		if _, exists := info.Properties[key]; exists {
-			return typeInfo{}, fmt.Errorf("property[%d]: duplicate canonical property %q", row, key)
+			return symbolcatalog.Declaration{}, fmt.Errorf("property[%d]: duplicate canonical property %q", row, key)
 		}
 		info.Properties[key] = member
 	}
 	for row := range e.eventsByType[index].All() {
 		key, member, visible, err := e.readEvent(row)
 		if err != nil {
-			return typeInfo{}, fmt.Errorf("event[%d]: %w", row, err)
+			return symbolcatalog.Declaration{}, fmt.Errorf("event[%d]: %w", row, err)
 		}
 		if !visible {
 			continue
 		}
 		if _, exists := info.Events[key]; exists {
-			return typeInfo{}, fmt.Errorf("event[%d]: duplicate canonical event %q", row, key)
+			return symbolcatalog.Declaration{}, fmt.Errorf("event[%d]: duplicate canonical event %q", row, key)
 		}
 		info.Events[key] = member
 	}
 	for row := range typ.FieldList.All() {
 		field, err := e.metadata.Tables.Field.At(row)
 		if err != nil {
-			return typeInfo{}, err
+			return symbolcatalog.Declaration{}, err
 		}
 		key := field.Name.String()
 		if info.Kind == "enum" && key == "value__" || !selectedMember(field.Flags.Access(), e.selected.IncludeProtected) {
@@ -413,12 +414,12 @@ func (e *assemblyExtractor) readType(index winmd.Index, assemblyName, name strin
 		}
 		member, err := e.readField(row, field)
 		if err != nil {
-			return typeInfo{}, fmt.Errorf("field[%d] %q: %w", row, key, err)
+			return symbolcatalog.Declaration{}, fmt.Errorf("field[%d] %q: %w", row, key, err)
 		}
 		_, fieldExists := info.Fields[key]
 		_, constantExists := info.Constants[key]
 		if fieldExists || constantExists {
-			return typeInfo{}, fmt.Errorf("field[%d]: duplicate canonical field %q", row, key)
+			return symbolcatalog.Declaration{}, fmt.Errorf("field[%d]: duplicate canonical field %q", row, key)
 		}
 		if field.Flags.HasAll(winmd.FieldFlags_Literal) {
 			info.Constants[key] = member
@@ -429,8 +430,8 @@ func (e *assemblyExtractor) readType(index winmd.Index, assemblyName, name strin
 	return info, nil
 }
 
-func (e *assemblyExtractor) genericParameters(owner winmd.CodedIndex[winmd.TypeOrMethodDef]) ([]genericParameter, error) {
-	var result []genericParameter
+func (e *assemblyExtractor) genericParameters(owner winmd.CodedIndex[winmd.TypeOrMethodDef]) ([]symbolcatalog.Generic, error) {
+	var result []symbolcatalog.Generic
 	numbers := make(map[uint16]bool)
 	for _, index := range e.genericsByOwner[owner] {
 		param, err := e.metadata.Tables.GenericParam.At(index)
@@ -441,7 +442,7 @@ func (e *assemblyExtractor) genericParameters(owner winmd.CodedIndex[winmd.TypeO
 			return nil, fmt.Errorf("GenericParam[%d]: duplicate parameter number %d for %s[%d]", index, param.Number, owner.Tag, owner.Index)
 		}
 		numbers[param.Number] = true
-		info := genericParameter{Name: param.Name.String(), Number: param.Number, Flags: uint16(param.Flags)}
+		info := symbolcatalog.Generic{Name: param.Name.String(), Number: param.Number, Flags: uint16(param.Flags)}
 		for _, row := range e.constraintsByParam[index] {
 			constraint, err := e.metadata.Tables.GenericParamConstraint.At(row)
 			if err != nil {
@@ -456,7 +457,7 @@ func (e *assemblyExtractor) genericParameters(owner winmd.CodedIndex[winmd.TypeO
 		slices.Sort(info.Constraints)
 		result = append(result, info)
 	}
-	slices.SortFunc(result, func(a, b genericParameter) int { return cmp.Compare(a.Number, b.Number) })
+	slices.SortFunc(result, func(a, b symbolcatalog.Generic) int { return cmp.Compare(a.Number, b.Number) })
 	return result, nil
 }
 
@@ -498,14 +499,14 @@ func parameterModifier(typ winmd.SigType, flags winmd.ParamAttributes) string {
 	}
 }
 
-func (e *assemblyExtractor) parameters(signature []winmd.SigParam, rows map[int]parameterRow) ([]parameterInfo, error) {
-	result := make([]parameterInfo, len(signature))
+func (e *assemblyExtractor) parameters(signature []winmd.SigParam, rows map[int]parameterRow) ([]symbolcatalog.Parameter, error) {
+	result := make([]symbolcatalog.Parameter, len(signature))
 	for i, param := range signature {
 		typ, err := e.signatures.renderType(param.Type, 0)
 		if err != nil {
 			return nil, fmt.Errorf("signature parameter %d: %w", i+1, err)
 		}
-		info := parameterInfo{Type: typ}
+		info := symbolcatalog.Parameter{Type: typ}
 		row, exists := rows[i+1]
 		info.Modifier = parameterModifier(param.Type, row.param.Flags)
 		if exists {
@@ -513,62 +514,62 @@ func (e *assemblyExtractor) parameters(signature []winmd.SigParam, rows map[int]
 			if err != nil {
 				return nil, fmt.Errorf("param[%d] %q: %w", row.index, row.param.Name.String(), err)
 			}
-			info.Attributes = attrs.attributes
+			info.Attributes = attrs.Attributes
 		}
 		result[i] = info
 	}
 	return result, nil
 }
 
-func (e *assemblyExtractor) readMethod(index winmd.Index, method winmd.MethodDef) (string, methodInfo, error) {
+func (e *assemblyExtractor) readMethod(index winmd.Index, method winmd.MethodDef) (string, symbolcatalog.Method, error) {
 	name := method.Name.String()
 	if name == "" {
-		return "", methodInfo{}, fmt.Errorf("empty method name")
+		return "", symbolcatalog.Method{}, fmt.Errorf("empty method name")
 	}
 	sig, err := e.metadata.MethodDefSignature(method.Signature)
 	if err != nil {
-		return "", methodInfo{}, fmt.Errorf("signature: %w", err)
+		return "", symbolcatalog.Method{}, fmt.Errorf("signature: %w", err)
 	}
 	if name == ".ctor" && (sig.Generic != 0 || sig.RetType.Type.Kind != winmd.ElementType_VOID || method.Flags.HasAll(winmd.MethodFlags_Static)) {
-		return "", methodInfo{}, fmt.Errorf("instance constructor must be nongeneric, nonstatic, and return System.Void")
+		return "", symbolcatalog.Method{}, fmt.Errorf("instance constructor must be nongeneric, nonstatic, and return System.Void")
 	}
-	info := methodInfo{VarArgs: sig.VarArgs}
+	info := symbolcatalog.Method{VarArgs: sig.VarArgs}
 	info.ReturnType, err = e.signatures.renderType(sig.RetType.Type, 0)
 	if err != nil {
-		return "", methodInfo{}, fmt.Errorf("return type: %w", err)
+		return "", symbolcatalog.Method{}, fmt.Errorf("return type: %w", err)
 	}
 	rows, err := e.parameterRows(method.ParamList, len(sig.Param))
 	if err != nil {
-		return "", methodInfo{}, err
+		return "", symbolcatalog.Method{}, err
 	}
 	info.Parameters, err = e.parameters(sig.Param, rows)
 	if err != nil {
-		return "", methodInfo{}, err
+		return "", symbolcatalog.Method{}, err
 	}
 	if row, exists := rows[0]; exists {
 		attrs, err := e.readAttributes(winmd.CodedIndex[winmd.HasCustomAttribute]{Tag: winmd.HasCustomAttribute_Param, Index: row.index})
 		if err != nil {
-			return "", methodInfo{}, fmt.Errorf("return Param[%d]: %w", row.index, err)
+			return "", symbolcatalog.Method{}, fmt.Errorf("return Param[%d]: %w", row.index, err)
 		}
-		info.ReturnAttributes = attrs.attributes
+		info.ReturnAttributes = attrs.Attributes
 	}
 	info.GenericParameters, err = e.genericParameters(winmd.CodedIndex[winmd.TypeOrMethodDef]{Tag: winmd.TypeOrMethodDef_MethodDef, Index: index})
 	if err != nil {
-		return "", methodInfo{}, err
+		return "", symbolcatalog.Method{}, err
 	}
 	if uint64(len(info.GenericParameters)) != uint64(sig.Generic) {
-		return "", methodInfo{}, fmt.Errorf("GenericParam count %d disagrees with signature arity %d", len(info.GenericParameters), sig.Generic)
+		return "", symbolcatalog.Method{}, fmt.Errorf("GenericParam count %d disagrees with signature arity %d", len(info.GenericParameters), sig.Generic)
 	}
 	for _, param := range info.GenericParameters {
 		if uint32(param.Number) >= sig.Generic {
-			return "", methodInfo{}, fmt.Errorf("GenericParam number %d exceeds signature arity %d", param.Number, sig.Generic)
+			return "", symbolcatalog.Method{}, fmt.Errorf("GenericParam number %d exceeds signature arity %d", param.Number, sig.Generic)
 		}
 	}
 	attrs, err := e.readAttributes(winmd.CodedIndex[winmd.HasCustomAttribute]{Tag: winmd.HasCustomAttribute_MethodDef, Index: index})
 	if err != nil {
-		return "", methodInfo{}, err
+		return "", symbolcatalog.Method{}, err
 	}
-	info.Attributes = attrs.attributes
+	info.Attributes = attrs.Attributes
 	return methodIdentity(name, sig.Generic, info.Parameters, info.ReturnType, sig.VarArgs), info, nil
 }
 
@@ -623,56 +624,56 @@ func (e *assemblyExtractor) readAccessors(parent winmd.CodedIndex[winmd.HasSeman
 	return result, nil
 }
 
-func (e *assemblyExtractor) readProperty(index winmd.Index) (string, propertyInfo, bool, error) {
+func (e *assemblyExtractor) readProperty(index winmd.Index) (string, symbolcatalog.Property, bool, error) {
 	accessors, err := e.readAccessors(winmd.CodedIndex[winmd.HasSemantics]{Tag: winmd.HasSemantics_Property, Index: index})
 	if err != nil || !accessors.visible {
-		return "", propertyInfo{}, false, err
+		return "", symbolcatalog.Property{}, false, err
 	}
 	property, err := e.metadata.Tables.Property.At(index)
 	if err != nil {
-		return "", propertyInfo{}, false, err
+		return "", symbolcatalog.Property{}, false, err
 	}
 	name := property.Name.String()
 	if name == "" {
-		return "", propertyInfo{}, false, fmt.Errorf("empty property name")
+		return "", symbolcatalog.Property{}, false, fmt.Errorf("empty property name")
 	}
 	sig, err := e.metadata.PropertySignature(property.Type)
 	if err != nil {
-		return "", propertyInfo{}, false, fmt.Errorf("%q signature: %w", name, err)
+		return "", symbolcatalog.Property{}, false, fmt.Errorf("%q signature: %w", name, err)
 	}
 	if sig.HasThis == accessors.static {
-		return "", propertyInfo{}, false, fmt.Errorf("%q signature and accessor instance flags disagree", name)
+		return "", symbolcatalog.Property{}, false, fmt.Errorf("%q signature and accessor instance flags disagree", name)
 	}
-	var info propertyInfo
+	var info symbolcatalog.Property
 	info.Type, err = e.signatures.renderType(sig.Type, 0)
 	if err != nil {
-		return "", propertyInfo{}, false, fmt.Errorf("%q type: %w", name, err)
+		return "", symbolcatalog.Property{}, false, fmt.Errorf("%q type: %w", name, err)
 	}
 	var rows map[int]parameterRow
 	if getter, exists := accessors.methods[winmd.MethodSemanticsAttributes_Getter]; exists {
 		getterSig, err := e.metadata.MethodDefSignature(getter.method.Signature)
 		if err != nil {
-			return "", propertyInfo{}, false, fmt.Errorf("%q getter MethodDef[%d] signature: %w", name, getter.index, err)
+			return "", symbolcatalog.Property{}, false, fmt.Errorf("%q getter MethodDef[%d] signature: %w", name, getter.index, err)
 		}
 		if len(getterSig.Param) != len(sig.Param) {
-			return "", propertyInfo{}, false, fmt.Errorf("%q getter MethodDef[%d] parameter count disagrees with property signature", name, getter.index)
+			return "", symbolcatalog.Property{}, false, fmt.Errorf("%q getter MethodDef[%d] parameter count disagrees with property signature", name, getter.index)
 		}
 		rows, err = e.parameterRows(getter.method.ParamList, len(getterSig.Param))
 		if err != nil {
-			return "", propertyInfo{}, false, fmt.Errorf("%q getter MethodDef[%d]: %w", name, getter.index, err)
+			return "", symbolcatalog.Property{}, false, fmt.Errorf("%q getter MethodDef[%d]: %w", name, getter.index, err)
 		}
 	}
 	if setter, exists := accessors.methods[winmd.MethodSemanticsAttributes_Setter]; exists {
 		setterSig, err := e.metadata.MethodDefSignature(setter.method.Signature)
 		if err != nil {
-			return "", propertyInfo{}, false, fmt.Errorf("%q setter MethodDef[%d] signature: %w", name, setter.index, err)
+			return "", symbolcatalog.Property{}, false, fmt.Errorf("%q setter MethodDef[%d] signature: %w", name, setter.index, err)
 		}
 		if len(setterSig.Param) != len(sig.Param)+1 {
-			return "", propertyInfo{}, false, fmt.Errorf("%q setter MethodDef[%d] parameter count disagrees with property signature", name, setter.index)
+			return "", symbolcatalog.Property{}, false, fmt.Errorf("%q setter MethodDef[%d] parameter count disagrees with property signature", name, setter.index)
 		}
 		setterRows, err := e.parameterRows(setter.method.ParamList, len(setterSig.Param))
 		if err != nil {
-			return "", propertyInfo{}, false, fmt.Errorf("%q setter MethodDef[%d]: %w", name, setter.index, err)
+			return "", symbolcatalog.Property{}, false, fmt.Errorf("%q setter MethodDef[%d]: %w", name, setter.index, err)
 		}
 		if rows == nil {
 			rows = setterRows
@@ -680,64 +681,64 @@ func (e *assemblyExtractor) readProperty(index winmd.Index) (string, propertyInf
 	}
 	info.Parameters, err = e.parameters(sig.Param, rows)
 	if err != nil {
-		return "", propertyInfo{}, false, fmt.Errorf("%q: %w", name, err)
+		return "", symbolcatalog.Property{}, false, fmt.Errorf("%q: %w", name, err)
 	}
 	attrs, err := e.readAttributes(winmd.CodedIndex[winmd.HasCustomAttribute]{Tag: winmd.HasCustomAttribute_Property, Index: index})
 	if err != nil {
-		return "", propertyInfo{}, false, fmt.Errorf("%q: %w", name, err)
+		return "", symbolcatalog.Property{}, false, fmt.Errorf("%q: %w", name, err)
 	}
-	info.Attributes = attrs.attributes
+	info.Attributes = attrs.Attributes
 	return propertyIdentity(name, info.Parameters, info.Type), info, true, nil
 }
 
-func (e *assemblyExtractor) readEvent(index winmd.Index) (string, eventInfo, bool, error) {
+func (e *assemblyExtractor) readEvent(index winmd.Index) (string, symbolcatalog.Event, bool, error) {
 	accessors, err := e.readAccessors(winmd.CodedIndex[winmd.HasSemantics]{Tag: winmd.HasSemantics_Event, Index: index})
 	if err != nil || !accessors.visible {
-		return "", eventInfo{}, false, err
+		return "", symbolcatalog.Event{}, false, err
 	}
 	event, err := e.metadata.Tables.Event.At(index)
 	if err != nil {
-		return "", eventInfo{}, false, err
+		return "", symbolcatalog.Event{}, false, err
 	}
 	name := event.Name.String()
 	if name == "" {
-		return "", eventInfo{}, false, fmt.Errorf("empty event name")
+		return "", symbolcatalog.Event{}, false, fmt.Errorf("empty event name")
 	}
-	var info eventInfo
+	var info symbolcatalog.Event
 	info.Type, err = e.signatures.typeDefOrRef(event.EventType)
 	if err != nil {
-		return "", eventInfo{}, false, fmt.Errorf("%q type: %w", name, err)
+		return "", symbolcatalog.Event{}, false, fmt.Errorf("%q type: %w", name, err)
 	}
 	attrs, err := e.readAttributes(winmd.CodedIndex[winmd.HasCustomAttribute]{Tag: winmd.HasCustomAttribute_Event, Index: index})
 	if err != nil {
-		return "", eventInfo{}, false, fmt.Errorf("%q: %w", name, err)
+		return "", symbolcatalog.Event{}, false, fmt.Errorf("%q: %w", name, err)
 	}
-	info.Attributes = attrs.attributes
+	info.Attributes = attrs.Attributes
 	return name, info, true, nil
 }
 
-func (e *assemblyExtractor) readField(index winmd.Index, field winmd.Field) (fieldInfo, error) {
+func (e *assemblyExtractor) readField(index winmd.Index, field winmd.Field) (symbolcatalog.Field, error) {
 	if field.Name.String() == "" {
-		return fieldInfo{}, fmt.Errorf("empty field name")
+		return symbolcatalog.Field{}, fmt.Errorf("empty field name")
 	}
 	sig, err := e.metadata.FieldSignature(field.Signature)
 	if err != nil {
-		return fieldInfo{}, fmt.Errorf("signature: %w", err)
+		return symbolcatalog.Field{}, fmt.Errorf("signature: %w", err)
 	}
-	var info fieldInfo
+	var info symbolcatalog.Field
 	info.Type, err = e.signatures.renderType(sig.Type, 0)
 	if err != nil {
-		return fieldInfo{}, err
+		return symbolcatalog.Field{}, err
 	}
 	_, hasConstant := e.constantsByParent[winmd.CodedIndex[winmd.HasConstant]{Tag: winmd.HasConstant_Field, Index: index}]
 	if field.Flags.HasAll(winmd.FieldFlags_Literal) && !hasConstant {
-		return fieldInfo{}, fmt.Errorf("literal field has no Constant row")
+		return symbolcatalog.Field{}, fmt.Errorf("literal field has no Constant row")
 	}
 	attrs, err := e.readAttributes(winmd.CodedIndex[winmd.HasCustomAttribute]{Tag: winmd.HasCustomAttribute_Field, Index: index})
 	if err != nil {
-		return fieldInfo{}, err
+		return symbolcatalog.Field{}, err
 	}
-	info.Attributes = attrs.attributes
+	info.Attributes = attrs.Attributes
 	return info, nil
 }
 

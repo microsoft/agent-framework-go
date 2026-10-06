@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"text/tabwriter"
+
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/symbolcatalog"
 )
 
 const defaultPageLimit = 20
@@ -100,10 +102,13 @@ func writeMappingReport(out io.Writer, report mappingsReport, filter reportFilte
 	namespaceFilter := strings.ToLower(filter.Namespace)
 	selected := make([]mappingRow, 0)
 	for _, row := range report.Mappings {
+		if filter.Assessed && row.Unreviewed {
+			continue
+		}
 		if (filter.Area != "" && row.Area != filter.Area) || (filter.Kind != "" && row.Kind != filter.Kind) || (filter.Status != "" && row.Status != filter.Status) {
 			continue
 		}
-		if view == "gaps" && row.Status != "partial" && row.Status != "unmapped" {
+		if view == "gaps" && (row.Unreviewed || row.Status != "partial" && row.Status != "unmapped") {
 			continue
 		}
 		if !strings.Contains(strings.ToLower(row.typeName), typeFilter) {
@@ -147,6 +152,9 @@ func writeMappingReport(out io.Writer, report mappingsReport, filter reportFilte
 	if view == "summary" {
 		s := summarize(report)
 		table.printf("\n.NET symbols: %d; distinct Go symbols: %d. Counts are not a parity percentage.\n", s.DotnetSymbols, s.GoSymbols)
+		if s.UnreviewedSymbols != 0 {
+			table.printf("Unreviewed .NET declarations: %d; unmapped placeholders are not assessed gaps.\n", s.UnreviewedSymbols)
+		}
 		if s.GoOnlySymbols != 0 {
 			table.printf("Go-only assessments: %d (unfiltered; excluded from the mapping counts above).\n", s.GoOnlySymbols)
 		}
@@ -239,6 +247,7 @@ func writeGoInventory(out io.Writer, api goInventory, symbol string, pageOptions
 }
 
 type reportFilter struct {
+	Assessed  bool
 	Area      string
 	Kind      string
 	Status    string
@@ -250,8 +259,7 @@ type reportFilter struct {
 
 // Keep summary metadata explicit so rows is absent, rather than null or empty.
 type reconciliationSummary struct {
-	Baseline              baseline                  `json:"baseline"`
-	Reviews               map[string]reviewBaseline `json:"reviews,omitempty"`
+	Baseline              symbolcatalog.Baseline    `json:"baseline"`
 	Inventory             reconciliationInventory   `json:"inventory"`
 	Go                    reconciliationGoInventory `json:"go"`
 	InventoryDeclarations int                       `json:"inventory_declarations"`
@@ -277,6 +285,9 @@ func writeReconciliation(out io.Writer, report reconciliationReport, filter repo
 			filter.Kind != "" && row.Kind != filter.Kind ||
 			filter.Status != "" && row.Status != filter.Status ||
 			filter.State != "" && row.State != filter.State {
+			continue
+		}
+		if filter.Assessed && row.State == "unreviewed" {
 			continue
 		}
 		if !strings.Contains(strings.ToLower(row.Namespace), namespaceFilter) {
@@ -316,7 +327,7 @@ func writeReconciliation(out io.Writer, report reconciliationReport, filter repo
 	if asJSON {
 		if brief {
 			err = writeReportJSON(out, reconciliationSummary{
-				Baseline: report.Baseline, Reviews: report.Reviews,
+				Baseline:  report.Baseline,
 				Inventory: report.Inventory, Go: report.Go,
 				InventoryDeclarations: report.InventoryDeclarations,
 				AssessedDeclarations:  report.AssessedDeclarations,
@@ -346,11 +357,6 @@ func writeReconciliationText(out io.Writer, report reconciliationReport, brief b
 	var buffer bytes.Buffer
 	fmt.Fprintf(&buffer, "Baseline: checked %s; .NET source commit %s; Go commit %s.\n", reportCell(report.Baseline.CheckedAt), reportCell(report.Baseline.DotnetCommit), reportCell(report.Baseline.GoCommit))
 	fmt.Fprintf(&buffer, "Baseline scope: %s\n", reportCell(report.Baseline.Scope))
-	for _, id := range slices.Sorted(maps.Keys(report.Reviews)) {
-		review := report.Reviews[id]
-		fmt.Fprintf(&buffer, "Review %s: checked %s; .NET source commit %s; Go commit %s; inventory SHA256 %s.\n", reportCell(id), reportCell(review.CheckedAt), reportCell(review.DotnetCommit), reportCell(review.GoCommit), reportCell(review.InventorySHA256))
-		fmt.Fprintf(&buffer, "  Scope: %s\n", reportCell(review.Scope))
-	}
 	fmt.Fprintf(&buffer, ".NET inventory: schema %d; identity %s; SHA256 %s.\n", report.Inventory.SchemaVersion, reportCell(report.Inventory.IdentityFormat), reportCell(report.Inventory.SHA256))
 	namespaces := strings.Join(report.Inventory.Selection.Namespaces, ", ")
 	if namespaces == "" {
@@ -361,13 +367,13 @@ func writeReconciliationText(out io.Writer, report reconciliationReport, brief b
 		pkg := report.Inventory.Packages[name]
 		fmt.Fprintf(&buffer, ".NET package %s: version %s; source commit %s; framework %s; asset group %s.\n", reportCell(name), reportCell(pkg.Version), reportCell(pkg.Commit), reportCell(pkg.Framework), reportCell(pkg.AssetGroup))
 	}
-	inv := declarationInventory{Packages: report.Inventory.Packages, Assemblies: report.Inventory.Assemblies}
+	inv := symbolcatalog.Inventory{Packages: report.Inventory.Packages, Assemblies: report.Inventory.Assemblies}
 	for _, name := range slices.Sorted(maps.Keys(report.Inventory.Assemblies)) {
 		assembly := report.Inventory.Assemblies[name]
 		fmt.Fprintf(&buffer, ".NET assembly %s: version %s; informational version %s; source commit %s; framework %s.\n", reportCell(name), reportCell(assembly.Version), reportCell(assembly.InformationalVersion), reportCell(declarationSourceCommit(inv, name)), reportCell(assembly.TargetFramework))
 	}
 	writeGoReportContext(&buffer, report.Go)
-	fmt.Fprintln(&buffer, "Warning: Existing assessments retain their recorded baselines and have not been re-audited against these inventories.")
+	fmt.Fprintln(&buffer, "Warning: Existing assessments retain the original baseline and have not been re-audited against these inventories.")
 	fmt.Fprintln(&buffer, "Unreviewed declarations are not confirmed gaps; out-of-scope Go targets remain unvalidated.")
 	fmt.Fprintln(&buffer, "Counts do not establish behavioral parity; selected rows may include unresolved catalog entries.")
 	selectedRows := len(report.Rows)
@@ -410,7 +416,7 @@ func writeReconciliationText(out io.Writer, report reconciliationReport, brief b
 		table.printf("\n")
 	}
 	if !brief {
-		table.printf("\nNAMESPACE\tTYPE\tMEMBER\tKIND\tAREA\tSTATE\tSTATUS\tGO EXAMPLE\tGO SYMBOLS\tEXPERIMENTAL\tMACHINERY\tREVIEW\tNOTE / REASON\n")
+		table.printf("\nNAMESPACE\tTYPE\tMEMBER\tKIND\tAREA\tSTATE\tSTATUS\tGO EXAMPLE\tGO SYMBOLS\tEXPERIMENTAL\tMACHINERY\tNOTE / REASON\n")
 		for _, row := range report.Rows {
 			var machinery []string
 			if row.LanguageMachinery {
@@ -422,7 +428,7 @@ func writeReconciliationText(out io.Writer, report reconciliationReport, brief b
 			cells := []string{
 				row.Namespace, row.Type, row.Member, row.Kind, row.Area,
 				row.State, row.Status, mappingExample(row.Go), strings.Join(row.GoSymbols, ", "),
-				row.Experimental, strings.Join(machinery, ", "), row.Review,
+				row.Experimental, strings.Join(machinery, ", "),
 				reconciliationDetails(row),
 			}
 			for i, cell := range cells {

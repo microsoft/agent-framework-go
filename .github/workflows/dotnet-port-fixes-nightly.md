@@ -34,6 +34,13 @@ steps:
         mkdir -p "$data"
         git --no-pager log --first-parent -n 50 --format='%H%x09%cI%x09%s' "$upstream_sha" -- dotnet/ > "$data/recent-dotnet-commits.tsv"
         printf 'DOTNET_UPSTREAM_SHA=%s\nDOTNET_COMMITS_FILE=%s\n' "$upstream_sha" "$data/recent-dotnet-commits.tsv" >> "$GITHUB_ENV"
+   - name: Prepare catalog tooling
+     shell: bash
+     working-directory: ${{ github.workspace }}
+     run: |
+        set -euo pipefail
+        go -C _catalog mod download
+        git diff --exit-code -- _catalog/go.mod _catalog/go.sum
 permissions:
    contents: read
    pull-requests: read
@@ -107,7 +114,7 @@ Read saved oversized tool outputs in ranges; a preview limit is not missing sour
 
 Compare observable behavior, not language-specific types. Different names or Go iterators instead of .NET async enumerators do not establish absence. For lifecycle fixes, trace the Go provider/iterator path through early stop, error, cancellation, and cleanup before declaring the fix already satisfied or inapplicable.
 
-Use the `dotnet-symbols` skill for counterpart lookup. Catalog notes and old reviews are leads, not current parity proof. Keep the catalog, inventory, and mapping guide read-only; identify any expected assessment follow-up in the PR for post-merge maintenance using published commits. Do not infer inventoried package versions from upstream dependency files.
+Use the `dotnet-symbols` skill for counterpart lookup. Catalog notes and historical assessments are leads, not current parity proof. Keep the unified catalog and mapping guide read-only; identify any expected assessment follow-up in the PR for post-merge maintenance using published commits. Do not infer extracted package versions from upstream dependency files.
 
 ## Counterpart eligibility
 
@@ -146,7 +153,7 @@ Before editing, confirm that the selected group is fix-only and all required sou
 - Port relevant upstream test intent through public Go APIs; cover the actual regression and affected lifecycle paths. Follow idiomatic Go and neighboring APIs. Include required examples for changed scenarios, without unrelated refactoring.
 - Run `gofmt`, targeted unit tests, and broader unit tests for shared-runtime changes using the `go` command. Do not run E2E, replay-harness, or benchmark suites. Recover relevant failures and inspect final exit status; do not claim tests passed while they are still running.
 - After validation and before committing or requesting a PR, repeat only the selected group's recorded issue/PR query plan, following pages without adding new synonym variants. Inspect new relevant hits and refresh known relevant evidence only as needed to confirm current scope, claims, or outcomes. Apply the guarded direct-read recovery above to newly filtered search results before declaring them inaccessible. If required evidence remains unresolved, leave edits unpublished and call `report_incomplete`; if confirmed new work disqualifies the group, apply the Finish rules. Commit and request a PR only when this recheck is complete and clear.
-- Review the full diff and untracked files; run `git diff --check`. After final duplicate checks pass, commit only the selected SDK change and tests/examples. Leave `.github/`, governance files, catalog/inventory/guide, generated agent files, binaries, caches, and reports out of the patch. Preserve pre-existing edits.
+- Review the full diff and untracked files; run `git diff --check`. After final duplicate checks pass, commit only the selected SDK change and tests/examples. Leave `.github/`, governance files, catalog/guide, generated agent files, binaries, caches, and reports out of the patch. Preserve pre-existing edits.
 
 ## Finish
 

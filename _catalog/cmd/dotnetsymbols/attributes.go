@@ -5,6 +5,7 @@ package main
 import (
 	"fmt"
 
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/symbolcatalog"
 	"github.com/microsoft/go-winmd/winmd"
 )
 
@@ -18,7 +19,7 @@ const (
 )
 
 type attributeSummary struct {
-	attributes
+	symbolcatalog.Attributes
 	informationalVersion string
 	targetFramework      string
 	referenceAssembly    bool

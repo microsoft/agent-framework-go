@@ -8,7 +8,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/microsoft/agent-framework-go/cmd/internal/testinventory"
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/symbolcatalog"
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/testinventory"
 	"github.com/microsoft/go-winmd/winmd"
 )
 
@@ -21,7 +22,7 @@ func extractTestAssembly(file string) (string, testinventory.Assembly, error) {
 }
 
 func extractTestAssemblyBytes(data []byte) (string, testinventory.Assembly, error) {
-	name, info, extractor, err := readAssembly(data, selection{})
+	name, info, extractor, err := readAssembly(data, symbolcatalog.Selection{})
 	if err != nil {
 		return "", testinventory.Assembly{}, err
 	}

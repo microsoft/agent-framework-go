@@ -27,14 +27,14 @@ steps:
      run: |
         set -euo pipefail
         upstream_sha="$(jq -er '
-          [.assemblies[].informational_version
+          [.dotnet.assemblies[].informational_version
             | if type == "string" and test("\\+[0-9a-fA-F]{40}$")
               then split("+")[-1] | ascii_downcase
               else error("Inventory assembly lacks a full source commit") end]
           | unique
           | if length == 1 then .[0]
             else error("Inventory assemblies must identify one source commit") end
-        ' docs/dotnet-sdk-symbol-inventory.json)"
+                  ' _catalog/dotnet-go-sdk-symbol-mapping.json)"
         git fetch --no-tags https://github.com/microsoft/agent-framework.git "$upstream_sha"
         test "$(git rev-parse --verify 'FETCH_HEAD^{commit}')" = "$upstream_sha"
         git cat-file -e "${upstream_sha}:dotnet/src"
@@ -45,9 +45,11 @@ steps:
      working-directory: ${{ github.workspace }}
      run: |
         set -euo pipefail
+        go -C _catalog mod download
+        git diff --exit-code -- _catalog/go.mod _catalog/go.sum
         data=/tmp/gh-aw/agent/dotnet-port-api
         mkdir -p "$data"
-        go run ./cmd/symbolmap gaps -limit 0 > "$data/catalog-gaps.json"
+        go -C _catalog run ./cmd/symbolmap gaps -limit 0 > "$data/catalog-gaps.json"
         printf 'DOTNET_GAPS_FILE=%s\n' "$data/catalog-gaps.json" >> "$GITHUB_ENV"
 permissions:
    contents: read
@@ -105,7 +107,7 @@ Work as a single agent; do not delegate or launch sub-agents. Complete selection
 
 ## Scope
 
-- Select only recorded `partial` or `unmapped` leaves in `docs/dotnet-go-sdk-symbol-mapping.json`. These are review leads, not proof of missing behavior. Do not treat `adapted`, `unreviewed`, or absent inventory entries as gaps, or discover unrelated work from recent upstream commits.
+- Select only assessed `partial` or `unmapped` leaves in `_catalog/dotnet-go-sdk-symbol-mapping.json`. These are review leads, not proof of missing behavior. Exclude `unreviewed: true` placeholders; do not treat `adapted` or absent declaration metadata as gaps, or discover unrelated work from recent upstream commits.
 - Classify by the pinned .NET contract and the complete Go port. Adding a missing public API, option, opt-in switch, or user-visible capability belongs here, including its tests and examples; no recent upstream change is required.
 - Existing-capability fixes and tests belong to `[dotnet-port-fixes]` only when neither the upstream contract nor the complete Go port adds a capability or changes exported surface. Uncertainty keeps ownership here but does not waive verification.
 - Exclude experimental APIs/features based on `[Experimental]`, `ExperimentalAttribute`, and explicit upstream documentation. If a coherent port requires experimental surface, skip it entirely, including implementation, tests, examples, and fallback work.
@@ -115,7 +117,7 @@ Work as a single agent; do not delegate or launch sub-agents. Complete selection
 
 ## Evidence
 
-Work from `${{ github.workspace }}`. Setup derives `DOTNET_UPSTREAM_SHA` from the common full commit suffix in `docs/dotnet-sdk-symbol-inventory.json` assembly metadata, fetches that exact commit, and verifies its source/test trees. Missing or conflicting provenance fails setup. Use this commit for source, tests, history, and evidence links; do not refetch, switch to an upstream branch, or substitute `main`, a newer release, or the catalog's historical baseline.
+Work from `${{ github.workspace }}`. Setup derives `DOTNET_UPSTREAM_SHA` from the common full commit suffix in `_catalog/dotnet-go-sdk-symbol-mapping.json` `dotnet.assemblies` metadata, fetches that exact commit, and verifies its source/test trees. Missing or conflicting provenance fails setup. Use this commit for source, tests, history, and evidence links; do not refetch, switch to an upstream branch, or substitute `main`, a newer release, or the catalog's historical baseline.
 
 Use the supplied environment variable directly; do not derive another SHA or grep hashes from the inventory. Package/assembly `sha256` values are checksums, not Git revisions. Before selection, run:
 
@@ -130,7 +132,7 @@ If a tool saves oversized output to a temporary path, read that file in ranges o
 
 Setup exports the complete catalog gap report to `DOTNET_GAPS_FILE` using `symbolmap gaps -limit 0`. Its `mappings` array contains every assessed gap; `page.total` is the full count. Each row uses `namespace`, `dotnet`, `kind`, `status`, `go_symbols`, and `note`; there are no `entry`, `type`, or `member` fields. Identify leaves by their actual `namespace` and `dotnet` values, never array positions. Use this prepared file, not a new first-page query. A failed query or zero matching rows does not verify a selected leaf; correct the field names and recover the exact row before proceeding.
 
-The catalog and inventory are read-only. Release/package-scope upgrades and inventory regeneration are separate maintainer work. A leaf's named review or original baseline records historical evidence, not a different porting target. Weekly mapping maintenance updates assessments after the port merges, using published Go commits and preserving historical provenance.
+The unified catalog is read-only. Release/package-scope upgrades and declaration refreshes are separate maintainer work. The original baseline records historical evidence, not a different porting target or the latest inspection of every assessment. Weekly mapping maintenance updates assessments after the port merges, using published Go commits; inspection evidence belongs in the PR discussion, not catalog review records.
 
 Before duplicate searches, read the member and declaring-type headers/attributes and relevant implementation/test bodies at the target SHA; grep matches only locate this evidence. Verify related public options/builders, experimental status, defaults, and opt-in gates. Compare the current Go implementation, callers, tests, and examples. Use `docs/dotnet-go-sdk-feature-comparison.md` as the mapping guide, not a second gap list. If relevant upstream commits/PRs clarify the contract, inspect their complete diffs and verify they are included in the pinned revision. Inventory scope limitations alone do not prove absence; out-of-inventory catalog leaves require direct pinned-source verification.
 
@@ -159,7 +161,7 @@ Before editing, confirm the selected catalog leaves, the pinned .NET contract an
 - Follow repository instructions, idiomatic Go, and neighboring APIs. Port relevant behavior and tests together; update examples for changed user scenarios. Already satisfied gaps belong to mapping maintenance, not a manufactured SDK change.
 - Run `gofmt`, targeted unit tests, and broader unit tests for shared runtime changes. Use the `go` command, not absolute toolchain paths. Do not run E2E, replay-harness, or benchmark suites.
 - After validation and before committing or requesting a PR, repeat only the selected gap's recorded issue/PR query plan, following pages without adding new synonym variants. Inspect new relevant hits and refresh known relevant evidence only as needed to confirm current scope, claims, or outcomes. Apply the guarded direct-read recovery above to newly filtered search results before declaring them inaccessible. If required evidence remains unresolved, leave edits unpublished and call `report_incomplete`; if confirmed new work disqualifies the gap, apply the Finish rules. Commit and request a PR only when this recheck is complete and clear.
-- Review the full diff and untracked files; run `git diff --check`. After the final duplicate check passes, commit only the selected SDK change and its tests/examples. Leave the catalog, inventory, and mapping guide unchanged. Exclude `.github/`, governance files, binaries, caches, reports, and generated agent files. Preserve pre-existing edits.
+- Review the full diff and untracked files; run `git diff --check`. After the final duplicate check passes, commit only the selected SDK change and its tests/examples. Leave the unified catalog and mapping guide unchanged. Exclude `.github/`, governance files, binaries, caches, reports, and generated agent files. Preserve pre-existing edits.
 - Breaking changes are permitted for beta alignment but must be explicit in the PR.
 
 ## Finish

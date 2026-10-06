@@ -16,6 +16,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/symbolcatalog"
 )
 
 var goExampleStandardImports = map[string]string{
@@ -69,49 +71,6 @@ var goExampleVariables = map[string]bool{
 	"workflow":    true,
 }
 
-// parseGoExample supplies only the boilerplate needed to parse declarations,
-// expressions, or statement fragments. It does not supply example inputs.
-func parseGoExample(code string) (*token.FileSet, *ast.File, error) {
-	return parseGoExampleMode(code, false)
-}
-
-func parseGoExampleMode(code string, callStatement bool) (*token.FileSet, *ast.File, error) {
-	if strings.TrimSpace(code) == "" {
-		return nil, nil, fmt.Errorf("go example must not be empty")
-	}
-	parse := func(body string) (*token.FileSet, *ast.File, error) {
-		fset := token.NewFileSet()
-		file, err := parser.ParseFile(fset, "example.go", "package example\n"+body+"\n", parser.AllErrors)
-		return fset, file, err
-	}
-	fset, file, err := parse(code)
-	if err == nil {
-		for _, decl := range file.Decls {
-			switch decl := decl.(type) {
-			case *ast.GenDecl:
-				if decl.Tok == token.IMPORT {
-					return nil, nil, fmt.Errorf("go examples must not declare imports")
-				}
-			case *ast.FuncDecl:
-				if decl.Recv == nil && decl.Name.Name == "init" {
-					return nil, nil, fmt.Errorf("go examples must not declare init functions")
-				}
-			}
-		}
-		if len(file.Decls) == 0 {
-			return nil, nil, fmt.Errorf("go example must contain code, not only comments")
-		}
-		return fset, file, nil
-	}
-	if expression, err := parser.ParseExpr(code); err == nil {
-		if _, ok := expression.(*ast.CallExpr); ok && callStatement {
-			return parse("func example() {\n" + code + "\n}")
-		}
-		return parse("var _ = " + code)
-	}
-	return parse("func example() {\n" + code + "\n}")
-}
-
 // checkGoExample type-checks without evaluating source or loading packages.
 // Imports must already be present in the indexed package graph.
 func checkGoExample(code string, api goInventory) error {
@@ -123,7 +82,7 @@ func checkGoExample(code string, api goInventory) error {
 }
 
 func checkGoExampleMode(code string, api goInventory, callStatement bool) error {
-	fset, file, err := parseGoExampleMode(code, callStatement)
+	fset, file, err := symbolcatalog.ParseGoExample(code, callStatement)
 	if err != nil {
 		return err
 	}

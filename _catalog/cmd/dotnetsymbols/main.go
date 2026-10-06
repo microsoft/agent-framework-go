@@ -2,7 +2,8 @@
 
 // dotnetsymbols reads local or published .NET assembly metadata without executing code.
 // It optionally adds test declarations from selected local test assemblies
-// and writes a deterministic inventory to standard output.
+// and writes a deterministic inventory to standard output, or explicitly
+// refreshes an existing catalog while preserving its Go assessments.
 package main
 
 import (
@@ -17,7 +18,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/microsoft/agent-framework-go/cmd/internal/testinventory"
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/symbolcatalog"
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/testinventory"
 )
 
 func main() {
@@ -31,6 +33,21 @@ func run(args []string, out, diagnostics io.Writer) error {
 	flags := flag.NewFlagSet("dotnetsymbols", flag.ContinueOnError)
 	flags.SetOutput(diagnostics)
 	var patterns, testPatterns, namespaces, packages []string
+	var input, updateMapping string
+	flags.Func("input", "validated cached extraction JSON instead of assembly or release inputs", func(value string) error {
+		if strings.TrimSpace(value) == "" {
+			return errors.New("input path must not be empty")
+		}
+		input = value
+		return nil
+	})
+	flags.Func("update-mapping", "refresh this existing catalog in place instead of writing an inventory to standard output", func(value string) error {
+		if strings.TrimSpace(value) == "" {
+			return errors.New("update-mapping path must not be empty")
+		}
+		updateMapping = value
+		return nil
+	})
 	flags.Func("assembly", "local assembly file or filepath glob; repeat for each selected input", func(value string) error {
 		if strings.TrimSpace(value) == "" {
 			return errors.New("assembly pattern must not be empty")
@@ -67,67 +84,93 @@ func run(args []string, out, diagnostics io.Writer) error {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("unexpected positional arguments; select inputs with -assembly or -release")
+		return errors.New("unexpected positional arguments; select inputs with -assembly, -release, or -input")
 	}
-	releaseMode := len(patterns) == 0
-	if !releaseMode {
-		var releaseFlag string
+	var result symbolcatalog.Inventory
+	if input != "" {
+		var extractionFlag string
 		flags.Visit(func(f *flag.Flag) {
-			if f.Name == "release" || f.Name == "package" || f.Name == "framework" || f.Name == "nuget-source" {
-				releaseFlag = f.Name
+			switch f.Name {
+			case "assembly", "test-assembly", "release", "package", "framework", "nuget-source", "namespace", "include-protected":
+				extractionFlag = f.Name
 			}
 		})
-		if releaseFlag != "" {
-			return fmt.Errorf("-assembly cannot be combined with -%s", releaseFlag)
+		if extractionFlag != "" {
+			return fmt.Errorf("-input cannot be combined with -%s", extractionFlag)
 		}
-	}
-	files, err := assemblyFiles(patterns)
-	if err != nil {
-		return err
-	}
-	testFiles, err := assemblyFiles(testPatterns)
-	if err != nil {
-		return fmt.Errorf("test assemblies: %w", err)
-	}
-	slices.Sort(namespaces)
-	namespaces = slices.Compact(namespaces)
-	if namespaces == nil {
-		namespaces = []string{}
-	}
-	selected := selection{Namespaces: namespaces, IncludeProtected: *protected}
-	result := inventory{
-		SchemaVersion: 1, IdentityFormat: "ecma335-v1", Selection: selected,
-		Assemblies: make(map[string]assemblyInfo), Types: make(map[string]typeInfo),
-	}
-	if releaseMode {
-		if err := loadRelease(&result, releaseOptions{Version: *release, Framework: *framework, Source: *source, Packages: packages}, diagnostics); err != nil {
-			return err
-		}
-	}
-	for _, name := range files {
-		assemblyName, assembly, types, err := extractAssembly(name, selected)
+		data, err := os.ReadFile(input)
 		if err != nil {
-			return fmt.Errorf("%s: %w", name, err)
+			return fmt.Errorf("%s: %w", input, err)
 		}
-		if err := result.addAssembly(assemblyName, assembly, types); err != nil {
+		decoded, err := symbolcatalog.DecodeInventory(data)
+		if err != nil {
+			return fmt.Errorf("%s: %w", input, err)
+		}
+		result = decoded
+	} else {
+		releaseMode := len(patterns) == 0
+		if !releaseMode {
+			var releaseFlag string
+			flags.Visit(func(f *flag.Flag) {
+				if f.Name == "release" || f.Name == "package" || f.Name == "framework" || f.Name == "nuget-source" {
+					releaseFlag = f.Name
+				}
+			})
+			if releaseFlag != "" {
+				return fmt.Errorf("-assembly cannot be combined with -%s", releaseFlag)
+			}
+		}
+		files, err := assemblyFiles(patterns)
+		if err != nil {
 			return err
 		}
-	}
-	if len(testFiles) != 0 {
-		result.Tests = &testinventory.Inventory{
-			IdentityFormat: testinventory.IdentityFormat,
-			Assemblies:     make(map[string]testinventory.Assembly),
+		testFiles, err := assemblyFiles(testPatterns)
+		if err != nil {
+			return fmt.Errorf("test assemblies: %w", err)
 		}
-		for _, file := range testFiles {
-			name, assembly, err := extractTestAssembly(file)
+		slices.Sort(namespaces)
+		namespaces = slices.Compact(namespaces)
+		if namespaces == nil {
+			namespaces = []string{}
+		}
+		selected := symbolcatalog.Selection{Namespaces: namespaces, IncludeProtected: *protected}
+		result = symbolcatalog.Inventory{
+			SchemaVersion: 1, IdentityFormat: "ecma335-v1", Selection: selected,
+			Assemblies: make(map[string]symbolcatalog.Assembly), Types: make(map[string]symbolcatalog.Declaration),
+		}
+		if releaseMode {
+			if err := loadRelease(&result, releaseOptions{Version: *release, Framework: *framework, Source: *source, Packages: packages}, diagnostics); err != nil {
+				return err
+			}
+		}
+		for _, name := range files {
+			assemblyName, assembly, types, err := extractAssembly(name, selected)
 			if err != nil {
-				return fmt.Errorf("extract test declarations from %s: %w", file, err)
+				return fmt.Errorf("%s: %w", name, err)
 			}
-			if previous, exists := result.Tests.Assemblies[name]; exists && previous.SHA256 != assembly.SHA256 {
-				return fmt.Errorf("multiple different inputs for test assembly %q; select one build configuration", name)
+			if err := addAssembly(&result, assemblyName, assembly, types); err != nil {
+				return err
 			}
-			result.Tests.Assemblies[name] = assembly
 		}
+		if len(testFiles) != 0 {
+			result.Tests = &testinventory.Inventory{
+				IdentityFormat: testinventory.IdentityFormat,
+				Assemblies:     make(map[string]testinventory.Assembly),
+			}
+			for _, file := range testFiles {
+				name, assembly, err := extractTestAssembly(file)
+				if err != nil {
+					return fmt.Errorf("extract test declarations from %s: %w", file, err)
+				}
+				if previous, exists := result.Tests.Assemblies[name]; exists && previous.SHA256 != assembly.SHA256 {
+					return fmt.Errorf("multiple different inputs for test assembly %q; select one build configuration", name)
+				}
+				result.Tests.Assemblies[name] = assembly
+			}
+		}
+	}
+	if updateMapping != "" {
+		return symbolcatalog.Update(updateMapping, result)
 	}
 	// Buffer the full report so decoding/encoding errors cannot produce a
 	// successful-looking partial inventory on standard output.
@@ -171,7 +214,7 @@ func assemblyFiles(patterns []string) ([]string, error) {
 	return ordered, nil
 }
 
-func (result *inventory) addAssembly(name string, assembly assemblyInfo, types map[string]typeInfo) error {
+func addAssembly(result *symbolcatalog.Inventory, name string, assembly symbolcatalog.Assembly, types map[string]symbolcatalog.Declaration) error {
 	if previous, exists := result.Assemblies[name]; exists {
 		if previous.SHA256 == assembly.SHA256 {
 			return nil
@@ -188,7 +231,7 @@ func (result *inventory) addAssembly(name string, assembly assemblyInfo, types m
 	return nil
 }
 
-func includesNamespace(namespace string, selection selection) bool {
+func includesNamespace(namespace string, selection symbolcatalog.Selection) bool {
 	if len(selection.Namespaces) == 0 {
 		return true
 	}

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,7 +21,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/cmd/internal/testinventory"
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/symbolcatalog"
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/testinventory"
 )
 
 func TestLocalAssemblyInventory(t *testing.T) {
@@ -36,7 +38,7 @@ func TestLocalAssemblyInventory(t *testing.T) {
 	if diagnostics.Len() != 0 {
 		t.Fatalf("unexpected diagnostics: %s", diagnostics.String())
 	}
-	var got inventory
+	var got symbolcatalog.Inventory
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("decode inventory: %v", err)
 	}
@@ -56,6 +58,33 @@ func TestLocalAssemblyInventory(t *testing.T) {
 	}
 	if len(got.Types) != 1 || got.Types["Example.Child.Gadget"].Assembly != "Sample" {
 		t.Fatalf("namespace filter returned types: %+v", got.Types)
+	}
+	wantOutput := fmt.Sprintf(strings.ReplaceAll(`{
+	"schema_version": 1,
+	"identity_format": "ecma335-v1",
+	"selection": {
+		"namespaces": [
+			"Example.Child"
+		],
+		"include_protected": false
+	},
+	"assemblies": {
+		"Sample": {
+			"version": "1.2.3.4",
+			"sha256": "%x",
+			"reference_assembly": false
+		}
+	},
+	"types": {
+		"Example.Child.Gadget": {
+			"assembly": "Sample",
+			"kind": "class"
+		}
+	}
+}
+`, "\t", "  "), sha256.Sum256(data))
+	if out.String() != wantOutput {
+		t.Fatalf("schema-1 stdout changed: got %s, want %s", out.String(), wantOutput)
 	}
 
 	short := testWriter(func(p []byte) (int, error) { return len(p) / 2, nil })
@@ -90,6 +119,10 @@ func TestInvalidCommandInput(t *testing.T) {
 		{"empty test pattern", []string{"-test-assembly", "", "-release", "broken"}, "test assembly pattern must not be empty"},
 		{"blank test pattern", []string{"-test-assembly", " "}, "test assembly pattern must not be empty"},
 		{"missing test assembly", []string{"-assembly", badPE, "-test-assembly", filepath.Join(t.TempDir(), "missing.dll")}, "matched no files"},
+		{"empty update path", []string{"-assembly", badPE, "-update-mapping", ""}, "update-mapping path must not be empty"},
+		{"blank update path", []string{"-assembly", badPE, "-update-mapping", " \t "}, "update-mapping path must not be empty"},
+		{"empty input path", []string{"-input", ""}, "input path must not be empty"},
+		{"blank input path", []string{"-input", " \t "}, "input path must not be empty"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var out, diagnostics bytes.Buffer
@@ -125,7 +158,7 @@ func TestLocalAssemblyWithTestMetadata(t *testing.T) {
 	if err := run(args, &out, &diagnostics); err != nil {
 		t.Fatal(err)
 	}
-	var got inventory
+	var got symbolcatalog.Inventory
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatal(err)
 	}
@@ -169,6 +202,280 @@ func TestLocalAssemblyWithTestMetadata(t *testing.T) {
 	if err := run(args, &out, &diagnostics); err == nil || !strings.Contains(err.Error(), "multiple different inputs for test assembly") || out.Len() != 0 {
 		t.Fatalf("conflicting test build = %v, output %q", err, out.String())
 	}
+}
+
+func TestUpdateMapping(t *testing.T) {
+	assembly := writeCommandFile(t, "Sample.dll", testAssembly(t))
+	tests := writeCommandFile(t, "Tests.dll", testAssemblyWithTests(t, testAssemblyOptions{}))
+	mapping := writeCommandFile(t, "mapping.json", []byte(testLegacyMapping))
+	original, err := symbolcatalog.Decode([]byte(testLegacyMapping))
+	if err != nil {
+		t.Fatalf("invalid legacy baseline: %v", err)
+	}
+	args := []string{"-assembly", assembly, "-test-assembly", tests}
+	var out, diagnostics bytes.Buffer
+	if err := run(args, &out, &diagnostics); err != nil {
+		t.Fatal(err)
+	}
+	inv, err := symbolcatalog.DecodeInventory(out.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchanged, err := os.ReadFile(mapping)
+	if err != nil || string(unchanged) != testLegacyMapping {
+		t.Fatalf("ordinary stdout extraction changed the catalog: %v", err)
+	}
+	args = append(args, "-update-mapping", mapping)
+	out.Reset()
+	if err := run(args, &out, &diagnostics); err != nil || out.Len() != 0 {
+		t.Fatalf("update = %v, stdout %q; want a silent update", err, out.String())
+	}
+	data, err := os.ReadFile(mapping)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := symbolcatalog.Decode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(updated.Baseline, original.Baseline) || !reflect.DeepEqual(updated.GoOnly, original.GoOnly) {
+		t.Fatal("update changed the baseline or Go-only assessments")
+	}
+	entry := updated.Namespaces["Example"]["Widget"]
+	entry.Methods = maps.Clone(entry.Methods)
+	missing := entry.Methods["Run(string)"]
+	if !missing.Unavailable {
+		t.Fatal("assessed member absent from the extraction was treated as current")
+	}
+	missing.Unavailable = false
+	entry.Methods["Run(string)"] = missing
+	if !reflect.DeepEqual(entry, original.Namespaces["Example"]["Widget"]) {
+		t.Fatalf("update changed an existing assessment: %+v", entry)
+	}
+	fresh := updated.Namespaces["Example.Child"]["Gadget"]
+	if fresh.Assembly != "Sample" || fresh.Identity != "" || fresh.Kind != "" || fresh.Mapping == nil {
+		t.Fatalf("new API declaration is missing: %+v", fresh)
+	}
+	m := fresh.Mapping
+	if !m.Unreviewed || m.Status != "unmapped" || m.Go == nil || *m.Go != "" || m.GoSymbols == nil || len(m.GoSymbols) != 0 || m.Note != "" {
+		t.Fatalf("new API was assessed instead of queued: %+v", m)
+	}
+	if !reflect.DeepEqual(updated.Tests["Sample.Tests"]["Example.Tests.Cases"]["Run"], original.Tests["Sample.Tests"]["Example.Tests.Cases"]["Run"]) {
+		t.Fatal("update changed an existing test pair")
+	}
+	for owner, names := range map[string][]string{
+		"Example.Tests.Cases":            {"Theory"},
+		"Example.Tests.Outer`1+Nested`1": {"Generic", "Retry"},
+	} {
+		for _, name := range names {
+			target, present := updated.Tests["Sample.Tests"][owner][name]
+			if !present || target != nil || !bytes.Contains(data, []byte(fmt.Sprintf("%q: null", name))) {
+				t.Fatalf("new test %s.%s must be an explicit null entry", owner, name)
+			}
+		}
+	}
+	projected, err := updated.Declarations()
+	if err != nil || !reflect.DeepEqual(projected.Types, inv.Types) || !reflect.DeepEqual(projected.Assemblies, inv.Assemblies) || !reflect.DeepEqual(projected.Tests, inv.Tests) || projected.SHA256 != inv.SHA256 {
+		t.Fatalf("updated declaration identities or provenance differ from extraction: %v, got %+v, want %+v", err, projected, inv)
+	}
+	if err := run(args, &out, &diagnostics); err != nil || out.Len() != 0 {
+		t.Fatalf("repeated update = %v, stdout %q", err, out.String())
+	}
+	again, err := os.ReadFile(mapping)
+	if err != nil || !bytes.Equal(data, again) {
+		t.Fatalf("repeated update was not byte-idempotent: %v", err)
+	}
+}
+
+func TestInputInventory(t *testing.T) {
+	assembly := writeCommandFile(t, "Sample.dll", testAssembly(t))
+	tests := writeCommandFile(t, "Tests.dll", testAssemblyWithTests(t, testAssemblyOptions{}))
+	var extracted bytes.Buffer
+	if err := run([]string{"-assembly", assembly, "-test-assembly", tests}, &extracted, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, extracted.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	cached := []byte(" \n" + compact.String() + "\n")
+	input := writeCommandFile(t, "input.json", cached)
+	mapping := writeCommandFile(t, "mapping.json", []byte(testLegacyMapping))
+	// Cached input must not invoke external commands or resolve/download latest.
+	t.Setenv("PATH", t.TempDir())
+	transport := http.DefaultTransport
+	http.DefaultTransport = testTransport(func(request *http.Request) (*http.Response, error) {
+		t.Errorf("cached input attempted an HTTP request: %s", request.URL)
+		return nil, errors.New("network is unavailable")
+	})
+	t.Cleanup(func() { http.DefaultTransport = transport })
+	var out, diagnostics bytes.Buffer
+	args := []string{"-input", input}
+	if err := run(args, &out, &diagnostics); err != nil || !bytes.Equal(out.Bytes(), extracted.Bytes()) || diagnostics.Len() != 0 {
+		t.Fatalf("cached stdout = %v, output %q, diagnostics %q; want normalized local extraction", err, out.String(), diagnostics.String())
+	}
+	unchanged, err := os.ReadFile(mapping)
+	if err != nil || string(unchanged) != testLegacyMapping {
+		t.Fatalf("cached stdout mode changed the catalog: %v", err)
+	}
+	args = append(args, "-update-mapping", mapping)
+	out.Reset()
+	if err := run(args, &out, &diagnostics); err != nil || out.Len() != 0 || diagnostics.Len() != 0 {
+		t.Fatalf("cached update = %v, stdout %q, diagnostics %q", err, out.String(), diagnostics.String())
+	}
+	data, err := os.ReadFile(mapping)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := symbolcatalog.Decode(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Dotnet == nil || updated.Dotnet.SHA256 != fmt.Sprintf("%x", sha256.Sum256(cached)) {
+		t.Fatalf("cached update did not retain raw extraction provenance: %+v", updated.Dotnet)
+	}
+	if err := run(args, &out, &diagnostics); err != nil || out.Len() != 0 {
+		t.Fatalf("repeated cached update = %v, stdout %q", err, out.String())
+	}
+	again, err := os.ReadFile(mapping)
+	if err != nil || !bytes.Equal(data, again) {
+		t.Fatalf("repeated cached update was not byte-idempotent: %v", err)
+	}
+	source, err := os.ReadFile(input)
+	if err != nil || !bytes.Equal(source, cached) {
+		t.Fatalf("cached input was modified: %v", err)
+	}
+}
+
+func TestInputFlagExclusions(t *testing.T) {
+	mapping := writeCommandFile(t, "mapping.json", []byte(testLegacyMapping))
+	input := filepath.Join(t.TempDir(), "missing.json")
+	for _, test := range []struct {
+		name string
+		args []string
+	}{
+		{"assembly", []string{"-assembly", "missing.dll"}},
+		{"test-assembly", []string{"-test-assembly", "missing.dll"}},
+		{"release", []string{"-release", "latest"}},
+		{"package", []string{"-package", "Sample"}},
+		{"framework", []string{"-framework", "net8.0"}},
+		{"nuget-source", []string{"-nuget-source", defaultNuGetSource}},
+		{"namespace", []string{"-namespace", "Example"}},
+		{"include-protected", []string{"-include-protected"}},
+		{"include-protected=false", []string{"-include-protected=false"}},
+	} {
+		for _, mode := range []struct {
+			name string
+			args []string
+		}{{"stdout", nil}, {"update", []string{"-update-mapping", mapping}}} {
+			t.Run(mode.name+"/"+test.name, func(t *testing.T) {
+				args := append([]string{"-input", input}, test.args...)
+				args = append(args, mode.args...)
+				var out, diagnostics bytes.Buffer
+				err := run(args, &out, &diagnostics)
+				if err == nil || !strings.Contains(err.Error(), "-input cannot be combined with -") || out.Len() != 0 {
+					t.Fatalf("explicit extraction flag was not rejected before reading input: %v, stdout %q", err, out.String())
+				}
+				data, err := os.ReadFile(mapping)
+				if err != nil || string(data) != testLegacyMapping {
+					t.Fatalf("conflicting flags changed the catalog: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestInvalidCachedInput(t *testing.T) {
+	assembly := writeCommandFile(t, "Sample.dll", testAssembly(t))
+	tests := writeCommandFile(t, "Tests.dll", testAssemblyWithTests(t, testAssemblyOptions{}))
+	var valid bytes.Buffer
+	if err := run([]string{"-assembly", assembly, "-test-assembly", tests}, &valid, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := symbolcatalog.DecodeInventory(valid.Bytes()); err != nil {
+		t.Fatalf("invalid positive control: %v", err)
+	}
+	for _, test := range []struct {
+		name, input, want string
+	}{
+		{"empty", "", "single JSON object"},
+		{"malformed", "{", "EOF"},
+		{"duplicate key", strings.Replace(valid.String(), `"schema_version": 1`, `"schema_version": 1, "schema_version": 1`, 1), "duplicate JSON key"},
+		{"schema", strings.Replace(valid.String(), `"schema_version": 1`, `"schema_version": 2`, 1), "unsupported inventory schema_version"},
+		{"identity", strings.Replace(valid.String(), "ecma335-v1", "unsupported", 1), "unsupported inventory identity_format"},
+		{"unknown assembly", strings.Replace(valid.String(), `"assembly": "Sample"`, `"assembly": "Missing"`, 1), "unknown assembly"},
+		{"duplicate test name", strings.Replace(valid.String(), `"Theory"`, `"Run"`, 1), "duplicate test name"},
+		{"test signature", strings.Replace(valid.String(), `"Theory"`, `"Theory()"`, 1), "invalid test name"},
+		{"unknown test field", strings.Replace(valid.String(), `"identity_format": "test-name-v1"`, `"identity_format": "test-name-v1", "unknown": true`, 1), "unknown field"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := writeCommandFile(t, "input.json", []byte(test.input))
+			mapping := writeCommandFile(t, "mapping.json", []byte(testLegacyMapping))
+			for _, update := range []bool{false, true} {
+				args := []string{"-input", input}
+				if update {
+					args = append(args, "-update-mapping", mapping)
+				}
+				var out, diagnostics bytes.Buffer
+				err := run(args, &out, &diagnostics)
+				if err == nil || !strings.Contains(err.Error(), test.want) || out.Len() != 0 {
+					t.Fatalf("invalid cached input (update=%v) = %v, stdout %q; want %q", update, err, out.String(), test.want)
+				}
+				data, err := os.ReadFile(mapping)
+				if err != nil || string(data) != testLegacyMapping {
+					t.Fatalf("invalid cached input changed the catalog: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestUpdateMappingFailures(t *testing.T) {
+	assembly := writeCommandFile(t, "Sample.dll", testAssembly(t))
+	badAssembly := writeCommandFile(t, "bad.dll", []byte("not a managed assembly"))
+	badTests := writeCommandFile(t, "Tests.dll", testAssemblyWithTests(t, testAssemblyOptions{fact: "Other.FactAttribute"}))
+	for _, test := range []struct {
+		name    string
+		args    []string
+		catalog string
+		want    string
+	}{
+		{"corrupt assembly", []string{"-assembly", assembly, "-assembly", badAssembly}, testLegacyMapping, "PE:"},
+		{"invalid test extraction", []string{"-assembly", assembly, "-test-assembly", badTests}, testLegacyMapping, "unsupported test attribute"},
+		{"empty API selection", []string{"-assembly", assembly, "-namespace", "Not.Selected"}, testLegacyMapping, "assemblies and types must not be empty"},
+		{"missing cached input", []string{"-input", filepath.Join(t.TempDir(), "missing.json")}, testLegacyMapping, "missing.json"},
+		{"malformed catalog", []string{"-assembly", assembly}, "{", "EOF"},
+		{"duplicate catalog key", []string{"-assembly", assembly}, strings.Replace(testLegacyMapping, `"schema_version":0`, `"schema_version":0,"schema_version":0`, 1), "duplicate JSON key"},
+		{"invalid assessment", []string{"-assembly", assembly}, strings.Replace(testLegacyMapping, `"status":"adapted"`, `"status":"invalid"`, 1), "invalid status"},
+		{"duplicate test target", []string{"-assembly", assembly}, strings.Replace(testLegacyMapping, `"Run":"agent.TestRun"`, `"Run":"agent.TestRun","Other":"agent.TestRun"`, 1), "already mapped"},
+		{"obsolete reviews", []string{"-assembly", assembly}, strings.Replace(testLegacyMapping, `"namespaces":`, `"reviews":{},"namespaces":`, 1), `unknown field "reviews"`},
+		{"obsolete Go queue", []string{"-assembly", assembly}, strings.Replace(testLegacyMapping, `"namespaces":`, `"go_tests":{"unreviewed":[]},"namespaces":`, 1), `unknown field "go_tests"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mapping := writeCommandFile(t, "mapping.json", []byte(test.catalog))
+			args := append(slices.Clone(test.args), "-update-mapping", mapping)
+			var out, diagnostics bytes.Buffer
+			err := run(args, &out, &diagnostics)
+			if err == nil || !strings.Contains(err.Error(), test.want) || out.Len() != 0 {
+				t.Fatalf("failed update = %v, stdout %q; want %q", err, out.String(), test.want)
+			}
+			data, err := os.ReadFile(mapping)
+			if err != nil || string(data) != test.catalog {
+				t.Fatalf("failed update changed the destination: %v", err)
+			}
+		})
+	}
+	t.Run("requires existing catalog", func(t *testing.T) {
+		mapping := filepath.Join(t.TempDir(), "missing.json")
+		var out, diagnostics bytes.Buffer
+		err := run([]string{"-assembly", assembly, "-update-mapping", mapping}, &out, &diagnostics)
+		if !errors.Is(err, os.ErrNotExist) || out.Len() != 0 {
+			t.Fatalf("missing destination = %v, stdout %q", err, out.String())
+		}
+		if _, err := os.Stat(mapping); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("update created a missing destination: %v", err)
+		}
+	})
 }
 
 func TestTestAssemblySourceCommit(t *testing.T) {
@@ -329,9 +636,9 @@ func TestPackageArchive(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			archive := testArchive(t, test.entries...)
-			result := inventory{
-				Selection: selection{}, Packages: make(map[string]packageInfo),
-				Assemblies: make(map[string]assemblyInfo), Types: make(map[string]typeInfo),
+			result := symbolcatalog.Inventory{
+				Selection: symbolcatalog.Selection{}, Packages: make(map[string]symbolcatalog.Package),
+				Assemblies: make(map[string]symbolcatalog.Assembly), Types: make(map[string]symbolcatalog.Declaration),
 			}
 			err := addPackage(&result, packageRequest{ID: "sample.package", Version: "1.2.3"}, "net8.0", "https://example.test/index.json", "https://example.test/Sample.Package.nupkg", archive)
 			if test.wantErr != "" {
@@ -361,6 +668,23 @@ func TestPackageArchive(t *testing.T) {
 	if data, err := readPackageEntry(zipReader.File[0], 6); err != nil || string(data) != "abcdef" {
 		t.Fatalf("ZIP entry at limit: got %q, %v", data, err)
 	}
+}
+
+const testLegacyMapping = `{
+	"schema_version":0,
+	"baseline":{"checked_at":"2026-09-23","dotnet_repository":"https://example.org/dotnet","dotnet_commit":"1111111111111111111111111111111111111111","go_repository":"https://example.org/go","go_commit":"2222222222222222222222222222222222222222","go_module":"example.org/sdk","inventory_complete":false,"scope":"Selected declarations."},
+	"go_only":{"agent.WithSession":{"note":"Go-specific option."}},
+	"tests":{"Sample.Tests":{"Example.Tests.Cases":{"Run":"agent.TestRun"}}},
+	"namespaces":{"Example":{"Widget":{"area":"agents","assembly":"Sample","mapping":{"go":"agent.Config{}","go_symbols":["agent.Config"],"status":"adapted","note":"Existing type assessment."},"methods":{"Run(string)":{"go":"a.Run(ctx, text)","go_symbols":["agent.Agent.Run"],"status":"partial","note":"Existing method assessment."}}}}}
+}`
+
+func writeCommandFile(t *testing.T, name string, data []byte) string {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(file, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return file
 }
 
 type testWriter func([]byte) (int, error)

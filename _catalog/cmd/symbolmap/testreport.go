@@ -13,7 +13,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/microsoft/agent-framework-go/cmd/internal/testinventory"
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/symbolcatalog"
+	"github.com/microsoft/agent-framework-go/_catalog/cmd/internal/testinventory"
 )
 
 var testReconciliationStates = []string{
@@ -49,7 +50,6 @@ type testReconciliationRow struct {
 type testReconciliationSummary struct {
 	Inventory      testInventoryMetadata     `json:"inventory"`
 	Go             goTestMetadata            `json:"go"`
-	GoTests        *goTestQueueSummary       `json:"go_tests,omitempty"`
 	InventoryTests int                       `json:"inventory_tests"`
 	MappedTests    int                       `json:"mapped_tests"`
 	Counts         map[string]int            `json:"counts"`
@@ -62,25 +62,15 @@ type testReconciliationReport struct {
 	Page *pageInfo               `json:"page,omitempty"`
 }
 
-// The Go review queue is checked independently of .NET row filters and counts.
-type goTestQueueSummary struct {
-	Unreviewed     int      `json:"unreviewed"`
-	Reviewed       int      `json:"reviewed"`
-	InvalidGoTests []string `json:"invalid_go_tests,omitempty"`
-}
-
-func runTestReconciliation(out io.Writer, c catalog, options reportOptions) error {
-	inv, err := loadDeclarationInventory(options.inventoryFile)
+func runTestReconciliation(out io.Writer, c symbolcatalog.Catalog, options reportOptions) error {
+	inv, err := c.Declarations()
 	if err != nil {
 		return err
 	}
 	if inv.Tests == nil {
-		return errors.New("tests requires a test assembly inventory: the declaration inventory has no tests section")
+		return errors.New("tests requires test assembly metadata: the catalog has no tests section in dotnet metadata")
 	}
-	pairs, err := c.flattenTests()
-	if err != nil {
-		return err
-	}
+	pairs := flattenTests(c)
 	index, err := indexGoTests(options.goRoot)
 	if err != nil {
 		return err
@@ -89,23 +79,10 @@ func runTestReconciliation(out io.Writer, c catalog, options reportOptions) erro
 		return fmt.Errorf("indexed Go module %q does not match catalog go_module %q", index.Module, c.Baseline.GoModule)
 	}
 	report := reconcileTests(pairs, inv, index)
-	if c.GoTests != nil {
-		report.GoTests = &goTestQueueSummary{
-			Unreviewed: len(c.GoTests.Unreviewed), Reviewed: len(c.GoTests.Reviewed),
-		}
-		for _, names := range [][]string{c.GoTests.Unreviewed, c.GoTests.Reviewed} {
-			for _, name := range names {
-				if _, exists := slices.BinarySearch(index.Tests, name); !exists {
-					report.GoTests.InvalidGoTests = append(report.GoTests.InvalidGoTests, name)
-				}
-			}
-		}
-		slices.Sort(report.GoTests.InvalidGoTests)
-	}
 	return writeTestReconciliation(out, report, options.testFilter, options.page, options.asJSON, options.brief, options.check)
 }
 
-func reconcileTests(pairs map[testRef]string, inv declarationInventory, index goTestInventory) testReconciliationReport {
+func reconcileTests(pairs map[testRef]string, inv symbolcatalog.Inventory, index goTestInventory) testReconciliationReport {
 	result := testReconciliationReport{
 		testReconciliationSummary: testReconciliationSummary{
 			Inventory: testInventoryMetadata{
@@ -223,14 +200,11 @@ func writeTestReconciliation(out io.Writer, report testReconciliationReport, fil
 	if check && failures != 0 {
 		return fmt.Errorf("test reconciliation check failed: %d of %d unfiltered rows have dangling .NET test references or missing Go test functions", failures, total)
 	}
-	if check && report.GoTests != nil && len(report.GoTests.InvalidGoTests) != 0 {
-		return fmt.Errorf("test reconciliation check failed: %d cataloged Go test functions were not found in the module's source test index", len(report.GoTests.InvalidGoTests))
-	}
 	return nil
 }
 
 func testDeclaringPrefix(owner string) string {
-	namespace, _ := dnOwner(owner)
+	namespace, _ := symbolcatalog.Owner(owner)
 	return namespace
 }
 
@@ -248,12 +222,6 @@ func writeTestReconciliationText(out io.Writer, report testReconciliationReport,
 	fmt.Fprintln(&buffer, "Linked validates one-to-one references, not behavioral parity. Unreviewed does not imply a missing test.")
 	fmt.Fprintf(&buffer, "\nInventory tests: %d (unfiltered); selected test pairs: %d.\n", report.InventoryTests, report.MappedTests)
 	fmt.Fprintf(&buffer, "Discovered Go test functions: %d (unfiltered). Counts are not coverage percentages.\n", report.Go.TestFunctions)
-	if report.GoTests != nil {
-		fmt.Fprintf(&buffer, "Go test review queue: %d unreviewed (unfiltered), %d reviewed (unfiltered). No .NET counterparts are implied.\n", report.GoTests.Unreviewed, report.GoTests.Reviewed)
-		if len(report.GoTests.InvalidGoTests) != 0 {
-			fmt.Fprintf(&buffer, "Missing queued Go tests: %s.\n", reportCell(strings.Join(report.GoTests.InvalidGoTests, ", ")))
-		}
-	}
 	if report.Page != nil {
 		if err := writePageText(&buffer, *report.Page); err != nil {
 			return err
