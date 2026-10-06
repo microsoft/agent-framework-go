@@ -123,6 +123,12 @@ func TestPortableValueAny_DecodesDelayedPrimitive(t *testing.T) {
 	if got := delayed.Any(); got != "hello" {
 		t.Fatalf("Any() = %v (%T), want hello (string)", got, got)
 	}
+	if delayed.TypeID != pv.TypeID {
+		t.Fatalf("TypeID = %+v, want %+v", delayed.TypeID, pv.TypeID)
+	}
+	if delayed.Is(reflect.TypeFor[int]()) {
+		t.Fatal("Is(int) = true, want false")
+	}
 }
 
 func TestPortableValueAny_DecodesDelayedRuntimeType(t *testing.T) {

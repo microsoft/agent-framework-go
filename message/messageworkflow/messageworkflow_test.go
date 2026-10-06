@@ -26,8 +26,16 @@ func (e *TestExecutor) takeTurn(ctx *workflow.Context, token workflow.TurnToken,
 }
 
 func createExecutor(options *messageworkflow.Options) (*workflow.Executor, *workflow.Context) {
-	executor, ctx, _ := createExecutorWithSent(options)
-	return executor, ctx
+	executor := workflow.Executor{ID: "test-executor"}
+	messageworkflow.Configure(&executor, options)
+
+	ctx := &workflow.Context{
+		Context:     context.Background(),
+		SendMessage: func(targetID string, message any) error { return nil },
+		AddEvent:    func(event workflow.Event) error { return nil },
+	}
+
+	return &executor, ctx
 }
 
 func createExecutorWithSent(options *messageworkflow.Options) (*workflow.Executor, *workflow.Context, *[]any) {
@@ -79,62 +87,89 @@ func containsType(types []reflect.Type, want reflect.Type) bool {
 }
 
 func TestExecutor_Handles_ListOfMessages(t *testing.T) {
-	te := &TestExecutor{}
-	executor, ctx := createExecutor(&messageworkflow.Options{
-		StateKey:        "test-state",
-		TakeTurnHandler: te.takeTurn,
-	})
+	for _, test := range []struct {
+		name       string
+		emitEvents *bool
+	}{
+		{name: "default"},
+		{name: "disabled", emitEvents: new(false)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			te := &TestExecutor{}
+			executor, ctx := createExecutor(&messageworkflow.Options{
+				StateKey:        "test-state",
+				TakeTurnHandler: te.takeTurn,
+			})
 
-	messages := []*message.Message{
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Hello"}}},
-		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "World"}}},
-	}
+			messages := []*message.Message{
+				{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Hello"}}},
+				{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "World"}}},
+			}
 
-	if _, err := executor.Execute(ctx, messages); err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
-	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
-		t.Fatalf("Execute TurnToken failed: %v", err)
-	}
+			if _, err := executor.Execute(ctx, messages); err != nil {
+				t.Fatalf("Execute failed: %v", err)
+			}
+			if _, err := executor.Execute(ctx, workflow.TurnToken{EmitEvents: test.emitEvents}); err != nil {
+				t.Fatalf("Execute TurnToken failed: %v", err)
+			}
 
-	if len(te.receivedMessages) != 2 {
-		t.Errorf("Expected 2 messages, got %d", len(te.receivedMessages))
-	}
-	if te.receivedMessages[0].Contents[0].(*message.TextContent).Text != "Hello" {
-		t.Errorf("Expected first message 'Hello', got %s", te.receivedMessages[0].Contents[0].(*message.TextContent).Text)
-	}
-	if te.receivedMessages[1].Contents[0].(*message.TextContent).Text != "World" {
-		t.Errorf("Expected second message 'World', got %s", te.receivedMessages[1].Contents[0].(*message.TextContent).Text)
-	}
-	if te.turnCount != 1 {
-		t.Errorf("Expected 1 turn, got %d", te.turnCount)
+			if len(te.receivedMessages) != 2 {
+				t.Fatalf("Expected 2 messages, got %d", len(te.receivedMessages))
+			}
+			if te.receivedMessages[0].Contents[0].(*message.TextContent).Text != "Hello" {
+				t.Errorf("Expected first message 'Hello', got %s", te.receivedMessages[0].Contents[0].(*message.TextContent).Text)
+			}
+			if te.receivedMessages[1].Contents[0].(*message.TextContent).Text != "World" {
+				t.Errorf("Expected second message 'World', got %s", te.receivedMessages[1].Contents[0].(*message.TextContent).Text)
+			}
+			if got := te.receivedMessages[0].String(); got != "Hello" {
+				t.Errorf("first message text = %q, want %q", got, "Hello")
+			}
+			if got := te.receivedMessages[1].String(); got != "World" {
+				t.Errorf("second message text = %q, want %q", got, "World")
+			}
+			if te.turnCount != 1 {
+				t.Errorf("Expected 1 turn, got %d", te.turnCount)
+			}
+		})
 	}
 }
 
 func TestExecutor_Handles_SingleMessage(t *testing.T) {
-	te := &TestExecutor{}
-	executor, ctx := createExecutor(&messageworkflow.Options{
-		StateKey:        "test-state",
-		TakeTurnHandler: te.takeTurn,
-	})
+	for _, test := range []struct {
+		name       string
+		emitEvents *bool
+	}{
+		{name: "default"},
+		{name: "disabled", emitEvents: new(false)},
+		{name: "enabled", emitEvents: new(true)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			te := &TestExecutor{}
+			executor, ctx := createExecutor(&messageworkflow.Options{
+				StateKey:        "test-state",
+				TakeTurnHandler: te.takeTurn,
+			})
+			msg := &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Single message"}}}
+			token := workflow.TurnToken{EmitEvents: test.emitEvents}
 
-	msg := &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Single message"}}}
+			if _, err := executor.Execute(ctx, msg); err != nil {
+				t.Fatalf("Execute failed: %v", err)
+			}
+			if _, err := executor.Execute(ctx, token); err != nil {
+				t.Fatalf("Execute TurnToken failed: %v", err)
+			}
 
-	if _, err := executor.Execute(ctx, msg); err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
-	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
-		t.Fatalf("Execute TurnToken failed: %v", err)
-	}
-
-	if len(te.receivedMessages) != 1 {
-		t.Errorf("Expected 1 message, got %d", len(te.receivedMessages))
-	}
-	if te.receivedMessages[0].Contents[0].(*message.TextContent).Text != "Single message" {
-		t.Errorf("Expected message 'Single message', got %s", te.receivedMessages[0].Contents[0].(*message.TextContent).Text)
-	}
-	if te.turnCount != 1 {
-		t.Errorf("Expected 1 turn, got %d", te.turnCount)
+			if len(te.receivedMessages) != 1 {
+				t.Fatalf("Expected 1 message, got %d", len(te.receivedMessages))
+			}
+			if te.receivedMessages[0].Contents[0].(*message.TextContent).Text != "Single message" {
+				t.Errorf("Expected message 'Single message', got %s", te.receivedMessages[0].Contents[0].(*message.TextContent).Text)
+			}
+			if te.turnCount != 1 {
+				t.Errorf("Expected 1 turn, got %d", te.turnCount)
+			}
+		})
 	}
 }
 
@@ -155,23 +190,26 @@ func TestExecutor_AccumulatesAndClearsMessagesPerTurn(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
-	// Note: Go doesn't have a separate array type vs slice for this purpose usually, but we can test iter.Seq if we want.
-	// The C# test used array. Here we just use another slice or single message.
-	if _, err := executor.Execute(ctx, &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Message 4"}}}); err != nil {
+	if _, err := executor.Execute(ctx, []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Message 4"}}},
+	}); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
+	if te.turnCount != 0 || len(te.receivedMessages) != 0 {
+		t.Fatal("accumulated messages were processed before a turn token arrived")
+	}
 
-	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+	if _, err := executor.Execute(ctx, workflow.TurnToken{EmitEvents: new(false)}); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
 	if len(te.receivedMessages) != 4 {
-		t.Errorf("Expected 4 messages, got %d", len(te.receivedMessages))
+		t.Fatalf("Expected 4 messages, got %d", len(te.receivedMessages))
 	}
 	expectedTexts := []string{"Message 1", "Message 2", "Message 3", "Message 4"}
 	for i, txt := range expectedTexts {
-		if te.receivedMessages[i].Contents[0].(*message.TextContent).Text != txt {
-			t.Errorf("Expected message %d to be '%s'", i, txt)
+		if got := te.receivedMessages[i].Contents.Text(); got != txt {
+			t.Errorf("message %d text = %q, want %q", i, got, txt)
 		}
 	}
 	if te.turnCount != 1 {
@@ -187,15 +225,15 @@ func TestExecutor_AccumulatesAndClearsMessagesPerTurn(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
-	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+	if _, err := executor.Execute(ctx, workflow.TurnToken{EmitEvents: new(false)}); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
 	if len(te.receivedMessages) != 1 {
-		t.Errorf("Expected 1 message, got %d", len(te.receivedMessages))
+		t.Fatalf("Expected 1 message, got %d", len(te.receivedMessages))
 	}
-	if te.receivedMessages[0].Contents[0].(*message.TextContent).Text != "Second batch" {
-		t.Errorf("Expected message 'Second batch'")
+	if got := te.receivedMessages[0].Contents.Text(); got != "Second batch" {
+		t.Errorf("message text = %q, want %q", got, "Second batch")
 	}
 	if te.turnCount != 2 {
 		t.Errorf("Expected 2 turns, got %d", te.turnCount)
@@ -203,28 +241,41 @@ func TestExecutor_AccumulatesAndClearsMessagesPerTurn(t *testing.T) {
 }
 
 func TestExecutor_WithStringRole_ConvertsStringToMessage(t *testing.T) {
-	te := &TestExecutor{}
-	executor, ctx := createExecutor(&messageworkflow.Options{
-		StateKey:          "test-state",
-		TakeTurnHandler:   te.takeTurn,
-		StringMessageRole: message.RoleUser,
-	})
+	for _, test := range []struct {
+		name       string
+		emitEvents *bool
+	}{
+		{name: "default"},
+		{name: "disabled", emitEvents: new(false)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			te := &TestExecutor{}
+			executor, ctx := createExecutor(&messageworkflow.Options{
+				StateKey:          "test-state",
+				TakeTurnHandler:   te.takeTurn,
+				StringMessageRole: message.RoleUser,
+			})
 
-	if _, err := executor.Execute(ctx, "String message"); err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
-	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
-		t.Fatalf("Execute failed: %v", err)
-	}
+			if _, err := executor.Execute(ctx, "String message"); err != nil {
+				t.Fatalf("Execute failed: %v", err)
+			}
+			if _, err := executor.Execute(ctx, workflow.TurnToken{EmitEvents: test.emitEvents}); err != nil {
+				t.Fatalf("Execute failed: %v", err)
+			}
 
-	if len(te.receivedMessages) != 1 {
-		t.Errorf("Expected 1 message, got %d", len(te.receivedMessages))
-	}
-	if te.receivedMessages[0].Role != message.RoleUser {
-		t.Errorf("Expected role User, got %s", te.receivedMessages[0].Role)
-	}
-	if te.receivedMessages[0].Contents[0].(*message.TextContent).Text != "String message" {
-		t.Errorf("Expected message 'String message'")
+			if len(te.receivedMessages) != 1 {
+				t.Fatalf("Expected 1 message, got %d", len(te.receivedMessages))
+			}
+			if te.receivedMessages[0].Role != message.RoleUser {
+				t.Errorf("Expected role User, got %s", te.receivedMessages[0].Role)
+			}
+			if te.receivedMessages[0].Contents[0].(*message.TextContent).Text != "String message" {
+				t.Errorf("Expected message 'String message'")
+			}
+			if got := te.receivedMessages[0].String(); got != "String message" {
+				t.Errorf("message text = %q, want %q", got, "String message")
+			}
+		})
 	}
 }
 
@@ -309,12 +360,18 @@ func TestExecutor_EmptyCollection_HandledCorrectly(t *testing.T) {
 		TakeTurnHandler: te.takeTurn,
 	})
 
+	if _, err := executor.Execute(ctx, []*message.Message(nil)); err != nil {
+		t.Fatalf("Execute nil slice failed: %v", err)
+	}
 	if _, err := executor.Execute(ctx, []*message.Message{}); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 	emptySeq := func(yield func(*message.Message) bool) {}
 	if _, err := executor.Execute(ctx, iter.Seq[*message.Message](emptySeq)); err != nil {
 		t.Fatalf("Execute seq failed: %v", err)
+	}
+	if te.turnCount != 0 {
+		t.Fatalf("turn count before token = %d, want 0", te.turnCount)
 	}
 	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
 		t.Fatalf("Execute failed: %v", err)
@@ -329,21 +386,37 @@ func TestExecutor_EmptyCollection_HandledCorrectly(t *testing.T) {
 }
 
 func TestExecutor_RoutesCollectionTypes(t *testing.T) {
+	sourceMessages := []*message.Message{
+		{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Test message"}}},
+		{Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "Reply"}}},
+	}
 	tests := []struct {
-		name  string
-		input any
+		name       string
+		input      any
+		wantTexts  []string
+		emitEvents *bool
 	}{
 		{
-			name: "slice",
-			input: []*message.Message{
-				{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Test message"}}},
-			},
+			name:      "slice",
+			input:     sourceMessages,
+			wantTexts: []string{"Test message", "Reply"},
 		},
 		{
-			name: "sequence",
-			input: iter.Seq[*message.Message](func(yield func(*message.Message) bool) {
-				yield(&message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Test message"}}})
-			}),
+			name:      "sequence",
+			input:     slices.Values(sourceMessages),
+			wantTexts: []string{"Test message", "Reply"},
+		},
+		{
+			name:       "singleton-slice",
+			input:      sourceMessages[:1],
+			wantTexts:  []string{"Test message"},
+			emitEvents: new(false),
+		},
+		{
+			name:       "singleton-sequence",
+			input:      slices.Values(sourceMessages[:1]),
+			wantTexts:  []string{"Test message"},
+			emitEvents: new(false),
 		},
 	}
 
@@ -358,15 +431,17 @@ func TestExecutor_RoutesCollectionTypes(t *testing.T) {
 			if _, err := executor.Execute(ctx, tt.input); err != nil {
 				t.Fatalf("Execute failed: %v", err)
 			}
-			if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+			if _, err := executor.Execute(ctx, workflow.TurnToken{EmitEvents: tt.emitEvents}); err != nil {
 				t.Fatalf("Execute failed: %v", err)
 			}
 
-			if len(te.receivedMessages) != 1 {
-				t.Fatalf("Expected 1 message, got %d", len(te.receivedMessages))
+			if len(te.receivedMessages) != len(tt.wantTexts) {
+				t.Fatalf("received message count = %d, want %d", len(te.receivedMessages), len(tt.wantTexts))
 			}
-			if te.receivedMessages[0].Contents.Text() != "Test message" {
-				t.Fatalf("message text = %q, want %q", te.receivedMessages[0].Contents.Text(), "Test message")
+			for i, want := range tt.wantTexts {
+				if got := te.receivedMessages[i].Contents.Text(); got != want {
+					t.Fatalf("message %d text = %q, want %q", i, got, want)
+				}
 			}
 		})
 	}
@@ -379,7 +454,9 @@ func TestExecutor_MultipleTurns_EachTurnProcessesSeparately(t *testing.T) {
 		TakeTurnHandler: te.takeTurn,
 	})
 
-	if _, err := executor.Execute(ctx, []*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Turn 1"}}}}); err != nil {
+	first := &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Turn 1"}}}
+	second := &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Turn 2"}}}
+	if _, err := executor.Execute(ctx, []*message.Message{first}); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
@@ -387,24 +464,27 @@ func TestExecutor_MultipleTurns_EachTurnProcessesSeparately(t *testing.T) {
 	}
 
 	if len(te.receivedMessages) != 1 {
-		t.Errorf("Expected 1 message, got %d", len(te.receivedMessages))
+		t.Fatalf("Expected 1 message, got %d", len(te.receivedMessages))
 	}
 
-	if _, err := executor.Execute(ctx, &message.Message{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "Turn 2"}}}); err != nil {
+	if _, err := executor.Execute(ctx, second); err != nil {
 		t.Fatalf("Execute failed: %v", err)
+	}
+	if te.turnCount != 1 || !slices.Equal(te.receivedMessages, []*message.Message{first}) {
+		t.Fatal("second message was processed before the second turn token")
 	}
 	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
 		t.Fatalf("Execute failed: %v", err)
 	}
 
 	if len(te.receivedMessages) != 2 {
-		t.Errorf("Expected 2 messages, got %d", len(te.receivedMessages))
+		t.Fatalf("Expected 2 messages, got %d", len(te.receivedMessages))
 	}
-	if te.receivedMessages[0].Contents[0].(*message.TextContent).Text != "Turn 1" {
-		t.Errorf("Expected message 'Turn 1'")
+	if got := te.receivedMessages[0].Contents.Text(); got != "Turn 1" {
+		t.Errorf("first message text = %q, want %q", got, "Turn 1")
 	}
-	if te.receivedMessages[1].Contents[0].(*message.TextContent).Text != "Turn 2" {
-		t.Errorf("Expected message 'Turn 2'")
+	if got := te.receivedMessages[1].Contents.Text(); got != "Turn 2" {
+		t.Errorf("second message text = %q, want %q", got, "Turn 2")
 	}
 	if te.turnCount != 2 {
 		t.Errorf("Expected 2 turns, got %d", te.turnCount)

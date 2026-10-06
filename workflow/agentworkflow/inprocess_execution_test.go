@@ -76,7 +76,7 @@ func TestRunAsync_ExecutesWorkflow(t *testing.T) {
 	a := newEchoAgent("test-agent")
 	wf := buildSequentialWorkflow(t, a)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	input := []*message.Message{{
 		Role:     message.RoleUser,
 		Contents: []message.Content{&message.TextContent{Text: "Hello"}},
@@ -85,6 +85,11 @@ func TestRunAsync_ExecutesWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	defer func() {
+		if err := run.Close(ctx); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 	status, err := run.GetStatus(ctx)
 	if err != nil {
 		t.Fatalf("GetStatus: %v", err)
@@ -152,7 +157,7 @@ func TestStreamAsync_ExecutesWorkflowWithTurnToken(t *testing.T) {
 	a := newEchoAgent("test-agent")
 	wf := buildSequentialWorkflow(t, a)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	stream, err := inproc.Default.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
@@ -219,7 +224,7 @@ func TestRunAsyncAndStreamAsync_ProduceSimilarResults(t *testing.T) {
 	wf1 := buildSequentialWorkflow(t, newEchoAgent("test-agent-1"))
 	wf2 := buildSequentialWorkflow(t, newEchoAgent("test-agent-2"))
 
-	ctx := context.Background()
+	ctx := t.Context()
 	input := func() []*message.Message {
 		return []*message.Message{{
 			Role:     message.RoleUser,
@@ -231,6 +236,11 @@ func TestRunAsyncAndStreamAsync_ProduceSimilarResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	defer func() {
+		if err := run.Close(ctx); err != nil {
+			t.Errorf("Close: %v", err)
+		}
+	}()
 	nonStreamingEvents := slices.Collect(run.OutgoingEvents())
 
 	stream, err := inproc.Default.OpenStreaming(ctx, wf2)
@@ -257,6 +267,9 @@ func TestRunAsyncAndStreamAsync_ProduceSimilarResults(t *testing.T) {
 	}
 	if got, want := countOutputPayloadType[*agent.ResponseUpdate](nonStreamingEvents), countOutputPayloadType[*agent.ResponseUpdate](streamingEvents); got != want {
 		t.Errorf("agent update count: non-streaming=%d, streaming=%d", got, want)
+	}
+	if got, want := collectOutputTexts(nonStreamingEvents), collectOutputTexts(streamingEvents); !slices.Equal(got, want) {
+		t.Errorf("agent update text: non-streaming=%q, streaming=%q", got, want)
 	}
 }
 

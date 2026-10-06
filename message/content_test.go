@@ -741,6 +741,9 @@ func TestToolApprovalRequestContent_AlwaysApproveSnapshotsAdditionalProperties(t
 	t.Run("AlwaysApproveToolResponse", func(t *testing.T) {
 		request := newRequest()
 		response := request.AlwaysApproveToolResponse()
+		if !response.AlwaysApproveTool {
+			t.Fatal("expected AlwaysApproveTool to be true")
+		}
 		request.AdditionalProperties["request"] = "changed"
 		if response.AdditionalProperties["request"] != "value" {
 			t.Fatalf("expected response additional properties to be snapshotted, got %v", response.AdditionalProperties["request"])

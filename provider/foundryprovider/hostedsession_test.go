@@ -119,8 +119,14 @@ func TestWithHostedAgentSessionIDRejectsSessionConflict(t *testing.T) {
 	if err == nil {
 		t.Fatal("RunText error = nil, want conflict error")
 	}
+	if !strings.Contains(strings.ToLower(err.Error()), "hosted-agent session id") {
+		t.Fatalf("RunText error = %v, want hosted-agent session id message", err)
+	}
 	if !strings.Contains(err.Error(), "conflicts") {
 		t.Fatalf("RunText error = %v, want conflict message", err)
+	}
+	if got := foundryprovider.HostedAgentSessionID(session); got != "hosted-session-a" {
+		t.Fatalf("failed run changed hosted session ID to %q", got)
 	}
 }
 
@@ -157,5 +163,5 @@ func TestHostedAgentSessionIDRejectsUnexpectedHeaderSwitch(t *testing.T) {
 }
 
 func TestHostedAgentSessionIDHelpersRejectInvalidArguments(t *testing.T) {
-	assertPanics(t, func() { foundryprovider.SetHostedAgentSessionID(&agent.Session{}, " ") })
+	assertPanics(t, func() { foundryprovider.SetHostedAgentSessionID(&agent.Session{}, " ") }, "hosted agent session ID is required")
 }

@@ -1,6 +1,6 @@
 # .NET symbol extraction
 
-`dotnetsymbols` reads managed assembly metadata with [go-winmd](https://github.com/microsoft/go-winmd) and writes a JSON inventory to standard output. By default it downloads the latest stable MAF release; exact release pins and local assemblies are also supported. Output is deterministic for the same selected package versions and assembly bytes. It does not load or execute .NET code, restore dependencies, build projects, or modify the reviewed [symbol mapping](../../docs/dotnet-go-sdk-symbol-mapping.json).
+`dotnetsymbols` reads managed assembly metadata with [go-winmd](https://github.com/microsoft/go-winmd) and writes a JSON inventory to standard output. By default it downloads the latest stable MAF release; exact release pins and local assemblies are also supported. Optional test assemblies add test method declarations using the same metadata reader. Output is deterministic for the same selected package versions and assembly bytes. It does not load or execute .NET code, restore dependencies, build projects, execute tests, or modify the reviewed [symbol mapping](../../docs/dotnet-go-sdk-symbol-mapping.json).
 
 ## Extract a published release
 
@@ -33,7 +33,7 @@ Supplying `-assembly` selects local mode instead of the default release lookup a
 
 ## Extract local assemblies
 
-1. Check out the .NET revision being inventoried and use its required SDK. The mapping's current upstream baseline requires .NET SDK **10.0.303**; building it with an older SDK is not supported.
+1. Check out the .NET revision being inventoried and use the SDK required by that checkout. The core 1.22.0 source revision (`0c9944cc9f577d51277ac7c55dbc388b60a577af`) requires .NET SDK **10.0.401**; building it with an older SDK is not supported.
 2. Build the relevant library projects in one configuration and target framework, rather than the full solution's tests and samples. Reference assemblies are preferred, but implementation assemblies work too. Keep all build output outside version control.
 3. Pass explicit assembly files or narrowly scoped globs to the command. Include dependency assemblies such as `Microsoft.Extensions.AI.Abstractions` only when their public declarations belong in the inventory. Referencing a dependency does not cause it to be inventoried automatically.
 
@@ -51,6 +51,38 @@ Repeat `-namespace` to include multiple namespace trees. Without it, all namespa
 
 Patterns use Go's `filepath.Glob` syntax, not recursive `**`. Unmatched patterns fail. Repeated identical assembly bytes are deduplicated; different inputs with the same assembly name fail, so accidentally mixing target frameworks or reference/implementation copies cannot silently merge API surfaces. Conflicting type definitions also fail. Output is buffered until every selected assembly has been processed successfully.
 
+## Optional test declarations
+
+Repeat `-test-assembly <file or glob>` to add a separate `tests` section alongside the API inventory. Both release and local API-assembly modes support it. Omitting the flag preserves API-only output. API namespace and visibility filters do not filter test declarations.
+
+Test assemblies are not included in the core NuGet packages. Obtain the implementation assemblies from a matching build artifact or build the selected upstream test projects separately at a pinned revision. Building is sufficient: **do not run the tests for inventory generation**. Select the projects needed for the intended scope, including integration/conformance test assemblies when relevant. The extractor does not check out or build source, invoke Git, or require a .NET SDK.
+
+| Selection | Command |
+| --- | --- |
+| Core release APIs plus a test assembly | `go run ./cmd/dotnetsymbols -release 1.22.0 -framework net8.0 -test-assembly 'C:/temp/agent-tests/Microsoft.Agents.AI.UnitTests.dll'` |
+| Local API and selected test assemblies, without network access | `go run ./cmd/dotnetsymbols -assembly 'C:/temp/agent-api/Microsoft.Agents.AI.Abstractions.dll' -test-assembly 'C:/temp/agent-tests/*.dll'` |
+
+Paths are illustrative. Use a directory containing only the chosen test assemblies, not every dependency DLL from a build output. Unmatched patterns, reference assemblies, assemblies with no supported test declarations, conflicting builds with the same assembly name, and duplicate test identities fail without a partial report. Repeated identical assembly bytes are deduplicated. Capture stdout and replace the saved [inventory snapshot](../../docs/dotnet-sdk-symbol-inventory.json) only after successful completion; shell redirection directly to that snapshot can truncate it on failure.
+
+### Test metadata and scope
+
+- `tests.identity_format` is `test-name-v1`: assembly, CLR declaring type, and test method name. The existing metadata reader identifies tests without parsing C# or rendering their signatures.
+- `tests.assemblies` is keyed by the manifest assembly name. Each entry records its source `commit`, target framework, SHA-256, and `types`. The commit is extracted from a full 40- or 64-digit hexadecimal suffix after `+` in the assembly informational version and normalized to lowercase; it is omitted when unavailable. Assembly version strings are not retained for tests. Test build provenance is separate from API package provenance and is never inferred from the current checkout or API release.
+- `types` maps each namespace-qualified CLR declaring type to a sorted array of test names. Nested types retain `+` and type arities retain their metadata suffixes. Method signatures, parameters, return types, generic method arities, and attributes are omitted. Duplicate test names within a type, including overloads, fail rather than silently merging declarations.
+- Supported discovery markers are `Xunit.FactAttribute`, `Xunit.TheoryAttribute`, `xRetry.v3.RetryFactAttribute`, and `xRetry.v3.RetryTheoryAttribute`; they are not stored in the inventory. Unknown attribute names ending in `Fact` or `Theory` fail explicitly. Other frameworks, custom discoverers, and arbitrary derived test attributes are not automatically discovered.
+- Each entry is **one attributed compiled method declaration**, not an executed test case. Skipped methods and declarations on abstract/base types remain present; inherited copies are not manufactured. Nonpublic declaring types are included. Attribute arguments, skip conditions, theory data providers, assembly code, and tests are never executed.
+- The scope is the supplied builds, not every source configuration. Compilation resolves aliases, partial declarations, generated code, project includes, and conditional compilation. Excluded branches are absent. Use separate inventories for alternate builds of the same assembly; do not describe one target framework's inventory as all configurations or count theory methods as individual data rows.
+
+See [test mapping and reconciliation](../../docs/dotnet-go-sdk-feature-comparison.md#map-test-declarations) for recording reviewed Go counterparts.
+
+### Current snapshot
+
+The saved inventory retains the three core MAF 1.22.0 API packages at `net8.0` from the public .NET package mirror. Its test section contains **6,750 method declarations from 45 assemblies**, built from `0c9944cc9f577d51277ac7c55dbc388b60a577af` using SDK **10.0.401**, `Release`, and `net10.0`. This is one compiled target configuration, not runtime theory cases or every target framework.
+
+All 48 test-bearing projects under the pinned test tree were built without running tests. `CopilotStudio.IntegrationTests`, `OpenAIChatCompletion.IntegrationTests`, and `OpenAIResponse.IntegrationTests` contain only inherited test methods; those declarations appear once in `AgentConformance.IntegrationTests`. The separate Foundry integration-test container host has no test declarations and was excluded.
+
+Builds used `--artifacts-path` outside the checkout, `ContinuousIntegrationBuild=true`, and `SourceRevisionId` set to the verified checkout commit. `GITHUB_ACTIONS=true` prevents the upstream automatic formatting target, and `CopilotSkipCliDownload=true` omits the optional Copilot executable without changing compiled test source. The official NuGet v2 feed (`https://www.nuget.org/api/v2/`) supplied build dependencies unavailable from the public mirror; no source or dependency versions were changed. Assembly hashes record the actual build bytes. One-to-one test pairs are maintained separately in the [mapping catalog](../../docs/dotnet-go-sdk-symbol-mapping.json); extraction does not establish test correspondence or refresh existing API mapping baselines.
+
 ## Generated data
 
 The inventory is a separate schema with `schema_version: 1` and `identity_format: ecma335-v1`:
@@ -59,6 +91,7 @@ The inventory is a separate schema with `schema_version: 1` and `identity_format
 - `packages`: present in release mode, keyed by package ID. Records exact version, source feed, download URL, package SHA-256, selected framework/asset group, and included assembly names. Repository URL and commit are retained when provided by the package manifest; a missing commit is not inferred from the version.
 - `assemblies`: assembly version, informational version, target framework, SHA-256 of the input, reference-assembly marker, and unresolved type forwarders. Informational versions can carry a source revision even when the package manifest does not. For local builds, retain the source checkout revision separately; the extractor does not infer it from the current working directory.
 - `types`: namespace-qualified CLR type names, declaring assembly, type kind, base type, generic parameter names/positions/constraints, and declared constructors, methods, properties, events, fields, and constants.
+- `tests`: optional arrays of test names grouped by declaring type, with independent assembly build metadata and `test-name-v1` identities. Test methods do not enter API declaration counts.
 
 The inventory retains only declaration identities, matching metadata, review markers, and input provenance. Parameter names/defaults, constant values, raw attribute-name lists, nullable contexts, interface lists, and unused API flags/accessor details are omitted. Empty attribute objects and empty parameter lists are omitted as well. This is not a complete API contract; inspect pinned source for defaults, mutability, lifecycle, and behavioral reviews.
 
@@ -66,9 +99,9 @@ There are no per-symbol paths or line numbers. Inherited members are not repeate
 
 Ordinary accessor methods are not duplicated in the method list; operators and associated helper methods remain methods. Public compiler-generated record members remain present, with a compact `compiler_generated` marker. Enum constant names/types are included but their runtime `value__` storage field is excluded.
 
-### Stable metadata signatures
+### Stable API metadata signatures
 
-The generated keys deliberately use metadata spelling, not the manual catalog's C# source spelling:
+API declaration keys deliberately use metadata spelling, not the manual catalog's C# source spelling:
 
 | API | Example identity |
 | --- | --- |
@@ -98,4 +131,4 @@ Regenerating or trimming a snapshot changes its file hash. Existing mapping revi
 
 ## Requirements
 
-The extractor itself requires only Go. Release mode also requires HTTPS access to the selected NuGet feed; local mode requires already-built assemblies. Neither mode invokes a .NET SDK. Build upstream projects separately only when unpublished source must be inspected. No .NET source files, fixture projects, tests, or assembly binaries are included with this command. A generated [core inventory snapshot](../../docs/dotnet-sdk-symbol-inventory.json) is stored separately as JSON documentation.
+The extractor itself requires only Go. Release mode also requires HTTPS access to the selected NuGet feed; local mode and optional test extraction require already-built assemblies. Neither mode invokes a .NET SDK. Build upstream projects separately when unpublished assembly metadata or test declarations must be inspected. No .NET source files, fixture projects, or assembly binaries are included with this command; Go unit tests construct small managed PE metadata fixtures in memory. A generated [core inventory snapshot](../../docs/dotnet-sdk-symbol-inventory.json) is stored separately as JSON documentation.

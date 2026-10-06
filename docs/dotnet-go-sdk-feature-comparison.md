@@ -6,7 +6,7 @@ The comparison is maintained in [dotnet-go-sdk-symbol-mapping.json](dotnet-go-sd
 
 ## Structure
 
-The catalog uses schema 0, with a required `schema_version` field. It contains one original `baseline`, optional named `reviews`, optional `go_only` assessments, and `namespaces`. Each namespace contains short declaring-type keys. For example, namespace `Microsoft.Agents.AI` contains `AgentResponse`, whose `properties.Text` maps to `agent.Response.String`.
+The catalog uses schema 0, with a required `schema_version` field. It contains one original `baseline`, optional named API `reviews`, optional `go_only` assessments and `tests` pairs, an optional `go_tests` review queue, and `namespaces`. Each namespace contains short declaring-type keys. For example, namespace `Microsoft.Agents.AI` contains `AgentResponse`, whose `properties.Text` maps to `agent.Response.String`.
 
 | Level | Fields | Meaning |
 | --- | --- | --- |
@@ -19,6 +19,8 @@ The catalog uses schema 0, with a required `schema_version` field. It contains o
 | Mapping leaf | `go_symbols`, `status`, `note`, optional `go` and `review` | `go_symbols` records counterparts for validation and search. Types, methods, constructors, fields, constants, and events also carry a minimal `go` example when mapped. Property leaves never carry examples. `review` selects a named review batch; nothing is inherited from the containing type. |
 | Review batch | Date, .NET/Go commits, inventory hash, scope | Records a newly inspected subset without advancing the baseline of old assessments. |
 | Go-only assessment | Canonical Go symbol key → `note`, `review` | Records a source-reviewed Go-specific API with no meaningful .NET counterpart in the reviewed scope. Both fields are required; the review must name an existing batch. |
+| Test pair | Assembly → fully qualified declaring type → test name → Go test name | One-to-one correspondence stored as a single-line string mapping, without notes, statuses, or reviews. A Go test can appear in only one pair. |
+| Go test review lists | `go_tests.unreviewed` and optional `go_tests.reviewed`: arrays of directory-qualified Go test names | Distinguishes pending reviews from completed source reviews without a recorded pair, without inventing .NET counterparts, assessment notes, or review baselines. |
 
 Go symbols combine the module-relative package and exported symbol: `agent.Agent`, `agent.Response.String`, or `workflow/inproc.ExecutionEnvironment.Run`. The module prefix is recorded once in `baseline.go_module`. One .NET declaration can reference several Go symbols. `go_symbols` is always an array; it is empty only for `unmapped` or `intentional` declarations.
 
@@ -80,7 +82,7 @@ The `go-only` view returns the baseline, reviews, and a paged `go_only` object. 
 
 ## Extract the .NET Declaration Inventory
 
-The generated [dotnet-sdk-symbol-inventory.json](dotnet-sdk-symbol-inventory.json) snapshot contains the public declarations from the three core MAF packages. Its package and assembly metadata records the exact release, target framework, source feed, and hashes. It does not include every provider integration or external dependency.
+The generated [dotnet-sdk-symbol-inventory.json](dotnet-sdk-symbol-inventory.json) snapshot contains the public declarations from the three core MAF packages and a separate test section with 6,750 method declarations from 45 upstream test assemblies. API package metadata retain version provenance; test assemblies record source commits, target frameworks, and hashes. Public APIs from every provider integration or external dependency are not included.
 
 The separate [dotnetsymbols command](../cmd/dotnetsymbols/README.md) extracts an inventory from compiled .NET assemblies using `go-winmd`. By default, `go run ./cmd/dotnetsymbols` resolves the latest stable MAF release and downloads its prebuilt core NuGet packages, without Git or a .NET SDK. Pin a version with `-release 1.22.0` for reproducible reruns. Select additional packages with `-package` and an exact target framework with `-framework`. Package versions, hashes, source metadata, and assembly identities are recorded; the release is not assumed to match this catalog's commit baseline.
 
@@ -126,6 +128,34 @@ Indexing requires the local Go toolchain and cached dependencies. It disables mo
 When Go-only assessments exist, reconciliation also includes an unfiltered `go_only` summary with `assessed_symbols`, `present_symbols`, and any `invalid_go_targets` or `unindexed_go_targets`. `-check` fails on invalid Go-only targets even if .NET filters hide all rows. Explicitly unindexed packages remain unknown, not invalid. Presence validates the Go declaration, not the assessment that no .NET counterpart exists.
 
 Existing reviews retain their baselines and the hashes of the snapshots originally inspected, even when a snapshot is reformatted or trimmed. A linked declaration can still have `review_source_changed` or `review_go_changed`; these compare commits, not behavior. A dirty Go checkout also prevents treating HEAD alone as an exact snapshot. Matching identities does not certify old assessments against a newer release.
+
+## Map Test Declarations
+
+The optional `tests` section in the existing catalog records strict one-to-one test pairs. It is separate from API `namespaces` and does not change API mapping counts or statuses. An absent or empty section means no test pairs are recorded; it does not mean Go has no equivalent tests.
+
+The top-level `go_tests.unreviewed` array records Go tests awaiting source review. The optional `go_tests.reviewed` array records completed source reviews that did not produce a one-to-one pair. Names are grouped under these markers instead of repeating a status object per test. Neither list classifies tests as Go-only, implies a .NET counterpart, or certifies passing tests. Keep both lists sorted and unique, add newly discovered tests to `unreviewed`, and move a name to `reviewed` when its source review is complete without a pair. If a pair is recorded under `tests`, remove its Go name from either list. Reviewed, unreviewed, and paired Go identities must be disjoint. A later review can still identify a counterpart for a reviewed test.
+
+Generate a declaration inventory with `dotnetsymbols -test-assembly` as described in the [extractor guide](../cmd/dotnetsymbols/README.md#optional-test-declarations). The saved snapshot includes test assemblies built for `net10.0` at the core 1.22.0 source revision; its existing API package selection remains `net8.0`. A test report rejects a missing `tests` inventory rather than reporting zero tests. Test assemblies must be supplied from the intended pinned build, since core NuGet packages do not contain them.
+
+The test inventory stores a sorted array of method names per CLR declaring type, without signatures or attributes. Catalog test keys follow **assembly → fully qualified CLR declaring type → test name**, matching the inventory without a separate namespace level. Each value is one module-relative Go test name, for example `"RunAsync": "agent.TestRun"`, on a single line. Root-package tests use `..TestName`. There are no per-test objects, arrays, notes, statuses, or review records. Copy the .NET name without parentheses or a return type; declaring types retain their nested-type `+` and generic arity suffixes. Global types use their unqualified name.
+
+Test mappings perform an exact identity join. Each .NET test has at most one Go target, and each Go target can be paired only once across all assemblies and types. Duplicate names within one type are rejected during extraction rather than treated as one test. Record only complete counterparts supported by comparing source assertions and case data. Partial overlap or coverage split across functions must remain unpaired rather than forcing an arbitrary pair. Record completed Go source reviews under `go_tests.reviewed`; omit .NET entries without a pair, as the inventory supplies the .NET review queue. Subtests and table rows are not separate identities.
+
+| Question | Command |
+| --- | --- |
+| Discover Go test functions without compiling or running them | `go run ./cmd/symbolmap go-tests -symbol agent.Test -limit 5` |
+| Summarize test pairs and pending declarations | `go run ./cmd/symbolmap tests -summary` |
+| Find unreviewed declarations in a test assembly | `go run ./cmd/symbolmap tests -assembly Microsoft.Agents.AI.UnitTests -state unreviewed -limit 5` |
+| Find the .NET declaration paired with a Go test | `go run ./cmd/symbolmap tests -symbol agent.TestRun` |
+| Check every recorded test reference | `go run ./cmd/symbolmap tests -summary -check` |
+
+`tests` accepts `-file`, `-inventory`, and `-go-root`. Filters for `-assembly`, `-namespace`, `-type`, and `-symbol` are case-insensitive substrings; `-state` selects an exact value. There is no test `-status` flag. JSON/text output, summaries, and pagination follow the API command conventions. Rows contain a single `go_test` when paired; `mapped_tests` counts all selected pairs before pagination. The states are `linked`, `unreviewed`, `needs-reconciliation`, and `invalid-go-target`. A linked row validates references, not behavioral parity or passing tests. `-check` validates the entire unfiltered report, including missing Go targets on dangling .NET rows. An unreviewed declaration does not fail this check or imply a missing Go test.
+
+When Go review lists are present, test reports include a separate `go_tests` summary with `unreviewed` and `reviewed` counts and any `invalid_go_tests` names from either list that no longer exist in the source index. These counts are unfiltered and do not enter .NET row or pair counts. `tests -check` also fails on missing reviewed or unreviewed Go tests, even when .NET filters hide all rows. Names are not expanded into summary or page metadata; the catalog retains the lists. `go-tests` remains a standalone discovery command, independent of the catalog.
+
+The Go test index statically parses all test-source build variants in the module, including internal and example packages. Its `tests` output is a sorted array of unique directory-qualified names, without signatures. It excludes nested modules, vendor/testdata directories, dot/underscore-prefixed names, and symlinks. It finds top-level `Test` entrypoints using `*testing.T`, including renamed/dot imports, but does not resolve type aliases, compile packages, enumerate subtests, run tests, or load dependencies. Internal/external test packages and alternate builds share their directory-qualified identity. Presence therefore means at least one declaration, not buildability, uniqueness within a build, or execution coverage.
+
+Reports retain the test assemblies' source commits, target frameworks, and hashes independently of the API inputs, together with the current Go source metadata. They do not include or inherit API review records or calculate review-change flags. The .NET side describes compiled declarations in the supplied builds, while the Go side describes source entrypoints across build variants. Counts are not comparable runtime-case totals or a coverage percentage. Compare the relevant .NET and Go assertions before adding a pair.
 
 ## Compare Go API Changes
 

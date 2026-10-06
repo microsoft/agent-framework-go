@@ -2,16 +2,19 @@
 
 package main
 
+import "github.com/microsoft/agent-framework-go/cmd/internal/testinventory"
+
 // The generated inventory deliberately contains no Go mapping decisions.
 // It retains declaration identities and metadata needed for reconciliation,
 // not a complete description of API behavior or C# source text.
 type inventory struct {
-	SchemaVersion  int                     `json:"schema_version"`
-	IdentityFormat string                  `json:"identity_format"`
-	Selection      selection               `json:"selection"`
-	Packages       map[string]packageInfo  `json:"packages,omitempty"`
-	Assemblies     map[string]assemblyInfo `json:"assemblies"`
-	Types          map[string]typeInfo     `json:"types"`
+	SchemaVersion  int                      `json:"schema_version"`
+	IdentityFormat string                   `json:"identity_format"`
+	Selection      selection                `json:"selection"`
+	Packages       map[string]packageInfo   `json:"packages,omitempty"`
+	Assemblies     map[string]assemblyInfo  `json:"assemblies"`
+	Types          map[string]typeInfo      `json:"types"`
+	Tests          *testinventory.Inventory `json:"tests,omitempty"`
 }
 
 type packageInfo struct {

@@ -201,6 +201,7 @@ func createA2AMessage(session *agent.Session, msg *message.Message, parts a2a.Co
 // which can happen when the task has already reached a terminal state.
 func (a *a2aProvider) subscribeToTaskWithFallback(ctx context.Context, taskID a2a.TaskID) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
+		fallback := false
 		for event, err := range a.client.SubscribeToTask(ctx, &a2a.SubscribeToTaskRequest{ID: taskID}) {
 			if err == nil {
 				if !yield(event, nil) {
@@ -214,15 +215,19 @@ func (a *a2aProvider) subscribeToTaskWithFallback(ctx context.Context, taskID a2
 				return
 			}
 
-			task, getTaskErr := a.client.GetTask(ctx, &a2a.GetTaskRequest{ID: taskID})
-			if getTaskErr != nil {
-				yield(nil, getTaskErr)
-				return
-			}
-
-			yield(task, nil)
+			// Release the subscription and its connection before polling the task.
+			fallback = true
+			break
+		}
+		if !fallback {
 			return
 		}
+		task, err := a.client.GetTask(ctx, &a2a.GetTaskRequest{ID: taskID})
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		yield(task, nil)
 	}
 }
 

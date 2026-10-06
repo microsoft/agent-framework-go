@@ -638,11 +638,16 @@ func TestOutputFilter_RejectsUnregisteredExecutor(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 
-	outs := runWorkflowAndCollect(t, wf, "hello")
-	for _, o := range outs {
-		if o.ExecutorID == "start" {
-			t.Errorf("output from unregistered executor 'start' was not filtered: %+v", o)
-		}
+	events := runAndCollectEvents(t, wf, "hello")
+	if hasErrorEvents(events) {
+		t.Fatalf("unexpected error events: %#v", events)
+	}
+	outs := outputEvents(events)
+	if len(outs) != 1 {
+		t.Fatalf("outputs = %#v, want only the registered executor's output", outs)
+	}
+	if outs[0].ExecutorID != "end" || outs[0].Output != "out:end:hello" {
+		t.Fatalf("output = %#v, want out:end:hello from end", outs[0])
 	}
 }
 

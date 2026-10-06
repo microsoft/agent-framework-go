@@ -212,12 +212,12 @@ func TestTypeIDZeroAndUnknownDoNotMatch(t *testing.T) {
 		t.Fatal("zero TypeID should not polymorphically match concrete types")
 	}
 
-	unknown := workflow.TypeID{PackageName: "example.invalid/missing", TypeName: "Missing"}
+	unknown := workflow.TypeID{PackageName: "example.invalid/missing", TypeName: "typeIDPayload"}
 	if unknown.Match(reflect.TypeFor[typeIDPayload]()) {
-		t.Fatal("unknown TypeID should not match unrelated concrete type")
+		t.Fatal("TypeID with wrong package ownership should not match typeIDPayload")
 	}
 	if unknown.MatchPolymorphic(reflect.TypeFor[typeIDPayload]()) {
-		t.Fatal("unknown TypeID should not polymorphically match unrelated concrete type")
+		t.Fatal("TypeID with wrong package ownership should not polymorphically match typeIDPayload")
 	}
 	if unknown.MatchPolymorphic(nil) {
 		t.Fatal("unknown TypeID should not polymorphically match nil")
@@ -247,17 +247,22 @@ func TestTypeIDString(t *testing.T) {
 }
 
 func TestTypeIDJSONRoundtrip(t *testing.T) {
-	cases := []workflow.TypeID{
-		{},
-		workflow.NewTypeID(reflect.TypeFor[string]()),
-		workflow.NewTypeID(reflect.TypeFor[*workflow.Executor]()),
-		workflow.NewTypeID(reflect.TypeFor[workflow.RequestPort]()),
-		workflow.NewTypeID(reflect.TypeFor[map[string]int]()),
-		workflow.NewTypeID(reflect.TypeFor[func(int) (string, error)]()),
-		workflow.NewTypeID(reflect.TypeFor[typeIDPointerOnlyMarker]()),
+	cases := []reflect.Type{
+		nil,
+		reflect.TypeFor[string](),
+		reflect.TypeFor[*workflow.Executor](),
+		reflect.TypeFor[workflow.RequestPort](),
+		reflect.TypeFor[map[string]int](),
+		reflect.TypeFor[func(int) (string, error)](),
+		reflect.TypeFor[typeIDPointerOnlyMarker](),
+		reflect.TypeFor[reflect.Type](),
 	}
 
-	for _, id := range cases {
+	for _, typ := range cases {
+		var id workflow.TypeID
+		if typ != nil {
+			id = workflow.NewTypeID(typ)
+		}
 		t.Run(id.String(), func(t *testing.T) {
 			data, err := json.Marshal(id)
 			if err != nil {
@@ -269,6 +274,9 @@ func TestTypeIDJSONRoundtrip(t *testing.T) {
 			}
 			if got != id {
 				t.Fatalf("roundtrip = %+v, want %+v", got, id)
+			}
+			if typ != nil && !got.Match(typ) {
+				t.Fatalf("decoded TypeID %+v should match its source type %v", got, typ)
 			}
 		})
 	}

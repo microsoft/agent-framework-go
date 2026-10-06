@@ -217,15 +217,25 @@ func TestDiscovery_NameMustMatchDirectory_ExcludedOnMismatch(t *testing.T) {
 }
 
 func TestDiscovery_NameExceedsMaxLength_Excluded(t *testing.T) {
-	root := t.TempDir()
 	longName := strings.Repeat("a", 65)
-	createSkillDirRaw(t, root, "long-name",
-		"---\nname: "+longName+"\ndescription: A skill\n---\nBody.")
+	for _, tt := range []struct {
+		name    string
+		dirName string
+	}{
+		{name: "mismatched directory", dirName: "long-name"},
+		{name: "matching directory", dirName: longName},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			root := t.TempDir()
+			createSkillDirRaw(t, root, tt.dirName,
+				"---\nname: "+longName+"\ndescription: A skill\n---\nBody.")
 
-	p := newProvider(t, root)
-	instructions, tools := captureProviderContext(t, p)
-	if instructions != "" || len(tools) != 0 {
-		t.Fatal("expected skill with long name to be excluded")
+			p := newProvider(t, root)
+			instructions, tools := captureProviderContext(t, p)
+			if instructions != "" || len(tools) != 0 {
+				t.Fatal("expected skill with long name to be excluded")
+			}
+		})
 	}
 }
 
@@ -320,6 +330,12 @@ func TestProvider_CustomPromptTemplate(t *testing.T) {
 	if !strings.HasPrefix(instructions, "Custom template:") {
 		t.Errorf("expected custom template prefix, got %q", instructions)
 	}
+	if !strings.Contains(instructions, "custom-prompt-skill") {
+		t.Errorf("expected skill name in custom template instructions, got %q", instructions)
+	}
+	if !strings.Contains(instructions, "Custom prompt") {
+		t.Errorf("expected skill description in custom template instructions, got %q", instructions)
+	}
 }
 
 func TestProvider_DefaultPrompt_UsesDotNetResourceGuidance(t *testing.T) {
@@ -357,10 +373,11 @@ func TestProvider_MultiplePaths(t *testing.T) {
 	createSkillDir(t, filepath.Join(root, "dir2"), "skill-b", "Skill B", "Body B.")
 
 	p := newProvider(t, filepath.Join(root, "dir1"), filepath.Join(root, "dir2"))
-	if !hasSkill(t, p, "skill-a") {
+	instructions, _ := captureProviderContext(t, p)
+	if !strings.Contains(instructions, "skill-a") {
 		t.Error("expected skill-a")
 	}
-	if !hasSkill(t, p, "skill-b") {
+	if !strings.Contains(instructions, "skill-b") {
 		t.Error("expected skill-b")
 	}
 }
@@ -377,6 +394,9 @@ func TestProvider_SkillsListIsSortedByName(t *testing.T) {
 	alphaIdx := strings.Index(instructions, "alpha-skill")
 	mikeIdx := strings.Index(instructions, "mike-skill")
 	zuluIdx := strings.Index(instructions, "zulu-skill")
+	if alphaIdx < 0 {
+		t.Fatal("expected alpha-skill in instructions before checking name order")
+	}
 	if alphaIdx >= mikeIdx {
 		t.Error("alpha-skill should appear before mike-skill")
 	}
@@ -419,8 +439,8 @@ func TestLoadSkill_NotFound(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected string result, got %T", result)
 	}
-	if !strings.HasPrefix(resultStr, "Error:") {
-		t.Fatalf("expected error text result, got %q", resultStr)
+	if resultStr != "Error: Skill 'nonexistent' not found." {
+		t.Fatalf("expected %q, got %q", "Error: Skill 'nonexistent' not found.", resultStr)
 	}
 }
 
@@ -442,6 +462,18 @@ func TestLoadSkill_RequiresExactName(t *testing.T) {
 	}
 	if resultStr != "Error: Skill 'Exact-Skill' not found." {
 		t.Fatalf("expected exact-name error, got %q", resultStr)
+	}
+
+	result, err = loadTool.Call(t.Context(), `{"skillName":"nonexistent-skill"}`)
+	if err != nil {
+		t.Fatalf("expected no tool error, got %v", err)
+	}
+	resultStr, ok = result.(string)
+	if !ok {
+		t.Fatalf("expected string result, got %T", result)
+	}
+	if resultStr != "Error: Skill 'nonexistent-skill' not found." {
+		t.Fatalf("expected unknown-name error, got %q", resultStr)
 	}
 }
 
@@ -835,8 +867,8 @@ func TestConfig_InvalidSearchDepth_Panics(t *testing.T) {
 	for _, depth := range tests {
 		t.Run(fmt.Sprintf("depth_%d", depth), func(t *testing.T) {
 			defer func() {
-				if recover() == nil {
-					t.Fatal("expected panic for invalid search depth")
+				if got, want := recover(), fmt.Sprintf("fsskills: SearchDepth must be at least 1, got %d", depth); got != want {
+					t.Fatalf("panic = %v, want %q", got, want)
 				}
 			}()
 			_ = newProviderWithConfig(t, &fsskills.SourceOptions{
@@ -867,12 +899,14 @@ func TestConfig_InvalidExtension_Panics(t *testing.T) {
 	}{
 		{"empty", ""},
 		{"spaces", "   "},
+		{"missing dot", "txt"},
+		{"one space", " "},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			defer func() {
-				if r := recover(); r == nil {
-					t.Fatal("expected panic for empty/whitespace extension")
+				if got, want := recover(), fmt.Sprintf("invalid extension %q: must start with '.'", tt.ext); got != want {
+					t.Fatalf("panic = %v, want %q", got, want)
 				}
 			}()
 			newProviderWithConfig(t, &fsskills.SourceOptions{

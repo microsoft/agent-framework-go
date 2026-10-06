@@ -72,10 +72,9 @@ func TestPipelineStrategy_ComposesStrategiesEndToEnd(t *testing.T) {
 		}
 		return true
 	}
-	pipeline := &compaction.PipelineStrategy{Strategies: []compaction.Strategy{
-		&testStrategy{fn: excludeOldestTwo},
-		&testStrategy{fn: excludeOldestTwo},
-	}}
+	first := &testStrategy{fn: excludeOldestTwo}
+	second := &testStrategy{fn: excludeOldestTwo}
+	pipeline := &compaction.PipelineStrategy{Strategies: []compaction.Strategy{first, second}}
 	index := compaction.CreateMessageIndex([]*message.Message{
 		textMessage(message.RoleSystem, "system"),
 		textMessage(message.RoleUser, "q1"),
@@ -92,7 +91,13 @@ func TestPipelineStrategy_ComposesStrategiesEndToEnd(t *testing.T) {
 	if !compacted {
 		t.Fatal("expected compaction")
 	}
+	if got := index.IncludedGroupCount(); got != 2 {
+		t.Fatalf("expected 2 included groups, got %d", got)
+	}
 	if got, want := messageTexts(index.IncludedMessages()), []string{"system", "q3"}; !slices.Equal(got, want) {
 		t.Fatalf("unexpected included messages: got %v want %v", got, want)
+	}
+	if first.calls != 1 || second.calls != 1 {
+		t.Fatalf("expected both strategies to be called once, got first=%d second=%d", first.calls, second.calls)
 	}
 }

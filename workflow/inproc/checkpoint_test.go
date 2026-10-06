@@ -19,42 +19,56 @@ import (
 func TestCheckpoint_ResumeWithPendingRequests_RepublishesRequestInfoEvents(t *testing.T) {
 	for _, env := range checkpointTestEnvironments() {
 		t.Run(env.name, func(t *testing.T) {
-			ctx := context.Background()
-			wf, _ := createCheckpointRequestWorkflow(t)
-			manager := checkpoint.NewInMemoryManager()
+			for _, streaming := range []bool{false, true} {
+				t.Run(fmt.Sprintf("streaming=%v", streaming), func(t *testing.T) {
+					ctx := t.Context()
+					wf, _ := createCheckpointRequestWorkflow(t)
+					manager := checkpoint.NewInMemoryManager()
+					firstEvents, checkpointInfo := runCheckpointRequestToHalt(t, ctx, env.env, manager, wf, streaming)
+					originalRequests := requestsFromEvents(firstEvents)
+					if len(originalRequests) == 0 {
+						t.Fatal("expected at least one original RequestInfoEvent")
+					}
 
-			first, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
-			if err != nil {
-				t.Fatalf("Run: %v", err)
-			}
-
-			originalRequests := collectRequests(first.OutgoingEvents())
-			if len(originalRequests) == 0 {
-				t.Fatal("expected at least one original RequestInfoEvent")
-			}
-			checkpointInfo, ok := first.LastCheckpoint()
-			if !ok {
-				t.Fatal("expected checkpoint")
-			}
-			if err := first.Close(ctx); err != nil {
-				t.Fatalf("Close first run: %v", err)
-			}
-
-			resumed, err := env.env.WithCheckpointing(manager).Resume(ctx, wf, checkpointInfo)
-			if err != nil {
-				t.Fatalf("Resume: %v", err)
-			}
-
-			replayedRequests := collectRequests(resumed.NewEvents())
-			if len(replayedRequests) != len(originalRequests) {
-				t.Fatalf("replayed request count = %d, want %d", len(replayedRequests), len(originalRequests))
-			}
-			originalIDs := requestIDs(originalRequests)
-			replayedIDs := requestIDs(replayedRequests)
-			slices.Sort(originalIDs)
-			slices.Sort(replayedIDs)
-			if !slices.Equal(replayedIDs, originalIDs) {
-				t.Fatalf("replayed request IDs = %v, want %v", replayedIDs, originalIDs)
+					var resumedEvents []workflow.Event
+					if streaming {
+						resumed, err := env.env.WithCheckpointing(manager).ResumeStreaming(ctx, wf, checkpointInfo)
+						if err != nil {
+							t.Fatalf("ResumeStreaming: %v", err)
+						}
+						defer func() {
+							if err := resumed.Close(ctx); err != nil {
+								t.Errorf("Close resumed stream: %v", err)
+							}
+						}()
+						resumedEvents = readStreamToHalt(t, ctx, resumed)
+					} else {
+						resumed, err := env.env.WithCheckpointing(manager).Resume(ctx, wf, checkpointInfo)
+						if err != nil {
+							t.Fatalf("Resume: %v", err)
+						}
+						defer func() {
+							if err := resumed.Close(ctx); err != nil {
+								t.Errorf("Close resumed run: %v", err)
+							}
+						}()
+						resumedEvents = collectEvents(resumed.NewEvents())
+					}
+					if hasErrorEvents(resumedEvents) {
+						t.Fatalf("unexpected resumed error events: %#v", resumedEvents)
+					}
+					replayedRequests := requestsFromEvents(resumedEvents)
+					if len(replayedRequests) != len(originalRequests) {
+						t.Fatalf("replayed request count = %d, want %d", len(replayedRequests), len(originalRequests))
+					}
+					originalIDs := requestIDs(originalRequests)
+					replayedIDs := requestIDs(replayedRequests)
+					slices.Sort(originalIDs)
+					slices.Sort(replayedIDs)
+					if !slices.Equal(replayedIDs, originalIDs) {
+						t.Fatalf("replayed request IDs = %v, want %v", replayedIDs, originalIDs)
+					}
+				})
 			}
 		})
 	}
@@ -63,32 +77,46 @@ func TestCheckpoint_ResumeWithPendingRequests_RepublishesRequestInfoEvents(t *te
 func TestCheckpoint_ResumeWithPendingRequests_RunStatusIsPendingRequests(t *testing.T) {
 	for _, env := range checkpointTestEnvironments() {
 		t.Run(env.name, func(t *testing.T) {
-			ctx := context.Background()
-			wf, _ := createCheckpointRequestWorkflow(t)
-			manager := checkpoint.NewInMemoryManager()
+			for _, streaming := range []bool{false, true} {
+				t.Run(fmt.Sprintf("streaming=%v", streaming), func(t *testing.T) {
+					ctx := t.Context()
+					wf, _ := createCheckpointRequestWorkflow(t)
+					manager := checkpoint.NewInMemoryManager()
+					_, checkpointInfo := runCheckpointRequestToHalt(t, ctx, env.env, manager, wf, streaming)
 
-			first, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
-			if err != nil {
-				t.Fatalf("Run: %v", err)
-			}
-			checkpointInfo, ok := first.LastCheckpoint()
-			if !ok {
-				t.Fatal("expected checkpoint")
-			}
-			if err := first.Close(ctx); err != nil {
-				t.Fatalf("Close first run: %v", err)
-			}
-
-			resumed, err := env.env.WithCheckpointing(manager).Resume(ctx, wf, checkpointInfo)
-			if err != nil {
-				t.Fatalf("Resume: %v", err)
-			}
-			status, err := resumed.GetStatus(ctx)
-			if err != nil {
-				t.Fatalf("GetStatus: %v", err)
-			}
-			if status != inproc.RunStatusPendingRequests {
-				t.Fatalf("status = %v, want PendingRequests", status)
+					var status inproc.RunStatus
+					var err error
+					if streaming {
+						resumed, resumeErr := env.env.WithCheckpointing(manager).ResumeStreaming(ctx, wf, checkpointInfo)
+						if resumeErr != nil {
+							t.Fatalf("ResumeStreaming: %v", resumeErr)
+						}
+						defer func() {
+							if err := resumed.Close(ctx); err != nil {
+								t.Errorf("Close resumed stream: %v", err)
+							}
+						}()
+						readStreamToHalt(t, ctx, resumed)
+						status, err = resumed.GetStatus(ctx)
+					} else {
+						resumed, resumeErr := env.env.WithCheckpointing(manager).Resume(ctx, wf, checkpointInfo)
+						if resumeErr != nil {
+							t.Fatalf("Resume: %v", resumeErr)
+						}
+						defer func() {
+							if err := resumed.Close(ctx); err != nil {
+								t.Errorf("Close resumed run: %v", err)
+							}
+						}()
+						status, err = resumed.GetStatus(ctx)
+					}
+					if err != nil {
+						t.Fatalf("GetStatus: %v", err)
+					}
+					if status != inproc.RunStatusPendingRequests {
+						t.Fatalf("status = %v, want PendingRequests", status)
+					}
+				})
 			}
 		})
 	}
@@ -97,38 +125,55 @@ func TestCheckpoint_ResumeWithPendingRequests_RunStatusIsPendingRequests(t *test
 func TestCheckpoint_ResumeWithRepublishDisabled_DoesNotEmitRequestInfoEvents(t *testing.T) {
 	for _, env := range checkpointTestEnvironments() {
 		t.Run(env.name, func(t *testing.T) {
-			ctx := context.Background()
-			wf, _ := createCheckpointRequestWorkflow(t)
-			manager := checkpoint.NewInMemoryManager()
+			for _, streaming := range []bool{false, true} {
+				t.Run(fmt.Sprintf("streaming=%v", streaming), func(t *testing.T) {
+					ctx := t.Context()
+					wf, _ := createCheckpointRequestWorkflow(t)
+					manager := checkpoint.NewInMemoryManager()
+					firstEvents, checkpointInfo := runCheckpointRequestToHalt(t, ctx, env.env, manager, wf, streaming)
+					firstRequest(t, slices.Values(firstEvents))
 
-			first, err := env.env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
-			if err != nil {
-				t.Fatalf("Run: %v", err)
-			}
-			if len(collectRequests(first.OutgoingEvents())) == 0 {
-				t.Fatal("expected original RequestInfoEvent")
-			}
-			checkpointInfo, ok := first.LastCheckpoint()
-			if !ok {
-				t.Fatal("expected checkpoint")
-			}
-			if err := first.Close(ctx); err != nil {
-				t.Fatalf("Close first run: %v", err)
-			}
-
-			resumed, err := env.env.WithCheckpointing(manager).Resume(ctx, wf, checkpointInfo, inproc.WithPendingRequestRepublish(false))
-			if err != nil {
-				t.Fatalf("Resume: %v", err)
-			}
-			if len(collectRequests(resumed.NewEvents())) != 0 {
-				t.Fatal("did not expect RequestInfoEvent when pending request republish is disabled")
-			}
-			status, err := resumed.GetStatus(ctx)
-			if err != nil {
-				t.Fatalf("GetStatus: %v", err)
-			}
-			if status != inproc.RunStatusPendingRequests {
-				t.Fatalf("status = %v, want PendingRequests", status)
+					var events []workflow.Event
+					var status inproc.RunStatus
+					var err error
+					if streaming {
+						resumed, resumeErr := env.env.WithCheckpointing(manager).ResumeStreaming(ctx, wf, checkpointInfo, inproc.WithPendingRequestRepublish(false))
+						if resumeErr != nil {
+							t.Fatalf("ResumeStreaming: %v", resumeErr)
+						}
+						defer func() {
+							if err := resumed.Close(ctx); err != nil {
+								t.Errorf("Close resumed stream: %v", err)
+							}
+						}()
+						events = readStreamToHalt(t, ctx, resumed)
+						status, err = resumed.GetStatus(ctx)
+					} else {
+						resumed, resumeErr := env.env.WithCheckpointing(manager).Resume(ctx, wf, checkpointInfo, inproc.WithPendingRequestRepublish(false))
+						if resumeErr != nil {
+							t.Fatalf("Resume: %v", resumeErr)
+						}
+						defer func() {
+							if err := resumed.Close(ctx); err != nil {
+								t.Errorf("Close resumed run: %v", err)
+							}
+						}()
+						events = collectEvents(resumed.NewEvents())
+						status, err = resumed.GetStatus(ctx)
+					}
+					if hasErrorEvents(events) {
+						t.Fatalf("unexpected resumed error events: %#v", events)
+					}
+					if len(requestsFromEvents(events)) != 0 {
+						t.Fatal("did not expect RequestInfoEvent when pending request republish is disabled")
+					}
+					if err != nil {
+						t.Fatalf("GetStatus: %v", err)
+					}
+					if status != inproc.RunStatusPendingRequests {
+						t.Fatalf("status = %v, want PendingRequests", status)
+					}
+				})
 			}
 		})
 	}
@@ -321,7 +366,13 @@ func TestCheckpoint_RestoreClearsQueuedExternalResponsesBeforeImport(t *testing.
 	if err != nil {
 		t.Fatalf("RunStreaming: %v", err)
 	}
+	defer func() {
+		if err := stream.Close(ctx); err != nil {
+			t.Errorf("Close stream: %v", err)
+		}
+	}()
 	pendingRequest, checkpointInfo := capturePendingRequestAndCheckpointFromStream(t, ctx, stream)
+	wantRequestID := pendingRequest.RequestID
 
 	response, err := pendingRequest.CreateResponse("World")
 	if err != nil {
@@ -339,11 +390,14 @@ func TestCheckpoint_RestoreClearsQueuedExternalResponsesBeforeImport(t *testing.
 	if len(replayedRequests) != 1 {
 		t.Fatalf("replayed request count = %d, want 1", len(replayedRequests))
 	}
-	if replayedRequests[0].RequestID != pendingRequest.RequestID {
-		t.Fatalf("replayed request ID = %q, want %q", replayedRequests[0].RequestID, pendingRequest.RequestID)
+	if replayedRequests[0].RequestID != wantRequestID {
+		t.Fatalf("replayed request ID = %q, want %q", replayedRequests[0].RequestID, wantRequestID)
 	}
 	if hasErrorEvents(restoredEvents) {
 		t.Fatalf("unexpected error events after restore: %#v", restoredEvents)
+	}
+	if outputs := outputEvents(restoredEvents); len(outputs) != 0 {
+		t.Fatalf("outputs from stale response = %#v, want none", outputs)
 	}
 	if got := received.Load(); got != 0 {
 		t.Fatalf("queued stale response was processed %d times, want 0", got)
@@ -366,6 +420,13 @@ func TestCheckpoint_RestoreClearsQueuedExternalResponsesBeforeImport(t *testing.
 	completionEvents := readStreamToHalt(t, ctx, stream)
 	if hasErrorEvents(completionEvents) {
 		t.Fatalf("unexpected error events after fresh response: %#v", completionEvents)
+	}
+	if requests := requestsFromEvents(completionEvents); len(requests) != 0 {
+		t.Fatalf("requests after fresh response = %#v, want none", requests)
+	}
+	outputs := outputEvents(completionEvents)
+	if len(outputs) != 1 || outputs[0].Output != "Again" {
+		t.Fatalf("outputs after fresh response = %#v, want only Again", outputs)
 	}
 	if got := received.Load(); got != 1 {
 		t.Fatalf("fresh response receive count = %d, want 1", got)
@@ -424,6 +485,7 @@ func TestCheckpoint_ResumePreservesFanInBarrierBufferedMessages_MultiSource(t *t
 				manager,
 				wf,
 			)
+			wantRequestID := pendingRequest.RequestID
 
 			replayedRequest := resumeAndAssertFanInBarrierRelease(
 				t,
@@ -434,8 +496,8 @@ func TestCheckpoint_ResumePreservesFanInBarrierBufferedMessages_MultiSource(t *t
 				checkpointInfo,
 				[]string{"before-1", "before-2", "after"},
 			)
-			if replayedRequest.RequestID != pendingRequest.RequestID {
-				t.Fatalf("replayed request ID = %q, want %q", replayedRequest.RequestID, pendingRequest.RequestID)
+			if replayedRequest.RequestID != wantRequestID {
+				t.Fatalf("replayed request ID = %q, want %q", replayedRequest.RequestID, wantRequestID)
 			}
 		})
 	}
@@ -638,6 +700,11 @@ func TestCheckpoint_AfterResumeUsesResumedCheckpointAsParent(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Resume: %v", err)
 			}
+			defer func() {
+				if err := resumed.Close(ctx); err != nil {
+					t.Errorf("Close resumed run: %v", err)
+				}
+			}()
 			response, err := pendingRequest.CreateResponse("World")
 			if err != nil {
 				t.Fatalf("CreateResponse: %v", err)
@@ -645,8 +712,12 @@ func TestCheckpoint_AfterResumeUsesResumedCheckpointAsParent(t *testing.T) {
 			if _, err := resumed.Resume(ctx, response); err != nil {
 				t.Fatalf("Resume with response: %v", err)
 			}
+			events := collectEvents(resumed.NewEvents())
+			if hasErrorEvents(events) {
+				t.Fatalf("unexpected resumed error events: %#v", events)
+			}
 			var firstResumedCheckpoint workflow.CheckpointInfo
-			for evt := range resumed.NewEvents() {
+			for _, evt := range events {
 				stepEvt, ok := evt.(workflow.SuperStepCompletedEvent)
 				if !ok || stepEvt.CompletionInfo == nil || stepEvt.CompletionInfo.CheckpointInfo == nil {
 					continue
@@ -659,6 +730,9 @@ func TestCheckpoint_AfterResumeUsesResumedCheckpointAsParent(t *testing.T) {
 			}
 			if firstResumedCheckpoint == (workflow.CheckpointInfo{}) {
 				t.Fatal("expected checkpoint after resume")
+			}
+			if slices.Contains(first.Checkpoints(), firstResumedCheckpoint) {
+				t.Fatalf("resumed checkpoint = %+v, want a new checkpoint", firstResumedCheckpoint)
 			}
 
 			children, err := store.RetrieveIndex(ctx, resumePoint.SessionID, &resumePoint)
@@ -675,38 +749,55 @@ func TestCheckpoint_AfterResumeUsesResumedCheckpointAsParent(t *testing.T) {
 func TestCheckpoint_ExecutorCheckpointHooks(t *testing.T) {
 	for _, useCheckpointing := range []bool{true, false} {
 		t.Run(map[bool]string{true: "checkpointing", false: "no_checkpointing"}[useCheckpointing], func(t *testing.T) {
-			ctx := context.Background()
-			fixture := newCheckpointHookFixture()
-			env := inproc.OffThread
-			manager := checkpoint.NewInMemoryManager()
-			var run *inproc.Run
-			var err error
-			if useCheckpointing {
-				run, err = env.WithCheckpointing(manager).Run(ctx, fixture.workflow, "Message")
-				if err != nil {
-					t.Fatalf("Run: %v", err)
-				}
-				if len(run.Checkpoints()) != checkpointHookStepsPerInputBatch {
-					t.Fatalf("checkpoint count = %d, want %d", len(run.Checkpoints()), checkpointHookStepsPerInputBatch)
-				}
-			} else {
-				run, err = env.Run(ctx, fixture.workflow, "Message")
-				if err != nil {
-					t.Fatalf("Run: %v", err)
-				}
-			}
-			events := collectEvents(run.OutgoingEvents())
-			if hasErrorEvents(events) {
-				t.Fatalf("unexpected error events: %#v", events)
-			}
+			for _, input := range []struct {
+				name  string
+				value any
+			}{
+				{name: "scalar", value: "Message"},
+				{name: "batch", value: []string{"Message"}},
+			} {
+				t.Run(input.name, func(t *testing.T) {
+					ctx := t.Context()
+					fixture := newCheckpointHookFixture()
+					env := inproc.OffThread
+					if useCheckpointing {
+						env = env.WithCheckpointing(checkpoint.NewInMemoryManager())
+					}
+					run, err := env.Run(ctx, fixture.workflow, input.value)
+					if err != nil {
+						t.Fatalf("Run: %v", err)
+					}
+					defer func() {
+						if err := run.Close(ctx); err != nil {
+							t.Errorf("Close run: %v", err)
+						}
+					}()
+					events := collectEvents(run.OutgoingEvents())
+					if hasErrorEvents(events) {
+						t.Fatalf("unexpected error events: %#v", events)
+					}
+					completed := 0
+					for _, evt := range events {
+						if _, ok := evt.(workflow.SuperStepCompletedEvent); ok {
+							completed++
+						}
+					}
+					if completed != checkpointHookStepsPerInputBatch {
+						t.Fatalf("completed superstep count = %d, want %d", completed, checkpointHookStepsPerInputBatch)
+					}
 
-			expected := int64(0)
-			if useCheckpointing {
-				expected = checkpointHookStepsPerInputBatch
+					expected := int64(0)
+					if useCheckpointing {
+						expected = checkpointHookStepsPerInputBatch
+					}
+					if got := len(run.Checkpoints()); got != int(expected) {
+						t.Fatalf("checkpoint count = %d, want %d", got, expected)
+					}
+					assertHookCounts(t, fixture.starting, expected, 0)
+					assertHookCounts(t, fixture.receives, expected, 0)
+					assertHookCounts(t, fixture.uninvoked, 0, 0)
+				})
 			}
-			assertHookCounts(t, fixture.starting, expected, 0)
-			assertHookCounts(t, fixture.receives, expected, 0)
-			assertHookCounts(t, fixture.uninvoked, 0, 0)
 		})
 	}
 }
@@ -714,43 +805,70 @@ func TestCheckpoint_ExecutorCheckpointHooks(t *testing.T) {
 func TestCheckpoint_ExecutorRestoreHooks(t *testing.T) {
 	for _, restoreCheckpoint := range []bool{true, false} {
 		t.Run(map[bool]string{true: "restore", false: "no_restore"}[restoreCheckpoint], func(t *testing.T) {
-			ctx := context.Background()
-			manager := checkpoint.NewInMemoryManager()
-			runFixture := newCheckpointHookFixture()
-			run, err := inproc.OffThread.WithCheckpointing(manager).Run(ctx, runFixture.workflow, "Message")
-			if err != nil {
-				t.Fatalf("Run: %v", err)
-			}
-			if len(run.Checkpoints()) != checkpointHookStepsPerInputBatch {
-				t.Fatalf("checkpoint count = %d, want %d", len(run.Checkpoints()), checkpointHookStepsPerInputBatch)
-			}
+			for _, input := range []struct {
+				name  string
+				value any
+			}{
+				{name: "scalar", value: "Message"},
+				{name: "batch", value: []string{"Message"}},
+			} {
+				t.Run(input.name, func(t *testing.T) {
+					ctx := t.Context()
+					manager := checkpoint.NewInMemoryManager()
+					runFixture := newCheckpointHookFixture()
+					run, err := inproc.OffThread.WithCheckpointing(manager).Run(ctx, runFixture.workflow, input.value)
+					if err != nil {
+						t.Fatalf("Run: %v", err)
+					}
+					defer func() {
+						if err := run.Close(ctx); err != nil {
+							t.Errorf("Close original run: %v", err)
+						}
+					}()
+					events := collectEvents(run.OutgoingEvents())
+					if hasErrorEvents(events) {
+						t.Fatalf("unexpected original error events: %#v", events)
+					}
+					if len(run.Checkpoints()) != checkpointHookStepsPerInputBatch {
+						t.Fatalf("checkpoint count = %d, want %d", len(run.Checkpoints()), checkpointHookStepsPerInputBatch)
+					}
+					assertHookCounts(t, runFixture.starting, checkpointHookStepsPerInputBatch, 0)
+					assertHookCounts(t, runFixture.receives, checkpointHookStepsPerInputBatch, 0)
+					assertHookCounts(t, runFixture.uninvoked, 0, 0)
 
-			validateFixture := runFixture
-			expectedCheckpoints := int64(checkpointHookStepsPerInputBatch)
-			if restoreCheckpoint {
-				firstCheckpoint := run.Checkpoints()[0]
-				if err := run.Close(ctx); err != nil {
-					t.Fatalf("Close run: %v", err)
-				}
-				validateFixture = newCheckpointHookFixture()
-				resumed, err := inproc.OffThread.WithCheckpointing(manager).Resume(ctx, validateFixture.workflow, firstCheckpoint)
-				if err != nil {
-					t.Fatalf("Resume: %v", err)
-				}
-				events := collectEvents(resumed.OutgoingEvents())
-				if hasErrorEvents(events) {
-					t.Fatalf("unexpected resumed error events: %#v", events)
-				}
-				expectedCheckpoints--
-			}
+					validateFixture := runFixture
+					expectedCheckpoints := int64(checkpointHookStepsPerInputBatch)
+					if restoreCheckpoint {
+						firstCheckpoint := run.Checkpoints()[0]
+						if err := run.Close(ctx); err != nil {
+							t.Fatalf("Close run: %v", err)
+						}
+						validateFixture = newCheckpointHookFixture()
+						resumed, err := inproc.OffThread.WithCheckpointing(manager).Resume(ctx, validateFixture.workflow, firstCheckpoint)
+						if err != nil {
+							t.Fatalf("Resume: %v", err)
+						}
+						defer func() {
+							if err := resumed.Close(ctx); err != nil {
+								t.Errorf("Close resumed run: %v", err)
+							}
+						}()
+						events := collectEvents(resumed.OutgoingEvents())
+						if hasErrorEvents(events) {
+							t.Fatalf("unexpected resumed error events: %#v", events)
+						}
+						expectedCheckpoints--
+					}
 
-			expectedRestoreCalls := int64(0)
-			if restoreCheckpoint {
-				expectedRestoreCalls = 1
+					expectedRestoreCalls := int64(0)
+					if restoreCheckpoint {
+						expectedRestoreCalls = 1
+					}
+					assertHookCounts(t, validateFixture.starting, expectedCheckpoints, expectedRestoreCalls)
+					assertHookCounts(t, validateFixture.receives, expectedCheckpoints, expectedRestoreCalls)
+					assertHookCounts(t, validateFixture.uninvoked, 0, 0)
+				})
 			}
-			assertHookCounts(t, validateFixture.starting, expectedCheckpoints, expectedRestoreCalls)
-			assertHookCounts(t, validateFixture.receives, expectedCheckpoints, expectedRestoreCalls)
-			assertHookCounts(t, validateFixture.uninvoked, 0, 0)
 		})
 	}
 }
@@ -979,16 +1097,6 @@ func firstRequest(t *testing.T, events func(func(workflow.Event) bool)) *workflo
 	return nil
 }
 
-func collectRequests(events func(func(workflow.Event) bool)) []*workflow.ExternalRequest {
-	var requests []*workflow.ExternalRequest
-	for evt := range events {
-		if reqEvt, ok := evt.(workflow.RequestInfoEvent); ok {
-			requests = append(requests, reqEvt.Request)
-		}
-	}
-	return requests
-}
-
 func requestsFromEvents(events []workflow.Event) []*workflow.ExternalRequest {
 	var requests []*workflow.ExternalRequest
 	for _, evt := range events {
@@ -1039,6 +1147,61 @@ func readStreamToHalt(t *testing.T, ctx context.Context, run *inproc.StreamingRu
 	return events
 }
 
+func checkpointFromEvents(t *testing.T, events []workflow.Event) workflow.CheckpointInfo {
+	t.Helper()
+	var info workflow.CheckpointInfo
+	for _, evt := range events {
+		if step, ok := evt.(workflow.SuperStepCompletedEvent); ok && step.CompletionInfo != nil && step.CompletionInfo.CheckpointInfo != nil {
+			info = *step.CompletionInfo.CheckpointInfo
+		}
+	}
+	if info == (workflow.CheckpointInfo{}) {
+		t.Fatal("expected a checkpoint-bearing SuperStepCompletedEvent")
+	}
+	return info
+}
+
+// runCheckpointRequestToHalt releases workflow ownership before returning so
+// either resume entrypoint can use the same workflow.
+func runCheckpointRequestToHalt(t *testing.T, ctx context.Context, env *inproc.ExecutionEnvironment, manager checkpoint.Manager, wf *workflow.Workflow, streaming bool) ([]workflow.Event, workflow.CheckpointInfo) {
+	t.Helper()
+	var events []workflow.Event
+	var info workflow.CheckpointInfo
+	if streaming {
+		first, err := env.WithCheckpointing(manager).RunStreaming(ctx, wf, "Hello")
+		if err != nil {
+			t.Fatalf("RunStreaming: %v", err)
+		}
+		defer func() {
+			if err := first.Close(ctx); err != nil {
+				t.Errorf("Close first stream: %v", err)
+			}
+		}()
+		events = readStreamToHalt(t, ctx, first)
+		info = checkpointFromEvents(t, events)
+	} else {
+		first, err := env.WithCheckpointing(manager).Run(ctx, wf, "Hello")
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		defer func() {
+			if err := first.Close(ctx); err != nil {
+				t.Errorf("Close first run: %v", err)
+			}
+		}()
+		events = collectEvents(first.OutgoingEvents())
+		var ok bool
+		info, ok = first.LastCheckpoint()
+		if !ok {
+			t.Fatal("expected checkpoint")
+		}
+	}
+	if hasErrorEvents(events) {
+		t.Fatalf("unexpected first-run errors: %#v", events)
+	}
+	return events, info
+}
+
 func capturePendingRequestAndCheckpointFromStream(t *testing.T, ctx context.Context, run *inproc.StreamingRun) (*workflow.ExternalRequest, workflow.CheckpointInfo) {
 	t.Helper()
 	var pendingRequest *workflow.ExternalRequest
@@ -1068,6 +1231,18 @@ func capturePendingRequestAndCheckpointFromRun(t *testing.T, ctx context.Context
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	defer func() {
+		if err := run.Close(ctx); err != nil {
+			t.Errorf("Close first barrier run: %v", err)
+		}
+	}()
+	events := collectEvents(run.OutgoingEvents())
+	if hasErrorEvents(events) {
+		t.Fatalf("unexpected pre-checkpoint error events: %#v", events)
+	}
+	if outputs := outputEvents(events); len(outputs) != 0 {
+		t.Fatalf("barrier released before checkpoint: %#v", outputs)
+	}
 	pendingRequest := firstRequest(t, run.OutgoingEvents())
 	checkpointInfo, ok := run.LastCheckpoint()
 	if !ok {
@@ -1091,7 +1266,14 @@ func resumeAndAssertFanInBarrierRelease(t *testing.T, ctx context.Context, env *
 		}
 	}()
 
-	replayedRequests := collectRequests(resumed.NewEvents())
+	resumedEvents := collectEvents(resumed.NewEvents())
+	if hasErrorEvents(resumedEvents) {
+		t.Fatalf("unexpected resumed error events: %#v", resumedEvents)
+	}
+	if outputs := outputEvents(resumedEvents); len(outputs) != 0 {
+		t.Fatalf("barrier released before response: %#v", outputs)
+	}
+	replayedRequests := requestsFromEvents(resumedEvents)
 	if len(replayedRequests) != 1 {
 		t.Fatalf("replayed request count = %d, want 1", len(replayedRequests))
 	}
@@ -1187,13 +1369,24 @@ func (e *checkpointHookExecutor) Bind() workflow.ExecutorBinding {
 					return nil
 				},
 				ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-					rb.SendsMessageType(reflect.TypeFor[string]())
-					rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-						if e.forwardMessages {
-							return nil, ctx.SendMessage("", msg)
-						}
-						return nil, nil
-					})
+					rb.SendsMessageType(reflect.TypeFor[string](), reflect.TypeFor[[]string]())
+					rb.RouteBuilder.
+						AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+							if e.forwardMessages {
+								return nil, ctx.SendMessage("", msg)
+							}
+							return nil, nil
+						}).
+						AddHandlerRaw(reflect.TypeFor[[]string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+							if e.forwardMessages {
+								for _, item := range msg.([]string) {
+									if err := ctx.SendMessage("", []string{item}); err != nil {
+										return nil, err
+									}
+								}
+							}
+							return nil, nil
+						})
 					return rb, nil
 				},
 			}, nil

@@ -404,6 +404,9 @@ func addApprovalRuleFromResponse(st *state, resp *message.AlwaysApproveToolAppro
 	if resp == nil || bound == nil {
 		return false
 	}
+	if !bound.Approved {
+		return true
+	}
 	if resp.AlwaysApproveToolWithArguments {
 		if fc, ok := resp.InnerResponse.ToolCall.(*message.FunctionCallContent); ok && fc != nil {
 			if _, err := serializeArguments(fc.Arguments); err != nil {

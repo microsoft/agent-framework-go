@@ -16,6 +16,9 @@ import (
 
 func TestNewAgentUsesProjectResponsesEndpointAndConfig(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %q, want %q", r.Method, http.MethodPost)
+		}
 		if r.URL.Path != "/projects/proj/openai/v1/responses" {
 			t.Fatalf("path = %q", r.URL.Path)
 		}
@@ -215,8 +218,9 @@ func TestNewAgentEscapesServerAgentNameInEndpoint(t *testing.T) {
 
 func TestNewAgentPanicsWithInvalidArguments(t *testing.T) {
 	tests := []struct {
-		name string
-		act  func()
+		name        string
+		act         func()
+		wantMessage string
 	}{
 		{
 			name: "empty endpoint",
@@ -229,6 +233,7 @@ func TestNewAgentPanicsWithInvalidArguments(t *testing.T) {
 			act: func() {
 				_ = foundryprovider.NewAgent(validEndpoint, nil, foundryprovider.ServerAgent("my-agent"), foundryprovider.AgentConfig{})
 			},
+			wantMessage: "credential is required",
 		},
 		{
 			name: "empty model deployment",
@@ -246,7 +251,7 @@ func TestNewAgentPanicsWithInvalidArguments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertPanics(t, tt.act)
+			assertPanics(t, tt.act, tt.wantMessage)
 		})
 	}
 }

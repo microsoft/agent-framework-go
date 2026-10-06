@@ -6802,12 +6802,21 @@ func TestDisableStoreOutputDoesNotUseOrUpdateResponseID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(
+	result, err := a.RunText(
 		t.Context(), "hello",
 		agent.WithSession(session),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("response is nil")
+	}
+	if result.ID != "resp_67890" {
+		t.Errorf("response ID = %q, want resp_67890", result.ID)
+	}
+	if got := result.String(); got != "Hello!" {
+		t.Errorf("response text = %q, want Hello!", got)
 	}
 
 	if got := session.ServiceID(); got != "" {
@@ -6935,13 +6944,22 @@ func TestResponsesNewParamsStoreFalseDoesNotUpdateResponseID(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = a.RunText(
+	result, err := a.RunText(
 		t.Context(), "hello",
 		agent.WithSession(session),
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(false)}),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("response is nil")
+	}
+	if result.ID != "resp_67890" {
+		t.Errorf("response ID = %q, want resp_67890", result.ID)
+	}
+	if got := result.String(); got != "Hello!" {
+		t.Errorf("response text = %q, want Hello!", got)
 	}
 
 	if got := session.ServiceID(); got != "" {
@@ -6990,7 +7008,7 @@ func TestResponsesNewParamsStoreFalseDoesNotDuplicateReasoningInclude(t *testing
 		},
 	)
 
-	_, err := a.RunText(
+	result, err := a.RunText(
 		t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{
 			Store:   openai.Bool(false),
@@ -6999,6 +7017,15 @@ func TestResponsesNewParamsStoreFalseDoesNotDuplicateReasoningInclude(t *testing
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
+	}
+	if result == nil {
+		t.Fatal("response is nil")
+	}
+	if result.ID != "resp_67890" {
+		t.Errorf("response ID = %q, want resp_67890", result.ID)
+	}
+	if got := result.String(); got != "Hello!" {
+		t.Errorf("response text = %q, want Hello!", got)
 	}
 }
 
@@ -7042,12 +7069,18 @@ func TestResponsesIncludeReasoningEncryptedContentFalseSkipsAutomaticInclude(t *
 		},
 	)
 
-	_, err := a.RunText(t.Context(), "hello",
+	result, err := a.RunText(t.Context(), "hello",
 		openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(false)}),
 		openaiprovider.ResponsesIncludeReasoningEncryptedContent(false),
 	).Collect()
 	if err != nil {
 		t.Fatalf("error = %v", err)
+	}
+	if result.ID != "resp_67890" || result.String() != "Hello!" || len(result.Messages) != 1 || result.Messages[0].Role != message.RoleAssistant {
+		t.Errorf("unexpected response: %+v", result)
+	}
+	if result.ConversationID != nil {
+		t.Errorf("conversation ID = %v, want nil with storage disabled", result.ConversationID)
 	}
 }
 

@@ -99,6 +99,9 @@ func TestAddHandlerRawRejectsPortableValue(t *testing.T) {
 	if !strings.Contains(err.Error(), "PortableValue") {
 		t.Fatalf("build() error = %q, want mention of PortableValue", err)
 	}
+	if !strings.Contains(err.Error(), "Use AddCatchAll()") {
+		t.Fatalf("build() error = %q, want Use AddCatchAll() guidance", err)
+	}
 }
 
 func TestMessageRouterKeepsUnknownPortableTypeOnCatchAllPath(t *testing.T) {

@@ -92,4 +92,14 @@ func TestBuildAvailableScriptsBlock_DescriptionIsXmlEscaped(t *testing.T) {
 	if !strings.Contains(got, `description="Convert &quot;mph&quot; to km/h"`) {
 		t.Fatalf("expected XML-escaped description attribute, got: %s", got)
 	}
+
+	t.Run("special characters", func(t *testing.T) {
+		scripts := []skills.Script{
+			{Name: "deploy", Description: `has <special> & "chars"`},
+		}
+		got := buildAvailableScriptsBlock(scripts)
+		if !strings.Contains(got, `description="has &lt;special&gt; &amp; &quot;chars&quot;"`) {
+			t.Fatalf("expected XML-escaped description attribute, got: %s", got)
+		}
+	})
 }

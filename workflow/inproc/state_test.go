@@ -160,6 +160,11 @@ func TestInProcessRun_StateShouldPersist_NotCheckpointed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create runner: %v", err)
 	}
+	defer func() {
+		if err := run.Close(context.Background()); err != nil {
+			t.Errorf("Close run: %v", err)
+		}
+	}()
 	status, err := run.GetStatus(t.Context())
 	if err != nil {
 		t.Fatalf("Failed to get run status: %v", err)
@@ -204,6 +209,11 @@ func TestInProcessRun_StateShouldPersist_Checkpointed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create checkpointed runner: %v", err)
 	}
+	defer func() {
+		if err := run.Close(context.Background()); err != nil {
+			t.Errorf("Close run: %v", err)
+		}
+	}()
 	if len(run.Checkpoints()) != 4 {
 		t.Errorf("Expected 4 checkpoints, got %d", len(run.Checkpoints()))
 	}
@@ -527,6 +537,11 @@ func TestInProcessRun_StateShouldError_TwoExecutors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create runner: %v", err)
 	}
+	defer func() {
+		if err := runWithFailure.Close(context.Background()); err != nil {
+			t.Errorf("Close run: %v", err)
+		}
+	}()
 
 	var hadFailure bool
 	for evt := range runWithFailure.NewEvents() {

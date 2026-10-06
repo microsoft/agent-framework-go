@@ -760,23 +760,41 @@ func TestAgent_PerServiceCallHistory_RealConversationID(t *testing.T) {
 
 func TestAgent_PerServiceCallHistory_ConflictsAfterNotifyingProviders(t *testing.T) {
 	for _, stream := range []bool{false, true} {
-		t.Run(fmt.Sprint(stream), func(t *testing.T) {
-			var stored bool
-			history := agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "history", Store: func(context.Context, agent.InvokedContext) error {
-				stored = true
-				return nil
-			}})
-			a := agent.New(agent.ProviderConfig{Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
-				return func(yield func(*agent.ResponseUpdate, error) bool) {
-					yield(&agent.ResponseUpdate{ConversationID: new("service-conversation")}, nil)
+		for _, withResponse := range []bool{false, true} {
+			t.Run(fmt.Sprintf("stream=%t/response=%t", stream, withResponse), func(t *testing.T) {
+				var notifications []agent.InvokedContext
+				history := agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "history", Store: func(_ context.Context, invoked agent.InvokedContext) error {
+					notifications = append(notifications, invoked)
+					return nil
+				}})
+				a := agent.New(agent.ProviderConfig{Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return func(yield func(*agent.ResponseUpdate, error) bool) {
+						update := &agent.ResponseUpdate{ConversationID: new("service-conversation")}
+						if withResponse {
+							update.Role = message.RoleAssistant
+							update.Contents = message.Contents{&message.TextContent{Text: "response"}}
+						}
+						yield(update, nil)
+					}
+				}}, agent.Config{HistoryProvider: history, RequirePerServiceCallHistoryPersistence: true})
+				session := &agent.Session{}
+				_, err := a.RunText(t.Context(), "start", agent.WithSession(session), agent.Stream(stream)).Collect()
+				if err == nil || !strings.Contains(err.Error(), "HistoryProvider") || len(notifications) != 1 || session.ServiceID() != "" {
+					t.Fatalf("error=%v notifications=%d session=%q; want conflict after one notification without committing the ID", err, len(notifications), session.ServiceID())
 				}
-			}}, agent.Config{HistoryProvider: history, RequirePerServiceCallHistoryPersistence: true})
-			session := &agent.Session{}
-			_, err := a.RunText(t.Context(), "start", agent.WithSession(session), agent.Stream(stream)).Collect()
-			if err == nil || !strings.Contains(err.Error(), "HistoryProvider") || !stored || session.ServiceID() != "" {
-				t.Fatalf("error=%v stored=%t session=%q; want conflict after notification without committing the ID", err, stored, session.ServiceID())
-			}
-		})
+				if notifications[0].Err != nil {
+					t.Fatalf("notification error = %v, want successful service call before conflict", notifications[0].Err)
+				}
+				if got := messageStrings(notifications[0].RequestMessages); !slices.Equal(got, []string{"start"}) {
+					t.Fatalf("stored requests = %v, want [start]", got)
+				}
+				if withResponse {
+					if got := messageStrings(notifications[0].ResponseMessages); !slices.Equal(got, []string{"response"}) {
+						t.Fatalf("stored responses = %v, want [response]", got)
+					}
+				}
+			})
+		}
 	}
 }
 
@@ -1262,6 +1280,9 @@ func TestAgent_Run_RejectsMessagesWithContinuationToken(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when continuation token and messages are both provided")
 	}
+	if err.Error() != "messages are not allowed when continuing a background response using a continuation token" {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if runCalled {
 		t.Fatal("expected run function not to be called when validation fails")
 	}
@@ -1338,19 +1359,21 @@ func TestAgent_Run_RequiresSessionWhenAllowBackgroundResponsesEnabled(t *testing
 }
 
 func TestAgent_Run_RejectsNilSessionWhenAllowBackgroundResponsesEnabled(t *testing.T) {
-	runCalled := false
-	a := agenttest.New(agenttest.NewResponseBuilder(
-		func(context.Context, []*message.Message, ...agent.Option) {
-			runCalled = true
-		},
-	).AddText("response").Build())
+	for _, stream := range []bool{false, true} {
+		runCalled := false
+		a := agenttest.New(agenttest.NewResponseBuilder(
+			func(context.Context, []*message.Message, ...agent.Option) {
+				runCalled = true
+			},
+		).AddText("response").Build())
 
-	_, err := a.RunText(t.Context(), "test", agent.WithSession(nil), agent.AllowBackgroundResponses(true)).Collect()
-	if err == nil || err.Error() != "a session must be provided when AllowBackgroundResponses is enabled" {
-		t.Fatalf("RunText() error = %v, want session-required error", err)
-	}
-	if runCalled {
-		t.Fatal("run function called with a nil background-response session")
+		_, err := a.RunText(t.Context(), "test", agent.WithSession(nil), agent.AllowBackgroundResponses(true), agent.Stream(stream)).Collect()
+		if err == nil || err.Error() != "a session must be provided when AllowBackgroundResponses is enabled" {
+			t.Fatalf("RunText() with stream=%t error = %v, want session-required error", stream, err)
+		}
+		if runCalled {
+			t.Fatalf("run function called with a nil background-response session and stream=%t", stream)
+		}
 	}
 }
 
@@ -1517,6 +1540,15 @@ func TestAgent_Run_StreamingResponses(t *testing.T) {
 
 	if len(updates) != 3 {
 		t.Fatalf("expected 3 updates, got %d", len(updates))
+	}
+	if got := updates[0].String(); got != "chunk 1" {
+		t.Fatalf("first update text = %q, want chunk 1", got)
+	}
+	if got := updates[1].String(); got != "chunk 2" {
+		t.Fatalf("second update text = %q, want chunk 2", got)
+	}
+	if got := updates[2].String(); got != "chunk 3" {
+		t.Fatalf("third update text = %q, want chunk 3", got)
 	}
 }
 
@@ -1733,6 +1765,9 @@ func TestAgent_Run_IncludesInstructionsRunOption(t *testing.T) {
 	if got := messageStrings(capturedMessages); !slices.Equal(got, []string{"hello"}) {
 		t.Fatalf("messages = %v, want [hello]", got)
 	}
+	if capturedMessages[0].Role != message.RoleUser {
+		t.Fatalf("request message role = %q, want %q", capturedMessages[0].Role, message.RoleUser)
+	}
 	if !slices.Equal(capturedInstructions, []string{"You are a helpful assistant."}) {
 		t.Fatalf("instructions = %q, want %q", capturedInstructions, []string{"You are a helpful assistant."})
 	}
@@ -1758,7 +1793,10 @@ func TestAgent_Run_CombinesInstructionOptions(t *testing.T) {
 }
 
 func TestRun_Collect(t *testing.T) {
-	responseBuilder := agenttest.NewResponseBuilder().
+	providerCalls := 0
+	responseBuilder := agenttest.NewResponseBuilder(func(context.Context, []*message.Message, ...agent.Option) {
+		providerCalls++
+	}).
 		AddText("hello").
 		AddText(" world")
 
@@ -1769,6 +1807,12 @@ func TestRun_Collect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+	if providerCalls != 1 {
+		t.Fatalf("provider calls = %d, want 1", providerCalls)
+	}
+	if resp == nil {
+		t.Fatal("expected a collected response")
+	}
 
 	if len(resp.Messages) != 1 {
 		t.Fatalf("expected 1 message after coalescing, got %d", len(resp.Messages))
@@ -1776,6 +1820,9 @@ func TestRun_Collect(t *testing.T) {
 
 	if resp.Messages[0].Role != message.RoleAssistant {
 		t.Errorf("expected role %s, got %s", message.RoleAssistant, resp.Messages[0].Role)
+	}
+	if got := resp.String(); got != "hello world" {
+		t.Errorf("collected text = %q, want hello world", got)
 	}
 }
 
@@ -1863,7 +1910,7 @@ func TestAgent_Run_ContextProvider_RunsWithServiceManagedSession(t *testing.T) {
 		SourceID: "history",
 		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			provideCalled = true
-			return []*message.Message{message.NewText("history")}, nil, nil
+			return []*message.Message{{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "Extra context"}}}}, nil, nil
 		},
 		Store: func(_ context.Context, invoked agent.InvokedContext) error {
 			storedResponseMessages = invoked.ResponseMessages
@@ -1874,7 +1921,7 @@ func TestAgent_Run_ContextProvider_RunsWithServiceManagedSession(t *testing.T) {
 	runFn := func(_ context.Context, msgs []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		capturedMessages = msgs
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
-			yield(&agent.ResponseUpdate{ConversationID: new("server-managed"), Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "ok"}}}, nil)
+			yield(&agent.ResponseUpdate{ConversationID: new("server-managed"), Role: message.RoleAssistant, Contents: []message.Content{&message.TextContent{Text: "Response"}}}, nil)
 		}
 	}
 
@@ -1885,7 +1932,7 @@ func TestAgent_Run_ContextProvider_RunsWithServiceManagedSession(t *testing.T) {
 
 	session := agenttest.CreateSession()
 	session.SetServiceID("server-managed")
-	_, err := a.RunText(t.Context(), "input", agent.WithSession(session)).Collect()
+	_, err := a.RunText(t.Context(), "Hello", agent.WithSession(session)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1896,11 +1943,17 @@ func TestAgent_Run_ContextProvider_RunsWithServiceManagedSession(t *testing.T) {
 	if len(capturedMessages) != 2 {
 		t.Fatal("expected provider context to be appended to request")
 	}
-	if capturedMessages[0].String() != "input" || capturedMessages[1].String() != "history" {
-		t.Fatalf("expected message order [input history], got [%s %s]", capturedMessages[0].String(), capturedMessages[1].String())
+	if capturedMessages[0].Role != message.RoleUser {
+		t.Errorf("request role = %q, want user", capturedMessages[0].Role)
 	}
-	if got := messageStrings(storedResponseMessages); !slices.Equal(got, []string{"ok"}) {
-		t.Fatalf("stored response messages = %v, want [ok]", got)
+	if capturedMessages[1].Role != message.RoleSystem {
+		t.Errorf("context role = %q, want system", capturedMessages[1].Role)
+	}
+	if capturedMessages[0].String() != "Hello" || capturedMessages[1].String() != "Extra context" {
+		t.Fatalf("expected message order [Hello Extra context], got [%s %s]", capturedMessages[0].String(), capturedMessages[1].String())
+	}
+	if got := messageStrings(storedResponseMessages); !slices.Equal(got, []string{"Response"}) {
+		t.Fatalf("stored response messages = %v, want [Response]", got)
 	}
 }
 
@@ -2001,7 +2054,11 @@ func TestAgent_Run_StreamingContinuationToken_SavesInputMessagesAndUpdates(t *te
 		if err != nil {
 			t.Fatalf("unexpected resume error: %v", err)
 		}
-		tokens = append(tokens, agenttest.DecodeContinuationToken(t, update.ContinuationToken))
+		token := agenttest.DecodeContinuationToken(t, update.ContinuationToken)
+		if token.Type != agenttest.ContinuationTokenType {
+			t.Fatalf("resume token type = %q, want %q", token.Type, agenttest.ContinuationTokenType)
+		}
+		tokens = append(tokens, token)
 	}
 	if len(tokens) != 3 {
 		t.Fatalf("resume token count = %d, want 3", len(tokens))
@@ -2021,11 +2078,13 @@ func TestAgent_Run_StreamingContinuationToken_SavesInputMessagesAndUpdates(t *te
 func TestAgent_Run_ContinuationToken_PersistsSavedResponseUpdates(t *testing.T) {
 	var historyResponseMessages []*message.Message
 	var contextResponseMessages []*message.Message
+	var historyStoreCalls, contextStoreCalls int
 	var historyStoreSawContinuationToken bool
 	var contextStoreSawContinuationToken bool
 	historyProvider := agent.NewHistoryProvider(agent.HistoryProviderConfig{
 		SourceID: "history",
 		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			historyStoreCalls++
 			historyResponseMessages = invoked.ResponseMessages
 			_, historyStoreSawContinuationToken = agent.GetOption(invoked.Options, agent.WithContinuationToken)
 			return nil
@@ -2034,6 +2093,7 @@ func TestAgent_Run_ContinuationToken_PersistsSavedResponseUpdates(t *testing.T) 
 	contextProvider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
 		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			contextStoreCalls++
 			contextResponseMessages = invoked.ResponseMessages
 			_, contextStoreSawContinuationToken = agent.GetOption(invoked.Options, agent.WithContinuationToken)
 			return nil
@@ -2073,6 +2133,9 @@ func TestAgent_Run_ContinuationToken_PersistsSavedResponseUpdates(t *testing.T) 
 	_, err := a.Run(t.Context(), nil, agent.WithSession(agenttest.CreateSession()), agent.WithContinuationToken(token), agent.Stream(true)).Collect()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if historyStoreCalls != 1 || contextStoreCalls != 1 {
+		t.Fatalf("history/context store calls = %d/%d, want 1/1", historyStoreCalls, contextStoreCalls)
 	}
 	if got := messageStrings(historyResponseMessages); !slices.Equal(got, []string{"once upon a time"}) {
 		t.Fatalf("history response messages = %v, want [once upon a time]", got)
@@ -2548,13 +2611,13 @@ func TestAgent_Run_ServiceIDOptionsMatchSession(t *testing.T) {
 			if tc.optionID != "" {
 				opts = append(opts, agent.WithServiceID(tc.optionID))
 			}
-			_, err := a.RunText(t.Context(), "start", opts...).Collect()
+			response, err := a.RunText(t.Context(), "start", opts...).Collect()
 			if tc.wantError {
 				if err == nil || !strings.Contains(err.Error(), "differs") || called {
 					t.Fatalf("error = %v, provider called = %t; want an early ID conflict", err, called)
 				}
-			} else if err != nil || !called {
-				t.Fatalf("error = %v, provider called = %t", err, called)
+			} else if err != nil || !called || response == nil {
+				t.Fatalf("error = %v, provider called = %t, response = %#v", err, called, response)
 			}
 			if session.ServiceID() != tc.wantID {
 				t.Errorf("session ID = %q, want %q", session.ServiceID(), tc.wantID)
@@ -2640,10 +2703,14 @@ func TestAgent_Run_ResponseConversationIDConflictsWithConfiguredHistory(t *testi
 				yield(&agent.ResponseUpdate{ResponseID: "response-1", ConversationID: new("conversation-1")}, nil)
 			}
 		},
-	}, agent.Config{HistoryProvider: history})
+	}, agent.Config{
+		HistoryProvider:                history,
+		ThrowOnHistoryProviderConflict: new(true),
+		ClearOnHistoryProviderConflict: new(true),
+	})
 	session := &agent.Session{}
 	_, err := a.RunText(t.Context(), "start", agent.WithSession(session)).Collect()
-	if err == nil || !strings.Contains(err.Error(), "HistoryProvider") {
+	if err == nil || err.Error() != "only Session.ServiceID or HistoryProvider may be used, but not both; the service returned an ID indicating service-managed history while the agent has a HistoryProvider configured" {
 		t.Fatalf("error = %v, want history provider conflict", err)
 	}
 	if !provided || stored {
@@ -3449,7 +3516,7 @@ func TestAgent_Run_UsesContextProvidersInOrder(t *testing.T) {
 		SourceID: "provider-a",
 		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			sequence = append(sequence, "before-a")
-			return []*message.Message{message.NewText("a")}, nil, nil
+			return []*message.Message{{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "a"}}}}, nil, nil
 		},
 		Store: func(context.Context, agent.InvokedContext) error {
 			sequence = append(sequence, "after-a")
@@ -3460,7 +3527,7 @@ func TestAgent_Run_UsesContextProvidersInOrder(t *testing.T) {
 		SourceID: "provider-b",
 		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			sequence = append(sequence, "before-b")
-			return []*message.Message{message.NewText("b")}, nil, nil
+			return []*message.Message{{Role: message.RoleSystem, Contents: []message.Content{&message.TextContent{Text: "b"}}}}, nil, nil
 		},
 		Store: func(context.Context, agent.InvokedContext) error {
 			sequence = append(sequence, "after-b")

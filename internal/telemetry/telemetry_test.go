@@ -191,7 +191,8 @@ func runHelper(t *testing.T, name string, env ...string) string {
 		t.Fatalf("os.Executable() failed: %v", err)
 	}
 	cmd := exec.Command(exe, "-test.run=^TestHelperProcess$", "--", name)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(os.Environ(), foundryHostingEnvVar+"=")
+	cmd.Env = append(cmd.Env, env...)
 	cmd.Env = append(cmd.Env, helperProcessEnv+"=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil {

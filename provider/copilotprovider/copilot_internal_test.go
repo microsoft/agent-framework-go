@@ -260,6 +260,8 @@ func TestCopyResumeSessionConfig_CopiesRecentSDKFields(t *testing.T) {
 		DisabledMCPServers:       []string{"legacy"},
 		GitHubMCPToolConfig:      githubMCPToolConfig,
 		ManagedSettings:          managedSettings,
+		ReasoningEffort:          "high",
+		ReasoningSummary:         copilot.ReasoningSummaryDetailed,
 	}
 
 	got := copyResumeSessionConfig(source)
@@ -281,6 +283,12 @@ func TestCopyResumeSessionConfig_CopiesRecentSDKFields(t *testing.T) {
 	}
 	if got.ManagedSettings != managedSettings {
 		t.Error("ManagedSettings was not preserved")
+	}
+	if got.ReasoningEffort != "high" {
+		t.Errorf("ReasoningEffort = %q, want %q", got.ReasoningEffort, "high")
+	}
+	if got.ReasoningSummary != copilot.ReasoningSummaryDetailed {
+		t.Errorf("ReasoningSummary = %q, want %q", got.ReasoningSummary, copilot.ReasoningSummaryDetailed)
 	}
 }
 

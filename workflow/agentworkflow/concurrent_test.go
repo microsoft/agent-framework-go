@@ -160,6 +160,9 @@ func TestConcurrentWorkflowBuilder_ExplicitOutputDesignationRejectsNonParticipan
 			if !strings.Contains(err.Error(), "not a participant") {
 				t.Fatalf("error = %q, want it to mention not a participant", err.Error())
 			}
+			if !strings.Contains(err.Error(), nonParticipant.Name()) {
+				t.Fatalf("error = %q, want it to name non-participant %q", err.Error(), nonParticipant.Name())
+			}
 		})
 	}
 }
@@ -256,7 +259,11 @@ func TestConcurrentWorkflowBuilder_AgentsRunInParallel(t *testing.T) {
 			t.Fatalf("abc update count = %d in %q, want 4", count, updateText)
 		}
 
-		resultTexts := collectMessageTexts(collectOutputMessages(events))
+		resultMessages := collectOutputMessages(events)
+		if len(resultMessages) != 2 {
+			t.Fatalf("result message count = %d, want 2", len(resultMessages))
+		}
+		resultTexts := collectMessageTexts(resultMessages)
 		if len(resultTexts) != 2 {
 			t.Fatalf("result texts = %v, want 2 messages", resultTexts)
 		}

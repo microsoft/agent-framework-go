@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -37,6 +38,11 @@ func TestResult_FormatForModel_stdout(t *testing.T) {
 	}
 	if !strings.Contains(got, "exit_code: 0") {
 		t.Errorf("expected exit_code: 0, got %q", got)
+	}
+	for _, unwanted := range []string{"stderr:", "[stdout truncated]", "[command timed out]"} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("did not expect %q in successful output, got %q", unwanted, got)
+		}
 	}
 }
 
@@ -119,6 +125,8 @@ func TestDefaultShellEnvironmentInstructions_powerShell(t *testing.T) {
 		"## Shell environment",
 		"PowerShell 7.5.0 session on Windows",
 		"Use PowerShell idioms, NOT bash",
+		"$env:NAME",
+		"Set-Location",
 		"Working directory: C:\\work",
 		"Available CLIs: git (git version 2.50.0)",
 		"Not installed: docker",
@@ -397,8 +405,12 @@ func TestEnvironmentProvider_firstCallFailsNextCallRetriesAndSucceeds(t *testing
 		t.Fatal("did not expect snapshot after failed provider run")
 	}
 
-	if _, _, err := invokeProvider(env, t.Context(), nil); err != nil {
+	_, options, err := invokeProvider(env, t.Context(), nil)
+	if err != nil {
 		t.Fatalf("retry provider run: %v", err)
+	}
+	if instructions, ok := agent.GetOption(options, agent.WithInstructions); !ok || instructions == "" {
+		t.Fatalf("expected nonempty instructions after retry, got %q (present: %t)", instructions, ok)
 	}
 	snapshot, ok := env.CurrentSnapshot()
 	if !ok {
@@ -434,8 +446,12 @@ func TestEnvironmentProvider_firstCallCanceledNextCallSucceeds(t *testing.T) {
 		t.Fatal("did not expect snapshot after canceled provider run")
 	}
 
-	if _, _, err := invokeProvider(env, t.Context(), nil); err != nil {
+	_, options, err := invokeProvider(env, t.Context(), nil)
+	if err != nil {
 		t.Fatalf("retry provider run: %v", err)
+	}
+	if instructions, ok := agent.GetOption(options, agent.WithInstructions); !ok || instructions == "" {
+		t.Fatalf("expected nonempty instructions after retry, got %q (present: %t)", instructions, ok)
 	}
 	snapshot, ok := env.CurrentSnapshot()
 	if !ok {
@@ -447,24 +463,40 @@ func TestEnvironmentProvider_firstCallCanceledNextCallSucceeds(t *testing.T) {
 }
 
 func TestEnvironmentProvider_invalidToolNameRecordedMissingWithoutInvokingExecutor(t *testing.T) {
+	invalidTools := []string{
+		"git; rm -rf /",
+		"echo $PATH",
+		"good-tool && bad",
+		"",
+		"  ",
+		`"git"`,
+		"git|other",
+		"git\nother",
+	}
 	fake := &environmentTestExecutor{
 		results: []shelltool.Result{{Stdout: "VERSION=1.0\nCWD=/\n", ExitCode: 0}},
 	}
 	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
 		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
-		ProbeTools:     []string{"git; rm -rf /", "echo $PATH", "good-tool && bad"},
+		ProbeTools:     invalidTools,
 	})
 
 	snapshot, err := env.Refresh(t.Context())
 	if err != nil {
 		t.Fatalf("refresh shell environment: %v", err)
 	}
+	if snapshot.ShellVersion != "1.0" || snapshot.WorkingDirectory != "/" {
+		t.Fatalf("snapshot = %+v, want shell version 1.0 and working directory /", snapshot)
+	}
 	if fake.runCount != 1 {
 		t.Fatalf("expected only shell/CWD probe to run, runCount = %d", fake.runCount)
 	}
-	for _, name := range []string{"git; rm -rf /", "echo $PATH", "good-tool && bad"} {
+	if len(snapshot.ToolVersions) != len(invalidTools) {
+		t.Fatalf("tool versions = %#v, want one entry per invalid tool", snapshot.ToolVersions)
+	}
+	for _, name := range invalidTools {
 		version, ok := snapshot.ToolVersions[name]
-		if !ok || version.Found {
+		if !ok || version.Found || version.Version != "" {
 			t.Fatalf("invalid tool %q = %#v, present %v; want missing entry", name, version, ok)
 		}
 	}
@@ -540,46 +572,82 @@ func TestEnvironmentProvider_toolEmitsVersionToStderrFallsBackToStderr(t *testin
 }
 
 func TestEnvironmentProvider_callerCancellationPropagates(t *testing.T) {
-	fake := &environmentTestExecutor{
-		run: func(ctx context.Context, command string) (shelltool.Result, error) {
-			return shelltool.Result{}, ctx.Err()
-		},
-	}
-	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
-		ProbeTools:     []string{},
-	})
-	canceled, cancel := context.WithCancel(t.Context())
-	cancel()
+	for _, phase := range []string{"before refresh", "shell probe", "tool probe"} {
+		t.Run(phase, func(t *testing.T) {
+			canceled, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if phase == "before refresh" {
+				cancel()
+			}
+			fake := &environmentTestExecutor{
+				run: func(ctx context.Context, command string) (shelltool.Result, error) {
+					if phase == "shell probe" || (phase == "tool probe" && command == "git --version") {
+						cancel()
+					}
+					if err := ctx.Err(); err != nil {
+						return shelltool.Result{}, err
+					}
+					return shelltool.Result{Stdout: "VERSION=1.0\nCWD=/x\n", ExitCode: 0}, nil
+				},
+			}
+			env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+				OverrideFamily: new(shelltool.ShellFamilyPOSIX),
+				ProbeTools:     []string{"git"},
+			})
 
-	if _, err := env.Refresh(canceled); !errors.Is(err, context.Canceled) {
-		t.Fatalf("refresh error = %v, want context canceled", err)
+			if _, err := env.Refresh(canceled); !errors.Is(err, context.Canceled) {
+				t.Fatalf("refresh error = %v, want context canceled", err)
+			}
+			if _, ok := env.CurrentSnapshot(); ok {
+				t.Fatal("did not expect a snapshot after canceled refresh")
+			}
+		})
 	}
 }
 
 func TestEnvironmentProvider_probeTimeoutRecordedAsMissingFields(t *testing.T) {
-	fake := &environmentTestExecutor{
-		run: func(ctx context.Context, command string) (shelltool.Result, error) {
-			<-ctx.Done()
-			return shelltool.Result{}, ctx.Err()
-		},
-	}
-	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
-		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
-		ProbeTimeout:   new(time.Millisecond),
-		ProbeTools:     []string{"git"},
-	})
+	synctest.Test(t, func(t *testing.T) {
+		fake := &environmentTestExecutor{
+			run: func(ctx context.Context, command string) (shelltool.Result, error) {
+				if err := ctx.Err(); err != nil {
+					t.Fatalf("probe %q started with expired context: %v", command, err)
+				}
+				<-ctx.Done()
+				if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					t.Fatalf("probe %q error = %v, want deadline exceeded", command, ctx.Err())
+				}
+				return shelltool.Result{}, ctx.Err()
+			},
+		}
+		env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+			OverrideFamily: new(shelltool.ShellFamilyPOSIX),
+			ProbeTimeout:   new(time.Millisecond),
+			ProbeTools:     []string{"git"},
+		})
 
-	snapshot, err := env.Refresh(t.Context())
-	if err != nil {
-		t.Fatalf("refresh shell environment: %v", err)
-	}
-	if snapshot.ShellVersion != "" {
-		t.Fatalf("shell version = %q, want missing", snapshot.ShellVersion)
-	}
-	if got := snapshot.ToolVersions["git"]; got.Found {
-		t.Fatalf("git version = %#v, want missing", got)
-	}
+		snapshot, err := env.Refresh(t.Context())
+		if err != nil {
+			t.Fatalf("refresh shell environment: %v", err)
+		}
+		if fake.runCount != 2 {
+			t.Fatalf("probe calls = %d, want shell and tool probes", fake.runCount)
+		}
+		if snapshot.ShellVersion != "" || snapshot.WorkingDirectory != "" {
+			t.Fatalf("snapshot = %+v, want missing shell version and working directory", snapshot)
+		}
+		if len(snapshot.ToolVersions) != 1 {
+			t.Fatalf("tool versions = %#v, want one missing git entry", snapshot.ToolVersions)
+		}
+		if got, ok := snapshot.ToolVersions["git"]; !ok || got.Found || got.Version != "" {
+			t.Fatalf("git version = %#v, present %v; want missing entry", got, ok)
+		}
+		if err := t.Context().Err(); err != nil {
+			t.Fatalf("caller context error = %v, want caller to remain active", err)
+		}
+		if _, ok := env.CurrentSnapshot(); !ok {
+			t.Fatal("expected a snapshot even when probes time out")
+		}
+	})
 }
 
 func TestEnvironmentProvider_zeroProbeTimeoutIsImmediate(t *testing.T) {
@@ -821,6 +889,10 @@ func TestPolicy_custom_doesNotRunWhenDenyListMatches(t *testing.T) {
 	if ran {
 		t.Fatal("expected deny-list rejection to skip custom callback")
 	}
+	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "git status"})
+	if !allowed || !ran {
+		t.Fatalf("permitted command = allowed %v, callback ran %v, reason %q", allowed, ran, reason)
+	}
 }
 
 func TestPolicy_custom_receivesTrimmedCommand(t *testing.T) {
@@ -859,6 +931,10 @@ func TestPolicy_custom_doesNotOverrideAllowListDenial(t *testing.T) {
 	if ran {
 		t.Fatal("expected allow-list rejection to skip custom callback")
 	}
+	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "echo hello"})
+	if !allowed || !ran {
+		t.Fatalf("permitted command = allowed %v, callback ran %v, reason %q", allowed, ran, reason)
+	}
 }
 
 func TestPolicy_patternsAreCaseInsensitive(t *testing.T) {
@@ -880,12 +956,24 @@ func TestPolicy_emptyCommand_denies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: "   "})
-	if allowed {
-		t.Fatal("expected empty command to be denied")
-	}
-	if reason != "empty command" {
-		t.Errorf("unexpected reason %q", reason)
+	for _, tc := range []struct {
+		name    string
+		command string
+	}{
+		{name: "empty"},
+		{name: "spaces", command: "   "},
+		{name: "tabs and newlines", command: "\t\r\n"},
+		{name: "unicode whitespace", command: "\u00a0\u2003"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			allowed, reason := p.Evaluate(shelltool.ShellRequest{Command: tc.command})
+			if allowed {
+				t.Fatal("expected empty command to be denied")
+			}
+			if reason != "empty command" {
+				t.Errorf("unexpected reason %q", reason)
+			}
+		})
 	}
 }
 
@@ -908,9 +996,12 @@ func TestNewPolicy_invalidAllowRegex(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestNewLocal_returnsApprovalRequired_byDefault(t *testing.T) {
-	ft := newLocal(t, shelltool.LocalConfig{})
+	ft := newLocal(t, shelltool.LocalConfig{Mode: shelltool.ModeStateless})
 	if ft.Name() != "run_shell" {
 		t.Errorf("expected name 'run_shell', got %q", ft.Name())
+	}
+	if strings.TrimSpace(ft.Description()) == "" {
+		t.Errorf("expected nonblank description, got %q", ft.Description())
 	}
 	if !ft.ApprovalRequired() {
 		t.Error("expected tool to require approval")
@@ -918,7 +1009,10 @@ func TestNewLocal_returnsApprovalRequired_byDefault(t *testing.T) {
 }
 
 func TestNewLocal_acknowledgeUnsafe_noApproval(t *testing.T) {
-	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true})
+	ft := newLocal(t, shelltool.LocalConfig{Mode: shelltool.ModeStateless, AcknowledgeUnsafe: true})
+	if ft.Name() != "run_shell" {
+		t.Errorf("expected name 'run_shell', got %q", ft.Name())
+	}
 	if ft.ApprovalRequired() {
 		t.Error("expected approval to be disabled when AcknowledgeUnsafe is true")
 	}
@@ -947,16 +1041,28 @@ func TestMode_zeroValueIsPersistent(t *testing.T) {
 }
 
 func TestNewLocal_shellAndShellArgvConflict(t *testing.T) {
-	_, err := shelltool.NewLocal(shelltool.LocalConfig{
-		AcknowledgeUnsafe: true,
-		Shell:             "sh",
-		ShellArgv:         []string{"sh"},
-	})
-	if err == nil {
-		t.Fatal("expected conflict error")
-	}
-	if !strings.Contains(err.Error(), "either Shell or ShellArgv") {
-		t.Errorf("unexpected error: %v", err)
+	for _, tc := range []struct {
+		name string
+		mode shelltool.Mode
+		argv []string
+	}{
+		{name: "persistent", mode: shelltool.ModePersistent, argv: []string{"sh"}},
+		{name: "stateless with launch arguments", mode: shelltool.ModeStateless, argv: []string{"sh", "-e"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := shelltool.NewLocal(shelltool.LocalConfig{
+				AcknowledgeUnsafe: true,
+				Mode:              tc.mode,
+				Shell:             "sh",
+				ShellArgv:         tc.argv,
+			})
+			if err == nil {
+				t.Fatal("expected conflict error")
+			}
+			if !strings.Contains(err.Error(), "either Shell or ShellArgv") {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
 	}
 }
 
@@ -1320,9 +1426,12 @@ func TestCall_emptyCommand_error(t *testing.T) {
 }
 
 func TestCall_policyDeny(t *testing.T) {
-	p, _ := shelltool.NewPolicy(shelltool.PolicyConfig{DenyList: []string{`echo`}})
+	p, err := shelltool.NewPolicy(shelltool.PolicyConfig{DenyList: []string{`echo`}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	ft := newLocal(t, shelltool.LocalConfig{AcknowledgeUnsafe: true, Policy: p})
-	_, err := ft.Call(t.Context(), `{"command":"echo hello"}`)
+	_, err = ft.Call(t.Context(), `{"command":"echo hello"}`)
 	if err == nil {
 		t.Error("expected error from policy deny")
 	}
@@ -1393,9 +1502,18 @@ func TestCall_statelessStderrContentIsCaptured(t *testing.T) {
 		command = "[Console]::Error.WriteLine('err-from-shell')"
 	}
 
-	out := callTool(t, newLocal(t, cfg), command)
+	ft := newLocal(t, cfg)
+	t.Cleanup(func() {
+		if err := ft.Close(); err != nil {
+			t.Errorf("close shell: %v", err)
+		}
+	})
+	out := callTool(t, ft, command)
 	if !strings.Contains(out, "stderr: err-from-shell") {
 		t.Fatalf("expected stderr content, got %q", out)
+	}
+	if !strings.Contains(out, "exit_code: 0") {
+		t.Fatalf("expected successful command, got %q", out)
 	}
 }
 

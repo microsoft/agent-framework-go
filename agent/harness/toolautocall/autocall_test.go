@@ -2067,28 +2067,36 @@ func TestMessageInjection_UpdatesConversationIDBetweenProviderCalls(t *testing.T
 		name             string
 		initialSessionID string
 		initialOptionID  string
-		responseIDs      [3]string
-		wantIDs          [3]string
+		responseIDs      []string
+		wantIDs          []string
+		streams          []bool
 	}{
-		{name: "new conversation", responseIDs: [3]string{"conv-1", "conv-2", "conv-3"}, wantIDs: [3]string{"", "conv-1", "conv-2"}},
-		{name: "session advances", initialSessionID: "conv-0", responseIDs: [3]string{"conv-1", "conv-2", "conv-3"}, wantIDs: [3]string{"conv-0", "conv-1", "conv-2"}},
-		{name: "run option advances", initialOptionID: "conv-0", responseIDs: [3]string{"conv-1", "conv-2", "conv-3"}, wantIDs: [3]string{"conv-0", "conv-1", "conv-2"}},
-		{name: "run option cleared", initialOptionID: "conv-0", responseIDs: [3]string{"", "conv-2", "conv-3"}, wantIDs: [3]string{"conv-0", "", "conv-2"}},
-		{name: "stored becomes stateless", responseIDs: [3]string{"conv-1", "", "conv-3"}, wantIDs: [3]string{"", "conv-1", ""}},
-		{name: "stateless"},
+		{name: "new conversation", responseIDs: []string{"conv-1", "conv-2", "conv-3"}, wantIDs: []string{"", "conv-1", "conv-2"}},
+		{name: "session advances", initialSessionID: "conv-0", responseIDs: []string{"conv-1", "conv-2", "conv-3"}, wantIDs: []string{"conv-0", "conv-1", "conv-2"}},
+		{name: "run option advances", initialOptionID: "conv-0", responseIDs: []string{"conv-1", "conv-2", "conv-3"}, wantIDs: []string{"conv-0", "conv-1", "conv-2"}},
+		{name: "run option cleared", initialOptionID: "conv-0", responseIDs: []string{"", "conv-2", "conv-3"}, wantIDs: []string{"conv-0", "", "conv-2"}},
+		{name: "stored becomes stateless", responseIDs: []string{"conv-1", "", "conv-3"}, wantIDs: []string{"", "conv-1", ""}},
+		{name: "stateless", responseIDs: []string{"", "", ""}, wantIDs: []string{"", "", ""}},
+		{name: "two calls with terminal ID absent", responseIDs: []string{"conv-123", ""}, wantIDs: []string{"", "conv-123"}, streams: []bool{false}},
 	} {
-		for _, stream := range []bool{false, true} {
+		streams := tc.streams
+		if streams == nil {
+			streams = []bool{false, true}
+		}
+		for _, stream := range streams {
 			t.Run(fmt.Sprintf("%s/stream=%t", tc.name, stream), func(t *testing.T) {
 				injection := &agent.MessageInjector{}
 				session := &agent.Session{}
 				session.SetServiceID(tc.initialSessionID)
 				var calls int
+				var capturedIDs []string
 				run := func(_ context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 					return func(yield func(*agent.ResponseUpdate, error) bool) {
 						if calls >= len(tc.wantIDs) {
 							t.Fatal("unexpected extra provider call")
 						}
 						id, _ := agent.GetOption(opts, agent.WithServiceID)
+						capturedIDs = append(capturedIDs, id)
 						if id != tc.wantIDs[calls] {
 							t.Errorf("provider call %d: conversation ID = %q, want %q", calls+1, id, tc.wantIDs[calls])
 						}
@@ -2126,14 +2134,26 @@ func TestMessageInjection_UpdatesConversationIDBetweenProviderCalls(t *testing.T
 				if tc.initialOptionID != "" {
 					opts = append(opts, agent.WithServiceID(tc.initialOptionID))
 				}
-				if _, err := a.RunText(t.Context(), "original", opts...).Collect(); err != nil {
+				response, err := a.RunText(t.Context(), "original", opts...).Collect()
+				if err != nil {
 					t.Fatal(err)
 				}
 				if calls != len(tc.wantIDs) {
 					t.Errorf("provider calls = %d, want %d", calls, len(tc.wantIDs))
 				}
-				if got := session.ServiceID(); got != tc.responseIDs[2] {
-					t.Errorf("session ID = %q, want %q", got, tc.responseIDs[2])
+				if !slices.Equal(capturedIDs, tc.wantIDs) {
+					t.Errorf("provider conversation IDs = %q, want %q", capturedIDs, tc.wantIDs)
+				}
+				wantFinalID := tc.responseIDs[len(tc.responseIDs)-1]
+				if got := session.ServiceID(); got != wantFinalID {
+					t.Errorf("session ID = %q, want %q", got, wantFinalID)
+				}
+				if wantFinalID == "" {
+					if response.ConversationID != nil {
+						t.Errorf("response conversation ID = %q, want none", *response.ConversationID)
+					}
+				} else if response.ConversationID == nil || *response.ConversationID != wantFinalID {
+					t.Errorf("response conversation ID = %v, want %q", response.ConversationID, wantFinalID)
 				}
 				if id, _ := agent.GetOption(opts, agent.WithServiceID); id != tc.initialOptionID {
 					t.Errorf("caller option changed to %q, want %q", id, tc.initialOptionID)
@@ -2237,11 +2257,15 @@ func TestMessageInjection_ConcurrentEnqueuesDoNotLoseMessages(t *testing.T) {
 	const goroutineCount = 16
 	const messagesPerGoroutine = 100
 
-	var waitGroup sync.WaitGroup
+	start := make(chan struct{})
+	var ready, waitGroup sync.WaitGroup
+	ready.Add(goroutineCount)
+	waitGroup.Add(goroutineCount)
 	for goroutineIndex := range goroutineCount {
-		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
+			ready.Done()
+			<-start
 			for messageIndex := range messagesPerGoroutine {
 				if err := injection.EnqueueMessages(session, message.NewText(fmt.Sprintf("%d-%d", goroutineIndex, messageIndex))); err != nil {
 					t.Errorf("EnqueueMessages error: %v", err)
@@ -2250,6 +2274,8 @@ func TestMessageInjection_ConcurrentEnqueuesDoNotLoseMessages(t *testing.T) {
 			}
 		}()
 	}
+	ready.Wait()
+	close(start)
 	waitGroup.Wait()
 
 	pending, err := injection.PendingMessages(session)
@@ -2258,6 +2284,21 @@ func TestMessageInjection_ConcurrentEnqueuesDoNotLoseMessages(t *testing.T) {
 	}
 	if got, want := len(pending), goroutineCount*messagesPerGoroutine; got != want {
 		t.Fatalf("pending messages = %d, want %d", got, want)
+	}
+	counts := make(map[string]int, len(pending))
+	for _, msg := range pending {
+		if msg == nil || msg.Role != message.RoleUser {
+			t.Fatalf("pending message = %#v, want a user message", msg)
+		}
+		counts[msg.String()]++
+	}
+	for goroutineIndex := range goroutineCount {
+		for messageIndex := range messagesPerGoroutine {
+			text := fmt.Sprintf("%d-%d", goroutineIndex, messageIndex)
+			if got := counts[text]; got != 1 {
+				t.Errorf("message %q occurred %d times, want 1", text, got)
+			}
+		}
 	}
 }
 

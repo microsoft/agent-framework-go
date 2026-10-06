@@ -788,8 +788,14 @@ func TestRequestHandler_OnCancelTask_ReturnsCanceledTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OnCancelTask returned error: %v", err)
 	}
+	if canceled == nil {
+		t.Fatal("CancelTask returned nil task")
+	}
 	if canceled.Status.State != a2a.TaskStateCanceled {
 		t.Fatalf("task status = %q, want %q", canceled.Status.State, a2a.TaskStateCanceled)
+	}
+	if canceled.ID != task.ID || canceled.ContextID != task.ContextID {
+		t.Errorf("canceled task identity = (%q, %q), want (%q, %q)", canceled.ID, canceled.ContextID, task.ID, task.ContextID)
 	}
 }
 

@@ -14,6 +14,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/microsoft/agent-framework-go/cmd/internal/testinventory"
 )
 
 // These models read the metadata needed for identity resolution and provenance.
@@ -25,6 +27,7 @@ type declarationInventory struct {
 	Packages       map[string]declarationPackage  `json:"packages,omitempty"`
 	Assemblies     map[string]declarationAssembly `json:"assemblies"`
 	Types          map[string]declarationType     `json:"types"`
+	Tests          *testinventory.Inventory       `json:"tests,omitempty"`
 	SHA256         string                         `json:"-"`
 }
 
@@ -203,9 +206,14 @@ func loadDeclarationInventory(file string) (declarationInventory, error) {
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return inv, fmt.Errorf("%s: expected a single JSON object", file)
 	}
-	// Unknown optional fields are deliberately accepted, including fields in
-	// attribute records. The key check still covers the entire input document.
-	if err := json.Unmarshal(data, &inv); err != nil {
+	// Unknown optional API fields are deliberately accepted. Capture tests
+	// separately so their stricter schema is decoded only once. The key check
+	// above still covers the entire input document.
+	input := struct {
+		*declarationInventory
+		Tests json.RawMessage `json:"tests"`
+	}{declarationInventory: &inv}
+	if err := json.Unmarshal(data, &input); err != nil {
 		return declarationInventory{}, fmt.Errorf("%s: %w", file, err)
 	}
 	if inv.SchemaVersion != 1 {
@@ -222,6 +230,10 @@ func loadDeclarationInventory(file string) (declarationInventory, error) {
 		if _, exists := inv.Assemblies[typ.Assembly]; typ.Assembly == "" || !exists {
 			return declarationInventory{}, fmt.Errorf("%s: type %q references unknown assembly %q", file, name, typ.Assembly)
 		}
+	}
+	inv.Tests, err = decodeTestInventory(input.Tests)
+	if err != nil {
+		return declarationInventory{}, fmt.Errorf("%s: %w", file, err)
 	}
 	inv.SHA256 = fmt.Sprintf("%x", sha256.Sum256(data))
 	return inv, nil

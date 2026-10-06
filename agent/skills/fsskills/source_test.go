@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -91,6 +92,7 @@ func TestFileSkill_WithResources_ContentIncludesAvailableResourcesBlock(t *testi
 	root := t.TempDir()
 	createSkillDirWithResource(t, root, "resource-content", "A skill", "Use these resources.", "references/doc.md", "Document content.")
 	createRelativeFile(t, filepath.Join(root, "resource-content"), "assets/config.json", "{}")
+	const originalRawContent = "---\nname: resource-content\ndescription: A skill\n---\nUse these resources."
 	source := fsskills.NewSource(os.DirFS(root))
 
 	loaded, err := source.Skills(t.Context())
@@ -100,6 +102,9 @@ func TestFileSkill_WithResources_ContentIncludesAvailableResourcesBlock(t *testi
 	content, err := loaded[0].GetContent(t.Context())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.HasPrefix(content, originalRawContent) {
+		t.Fatalf("expected content to start with original SKILL.md content %q, got: %s", originalRawContent, content)
 	}
 	if !strings.Contains(content, "<available_resources>") {
 		t.Fatalf("expected <available_resources> block in content, got: %s", content)
@@ -112,6 +117,9 @@ func TestFileSkill_WithResources_ContentIncludesAvailableResourcesBlock(t *testi
 	}
 	if !strings.Contains(content, "</available_resources>") {
 		t.Fatalf("expected </available_resources> in content, got: %s", content)
+	}
+	if !strings.Contains(content, "<available_scripts />") {
+		t.Fatalf("expected empty <available_scripts /> block when skill has no scripts, got: %s", content)
 	}
 }
 
@@ -164,7 +172,7 @@ func TestFileSource_SymlinkedSkillFile_IsSkipped(t *testing.T) {
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	outsideSkillFile := filepath.Join(root, "outside-SKILL.md")
+	outsideSkillFile := filepath.Join(t.TempDir(), "outside-SKILL.md")
 	if err := os.WriteFile(outsideSkillFile, []byte("---\nname: linked-skill\ndescription: Linked skill file\n---\nBody."), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -255,6 +263,7 @@ func TestFileSource_NestedSkillFileUnderSkillRoot_NotDiscoveredAsIndependentSkil
 func TestFileSource_SkillBeyondMaxDepth_NotDiscovered(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, filepath.Join(root, "l1", "l2", "l3"), "deep-skill", "Too deep", "Body.")
+	createSkillDir(t, filepath.Join(root, "l1"), "within-depth-skill", "Within depth", "Body.")
 	source := fsskills.NewSource(os.DirFS(root))
 
 	loaded, err := source.Skills(t.Context())
@@ -265,6 +274,12 @@ func TestFileSource_SkillBeyondMaxDepth_NotDiscovered(t *testing.T) {
 		if skill.Frontmatter.Name == "deep-skill" {
 			t.Fatal("expected deep-skill not to be discovered beyond max search depth")
 		}
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected only the reachable skill, got %d skills", len(loaded))
+	}
+	if loaded[0].Frontmatter.Name != "within-depth-skill" {
+		t.Fatalf("expected within-depth-skill, got %q", loaded[0].Frontmatter.Name)
 	}
 }
 
@@ -290,19 +305,44 @@ func TestFileSource_SearchDepth_DoesNotAffectSkillDirectoryDiscovery(t *testing.
 
 func TestFileSource_ReadResource_ValidResource_ReturnsContent(t *testing.T) {
 	root := t.TempDir()
-	createSkillDirWithResource(t, root, "read-skill", "A skill", "See docs.", "references/doc.md", "Document content here.")
+	createSkillDir(t, root, "read-skill", "A skill", "See docs.")
+	want := map[string]string{
+		"references/doc.md":   "Document content here.",
+		"assets/doc.md":       "Other document content.",
+		"references/empty.md": "",
+	}
+	for name, content := range want {
+		createRelativeFile(t, filepath.Join(root, "read-skill"), name, content)
+	}
 	source := fsskills.NewSource(os.DirFS(root))
 
 	loaded, err := source.Skills(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	content, err := loaded[0].Resources[0].Read(t.Context())
-	if err != nil {
-		t.Fatal(err)
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
 	}
-	if content != "Document content here." {
-		t.Fatalf("expected resource content, got %q", content)
+	if len(loaded[0].Resources) != len(want) {
+		t.Fatalf("expected %d resources, got %d", len(want), len(loaded[0].Resources))
+	}
+	for _, resource := range loaded[0].Resources {
+		expected, ok := want[resource.Name]
+		if !ok {
+			t.Fatalf("unexpected or duplicate resource %q", resource.Name)
+		}
+		value, err := resource.Read(t.Context())
+		if err != nil {
+			t.Fatalf("Read(%q): %v", resource.Name, err)
+		}
+		content, ok := value.(string)
+		if !ok {
+			t.Fatalf("Read(%q) returned %T, want string", resource.Name, value)
+		}
+		if content != expected {
+			t.Errorf("Read(%q) = %q, want %q", resource.Name, content, expected)
+		}
+		delete(want, resource.Name)
 	}
 }
 
@@ -367,6 +407,9 @@ func TestFileSource_MetadataWithQuotedValues_ParsedCorrectly(t *testing.T) {
 	loaded, err := source.Skills(t.Context())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
 	}
 	fm := loaded[0].Frontmatter
 	if fm.Metadata["key1"] != "single quoted" {
@@ -529,6 +572,12 @@ func TestFileSource_ParsesOptionalFrontmatterFields(t *testing.T) {
 		t.Fatalf("expected 1 skill, got %d", len(loaded))
 	}
 	fm := loaded[0].Frontmatter
+	if fm.Name != "meta-skill" {
+		t.Fatalf("expected name meta-skill, got %q", fm.Name)
+	}
+	if fm.Description != "A skill with metadata" {
+		t.Fatalf("expected description A skill with metadata, got %q", fm.Description)
+	}
 	if fm.License != "MIT" {
 		t.Fatalf("expected license MIT, got %q", fm.License)
 	}
@@ -555,7 +604,13 @@ func TestFileSource_NoOptionalFields_DefaultZeroValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
 	fm := loaded[0].Frontmatter
+	if fm.Name != "basic-skill" || fm.Description != "A basic skill" {
+		t.Fatalf("unexpected required frontmatter: %#v", fm)
+	}
 	if fm.License != "" || fm.Compatibility != "" || fm.AllowedTools != "" {
 		t.Fatalf("expected zero-value optional fields, got %#v", fm)
 	}
@@ -833,6 +888,9 @@ func TestFileSource_ResourcesInSubdirectory_DiscoveredWithDefaultDepth(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 skill, got %d", len(loaded))
+	}
 	resources := loaded[0].Resources
 	if len(resources) != 1 {
 		t.Fatalf("expected 1 resource, got %d", len(resources))
@@ -856,22 +914,62 @@ func TestFileSource_ResourceFilter_IncludesOnlyMatchingFiles(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(refsDir, "skip.json"), []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	createRelativeFile(t, skillDir, "docs/readme.md", "Docs.")
 
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ResourceFilter: func(ctx fsskills.FilterContext) bool {
-			return ctx.RelativeFilePath == "references/keep.json"
+	for _, tt := range []struct {
+		name   string
+		filter func(fsskills.FilterContext) bool
+		want   []string
+	}{
+		{
+			name: "exact path",
+			filter: func(ctx fsskills.FilterContext) bool {
+				return ctx.RelativeFilePath == "references/keep.json"
+			},
+			want: []string{"references/keep.json"},
 		},
-	}, os.DirFS(root))
-	loaded, err := source.Skills(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	resources := loaded[0].Resources
-	if len(resources) != 1 {
-		t.Fatalf("expected 1 resource, got %d; resources: %v", len(resources), resources)
-	}
-	if resources[0].Name != "references/keep.json" {
-		t.Fatalf("expected references/keep.json, got %q", resources[0].Name)
+		{
+			name: "exclude directory",
+			filter: func(ctx fsskills.FilterContext) bool {
+				return !strings.HasPrefix(ctx.RelativeFilePath, "docs/")
+			},
+			want: []string{"references/keep.json", "references/skip.json"},
+		},
+		{
+			name:   "include all",
+			filter: func(fsskills.FilterContext) bool { return true },
+			want:   []string{"docs/readme.md", "references/keep.json", "references/skip.json"},
+		},
+		{
+			name:   "exclude all",
+			filter: func(fsskills.FilterContext) bool { return false },
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+				ResourceFilter: func(ctx fsskills.FilterContext) bool {
+					if ctx.SkillName != "filter-skill" {
+						t.Fatalf("filter skill name = %q, want filter-skill", ctx.SkillName)
+					}
+					return tt.filter(ctx)
+				},
+			}, os.DirFS(root))
+			loaded, err := source.Skills(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(loaded) != 1 {
+				t.Fatalf("expected 1 skill, got %d", len(loaded))
+			}
+			resourceNames := make([]string, 0, len(loaded[0].Resources))
+			for _, resource := range loaded[0].Resources {
+				resourceNames = append(resourceNames, resource.Name)
+			}
+			slices.Sort(resourceNames)
+			if !slices.Equal(resourceNames, tt.want) {
+				t.Fatalf("resource names = %v, want %v", resourceNames, tt.want)
+			}
+		})
 	}
 }
 
@@ -912,7 +1010,7 @@ func TestFileSource_NoDuplicateResourcesFromSamePath(t *testing.T) {
 	if err := os.MkdirAll(refsDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(refsDir, "data.json"), []byte("{}"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(refsDir, "data.md"), []byte("{}"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -925,8 +1023,8 @@ func TestFileSource_NoDuplicateResourcesFromSamePath(t *testing.T) {
 	if len(resources) != 1 {
 		t.Fatalf("expected 1 resource, got %d", len(resources))
 	}
-	if resources[0].Name != "references/data.json" {
-		t.Fatalf("expected references/data.json, got %q", resources[0].Name)
+	if resources[0].Name != "references/data.md" {
+		t.Fatalf("expected references/data.md, got %q", resources[0].Name)
 	}
 }
 

@@ -28,7 +28,8 @@ func TestMessage_Clone_ClonesAdditionalProperties(t *testing.T) {
 }
 
 func TestMessage_WithSource_ClonesWhenSourceChanges(t *testing.T) {
-	original := message.NewText("hello")
+	original := message.NewText("Test content")
+	original.Role = message.RoleAssistant
 	original.AdditionalProperties = map[string]any{"k": "v"}
 
 	got := original.WithSource(message.Source{Type: message.SourceType("history-provider"), ID: "history"})
@@ -46,6 +47,18 @@ func TestMessage_WithSource_ClonesWhenSourceChanges(t *testing.T) {
 	}
 	if original.Source != (message.Source{}) {
 		t.Fatalf("expected original source to remain unchanged, got %#v", original.Source)
+	}
+	if got.Role != message.RoleAssistant {
+		t.Fatalf("WithSource role = %q, want assistant", got.Role)
+	}
+	if text := got.String(); text != "Test content" {
+		t.Fatalf("WithSource text = %q, want Test content", text)
+	}
+	if original.Role != message.RoleAssistant {
+		t.Fatalf("original role = %q, want assistant", original.Role)
+	}
+	if text := original.String(); text != "Test content" {
+		t.Fatalf("original text = %q, want Test content", text)
 	}
 }
 

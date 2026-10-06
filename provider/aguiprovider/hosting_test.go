@@ -107,12 +107,23 @@ func TestHandler_InvalidInput_ReturnsBadRequest(t *testing.T) {
 	})
 	h := aguiprovider.NewJSONHTTPHandler(a, aguiprovider.HandlerConfig{})
 
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{not-json"))
-	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, req)
+	for _, tt := range []struct {
+		name string
+		body string
+	}{
+		{name: "malformed", body: "{not-json"},
+		{name: "empty", body: ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(tt.body))
+			req.Header.Set("Content-Type", "application/json; charset=utf-8")
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
 
-	if rr.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want %d", rr.Code, http.StatusBadRequest)
+			}
+		})
 	}
 }
 

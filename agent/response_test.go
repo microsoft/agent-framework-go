@@ -1097,6 +1097,14 @@ func TestResponse_String(t *testing.T) {
 		}
 		return &message.Message{Role: message.RoleAssistant, Contents: contents}
 	}
+	data := func(uri string) *message.DataContent {
+		t.Helper()
+		content, err := message.NewDataContentFromURI(uri, "")
+		if err != nil {
+			t.Fatalf("invalid data content fixture: %v", err)
+		}
+		return content
+	}
 
 	tests := []struct {
 		name     string
@@ -1117,6 +1125,24 @@ func TestResponse_String(t *testing.T) {
 			name:     "multiple text contents stay glued within a message",
 			messages: []*message.Message{msg("a", "b")},
 			want:     "ab",
+		},
+		{
+			name: "mixed content ignores data and function contents",
+			messages: []*message.Message{
+				{
+					Role: message.RoleAssistant,
+					Contents: message.Contents{
+						data("data:image/audio;base64,aGVsbG8="),
+						data("data:image/image;base64,aGVsbG8="),
+						&message.FunctionCallContent{CallID: "callId1", Name: "fc1"},
+						&message.TextContent{Text: "message1-text-1"},
+						&message.TextContent{Text: "message1-text-2"},
+						&message.FunctionResultContent{CallID: "callId1", Result: "result"},
+					},
+				},
+				msg("message2"),
+			},
+			want: "message1-text-1message1-text-2\nmessage2",
 		},
 	}
 

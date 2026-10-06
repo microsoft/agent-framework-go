@@ -326,26 +326,24 @@ func TestNewExecutor_ValueInvokesHandlerWithMessage(t *testing.T) {
 		t.Fatalf("Build: %v", err)
 	}
 
-	run, err := inproc.Default.Run(context.Background(), wf, textMessage{Text: "abc"})
-	if err != nil {
-		t.Fatalf("Run: %v", err)
+	events := runAndCollectEvents(t, wf, textMessage{Text: "abc"})
+	if hasErrorEvents(events) {
+		t.Fatalf("unexpected error events: %#v", events)
 	}
-
-	var out *workflow.OutputEvent
-	for evt := range run.OutgoingEvents() {
-		if e, ok := evt.(workflow.OutputEvent); ok {
-			out = &e
-		}
+	outputs := outputEvents(events)
+	if len(outputs) != 1 {
+		t.Fatalf("output count = %d, want 1; events: %#v", len(outputs), events)
 	}
-	if out == nil {
-		t.Fatal("expected an OutputEvent")
-	}
+	out := outputs[0]
 	got, ok := out.Output.(dataMessage)
 	if !ok {
 		t.Fatalf("OutputEvent.Output type = %T, want dataMessage", out.Output)
 	}
 	if string(got.Bytes) != "abc" {
 		t.Errorf("OutputEvent.Output bytes = %q, want %q", got.Bytes, "abc")
+	}
+	if out.ExecutorID != id {
+		t.Errorf("OutputEvent.ExecutorID = %q, want %q", out.ExecutorID, id)
 	}
 }
 
@@ -562,6 +560,9 @@ func TestWorkflowOutput_AllowsValuesAssignableToDeclaredOutputType(t *testing.T)
 			if !ok {
 				t.Fatalf("OutputEvent.Output = %T, want polymorphicOutput", outputs[0].Output)
 			}
+			if reflect.TypeOf(outputs[0].Output) != reflect.TypeOf(testCase.output) {
+				t.Fatalf("OutputEvent.Output = %T, want %T", outputs[0].Output, testCase.output)
+			}
 			if got.OutputName() != testCase.output.OutputName() {
 				t.Fatalf("OutputName() = %q, want %q", got.OutputName(), testCase.output.OutputName())
 			}
@@ -585,7 +586,7 @@ func TestWorkflowOutput_RejectsValueNotAssignableToDeclaredOutputType(t *testing
 		t.Fatalf("error count = %d, want 1; events: %#v", len(errors), events)
 	}
 	message := errors[0].Error.Error()
-	if !strings.Contains(message, "cannot output object of type") || !strings.Contains(message, "polymorphicOutput") {
+	if !strings.Contains(message, "cannot output object of type") || !strings.Contains(message, "polymorphicOutput") || !strings.Contains(message, "unrelatedOutput") {
 		t.Fatalf("error = %q, want incompatible output type message", message)
 	}
 	if outputs := outputEvents(events); len(outputs) != 0 {
@@ -888,12 +889,22 @@ func TestFunctionExecutor_ReturnValueAutoSendAndYieldOptions(t *testing.T) {
 				t.Fatalf("Build: %v", err)
 			}
 
-			run, err := inproc.Default.Run(context.Background(), wf, textMessage{Text: "abc"})
+			ctx := t.Context()
+			run, err := inproc.Default.Run(ctx, wf, textMessage{Text: "abc"})
 			if err != nil {
 				t.Fatalf("Run: %v", err)
 			}
+			defer func() {
+				if err := run.Close(ctx); err != nil {
+					t.Errorf("Close run: %v", err)
+				}
+			}()
+			events := collectEvents(run.OutgoingEvents())
+			if hasErrorEvents(events) {
+				t.Fatalf("unexpected error events: %#v", events)
+			}
 			var outputs []dataMessage
-			for evt := range run.OutgoingEvents() {
+			for _, evt := range events {
 				if output, ok := evt.(workflow.OutputEvent); ok {
 					value, ok := output.Output.(dataMessage)
 					if !ok {

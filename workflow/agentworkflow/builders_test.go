@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
@@ -130,8 +129,7 @@ func runBuiltWorkflow(t *testing.T, wf *workflow.Workflow) []workflow.Event {
 
 func runBuiltWorkflowWithText(t *testing.T, wf *workflow.Workflow, inputText string) []workflow.Event {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	ctx := t.Context()
 	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
 	if err != nil {
 		t.Fatalf("RunStreaming: %v", err)
@@ -157,6 +155,12 @@ func runBuiltWorkflowWithText(t *testing.T, wf *workflow.Workflow, inputText str
 	for evt, err := range stream.WatchStream(ctx) {
 		if err != nil {
 			t.Fatalf("WatchStream: %v", err)
+		}
+		switch evt := evt.(type) {
+		case workflow.ErrorEvent:
+			t.Fatalf("unexpected workflow error: %v", evt.Error)
+		case workflow.ExecutorFailedEvent:
+			t.Fatalf("unexpected executor failure from %q: %v", evt.ExecutorID, evt.Error)
 		}
 		events = append(events, evt)
 	}

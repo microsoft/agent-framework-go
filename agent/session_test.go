@@ -72,6 +72,20 @@ func TestSessionState_Delete_ExistingKey(t *testing.T) {
 		t.Fatal("expected existing key to be removed")
 	}
 
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatalf("unexpected marshal error after deletion: %v", err)
+	}
+	var payload struct {
+		State map[string]json.RawMessage
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatalf("unexpected unmarshal error after deletion: %v", err)
+	}
+	if payload.State == nil || len(payload.State) != 0 {
+		t.Fatalf("expected empty State object after deletion, got %#v", payload.State)
+	}
+
 	var v string
 	ok, err := session.Get("key1", &v)
 	if err != nil {
@@ -99,12 +113,17 @@ func TestSessionState_Delete_NilSession_ReturnsFalse(t *testing.T) {
 func TestSessionState_Set_DifferentValueTypes(t *testing.T) {
 	session := agenttest.CreateSession()
 	session.Set("string", "hello")
+	session.Set("another-string", "world")
 	session.Set("int", 42)
 	session.Set("bool", true)
 
 	var str string
 	if ok, err := session.Get("string", &str); err != nil || !ok || str != "hello" {
 		t.Fatalf("string value mismatch: ok=%v err=%v value=%v", ok, err, str)
+	}
+	var other string
+	if ok, err := session.Get("another-string", &other); err != nil || !ok || other != "world" {
+		t.Fatalf("second string value mismatch: ok=%v err=%v value=%v", ok, err, other)
 	}
 	var num int
 	if ok, err := session.Get("int", &num); err != nil || !ok || num != 42 {
@@ -122,15 +141,8 @@ func TestSessionState_Set_NilPointerValue_RoundtripsForSameType(t *testing.T) {
 	session.Set("person", p)
 
 	var out *nullablePerson
-	ok, err := session.Get("person", &out)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !ok {
-		t.Fatal("expected key to be found")
-	}
-	if out != nil {
-		t.Fatalf("expected nil pointer, got %#v", out)
+	if ok, err := session.Get("person", &out); err != nil || !ok || out != nil {
+		t.Fatalf("Get = (%#v, %v, %v), want (nil, true, nil)", out, ok, err)
 	}
 }
 
@@ -145,6 +157,9 @@ func TestSessionState_Get_TypeMismatchReturnsError(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatalf("expected no error on type mismatch, got %v", err)
+	}
+	if s != "" {
+		t.Fatalf("mismatched destination = %q, want unchanged empty string", s)
 	}
 }
 
@@ -290,6 +305,9 @@ func TestSessionState_Get_LazyDecodedValueTypeMismatchReturnsError(t *testing.T)
 	}
 	if err != nil {
 		t.Fatalf("expected no error on type mismatch, got %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("mismatched destination = %d, want unchanged zero value", n)
 	}
 }
 

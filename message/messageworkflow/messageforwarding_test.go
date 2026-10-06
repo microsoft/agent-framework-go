@@ -76,14 +76,18 @@ func TestConfigureForwarding_DescribesForwardedTypes(t *testing.T) {
 
 func TestConfigureForwarding_DoesNotForwardStringByDefault(t *testing.T) {
 	executor := newForwardingExecutorForTest(nil)
+	var sent []any
 	ctx := &workflow.Context{
 		Context:     t.Context(),
 		AddEvent:    func(workflow.Event) error { return nil },
-		SendMessage: func(_ string, _ any) error { return nil },
+		SendMessage: func(_ string, msg any) error { sent = append(sent, msg); return nil },
 	}
 
-	if _, err := executor.Execute(ctx, testMessageContent); err == nil {
-		t.Fatal("expected string execution to fail when StringMessageRole is not configured")
+	if _, err := executor.Execute(ctx, testMessageContent); err == nil || err.Error() != "no handler found for message type string" {
+		t.Fatalf("Execute string error = %v, want no handler found for message type string", err)
+	}
+	if len(sent) != 0 {
+		t.Fatalf("sent = %#v, want no messages for unsupported input", sent)
 	}
 }
 
@@ -111,8 +115,8 @@ func TestConfigureForwarding_ForwardsStringIfConfigured(t *testing.T) {
 			}
 
 			if test.wantError {
-				if _, err := executor.Execute(ctx, testMessageContent); err == nil {
-					t.Fatal("expected string execution to fail")
+				if _, err := executor.Execute(ctx, testMessageContent); err == nil || err.Error() != "no handler found for message type string" {
+					t.Fatalf("Execute string error = %v, want no handler found for message type string", err)
 				}
 				return
 			}
@@ -125,11 +129,12 @@ func TestConfigureForwarding_ForwardsStringIfConfigured(t *testing.T) {
 			if !ok {
 				t.Fatalf("sent[0] = %T, want *message.Message", sent[0])
 			}
-			if got.Role != test.role {
-				t.Fatalf("role = %q, want %q", got.Role, test.role)
+			want := &message.Message{
+				Role:     test.role,
+				Contents: message.Contents{&message.TextContent{Text: testMessageContent}},
 			}
-			if len(got.Contents) != 1 || got.Contents[0].(*message.TextContent).Text != testMessageContent {
-				t.Fatalf("contents = %#v, want text %q", got.Contents, testMessageContent)
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("sent message = %#v, want %#v", got, want)
 			}
 		})
 	}
@@ -166,6 +171,9 @@ func TestConfigureForwarding_ForwardsMessageSliceUnmodified(t *testing.T) {
 	if !ok || !slices.Equal(got, testMessages) {
 		t.Fatalf("sent[0] = %#v, want original message slice", sent[0])
 	}
+	if &got[0] != &testMessages[0] {
+		t.Fatal("sent message slice does not share backing storage with input")
+	}
 }
 
 func TestConfigureForwarding_ForwardsMessageSequenceAsSlice(t *testing.T) {
@@ -199,13 +207,20 @@ func TestConfigureForwarding_ForwardsTurnTokenUnmodified(t *testing.T) {
 	for _, emitEvents := range []*bool{nil, new(false), new(true)} {
 		executor := newForwardingExecutorForTest(nil)
 		token := workflow.TurnToken{EmitEvents: emitEvents}
+		wantToken := token
+		if token.EmitEvents != nil {
+			wantToken.EmitEvents = new(*token.EmitEvents)
+		}
 
 		sent := runForwardMessageTest(t, executor, token)
 		if len(sent) != 1 {
 			t.Fatalf("sent count = %d, want 1", len(sent))
 		}
-		if !reflect.DeepEqual(sent[0], token) {
-			t.Fatalf("sent[0] = %#v, want %#v", sent[0], token)
+		if !reflect.DeepEqual(sent[0], wantToken) {
+			t.Fatalf("sent[0] = %#v, want %#v", sent[0], wantToken)
+		}
+		if !reflect.DeepEqual(token, wantToken) {
+			t.Fatalf("caller token = %#v, want %#v", token, wantToken)
 		}
 	}
 }

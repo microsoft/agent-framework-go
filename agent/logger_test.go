@@ -34,11 +34,11 @@ func TestAgent_RunLogs_WhenLoggerConfigured(t *testing.T) {
 		t.Fatal("expected provider run to be called")
 	}
 	output := buf.String()
-	if !strings.Contains(output, "run invoked") {
-		t.Fatalf("expected run invoked log, got: %s", output)
+	if strings.Count(output, `level=DEBUG msg="run invoked"`) != 1 {
+		t.Fatalf("expected exactly one Debug run invoked log, got: %s", output)
 	}
-	if !strings.Contains(output, "run completed") {
-		t.Fatalf("expected run completed log, got: %s", output)
+	if strings.Count(output, `level=DEBUG msg="run completed"`) != 1 {
+		t.Fatalf("expected exactly one Debug run completed log, got: %s", output)
 	}
 	if !strings.Contains(output, "agentID=test-agent") {
 		t.Fatalf("expected agent ID in logs, got: %s", output)
@@ -109,8 +109,8 @@ func TestAgent_RunLogs_LogsErrors(t *testing.T) {
 		t.Fatalf("expected error %v, got %v", expectedErr, runErr)
 	}
 	output := buf.String()
-	if !strings.Contains(output, "run failed") {
-		t.Fatalf("expected run failed log, got: %s", output)
+	if strings.Count(output, `level=ERROR msg="run failed"`) != 1 {
+		t.Fatalf("expected exactly one Error run failed log, got: %s", output)
 	}
 	if !strings.Contains(output, "test error") {
 		t.Fatalf("expected error message in log, got: %s", output)
