@@ -45,6 +45,13 @@
       "go_commit": "ec4a7cadbe82946613eadb97d325f44407da5234",
       "inventory_sha256": "734ff2c4037aa311de95912a256bb7e223ab3fa81a699835a21d27bab90f53ab",
       "scope": "Confirmed that the missing AI-judge, background-task-completion, and todo-completion loop APIs are marked MAAI001 experimental and intentionally omitted from the Go 0.2.0 non-experimental harness scope. Existing mapped and partial Loop assessments were not re-reviewed."
+    },
+    "symbolmap-maintenance-2026-10-06": {
+      "checked_at": "2026-10-06",
+      "dotnet_commit": "0c9944cc9f577d51277ac7c55dbc388b60a577af",
+      "go_commit": "9d61e6947c5881c97b62078b48bfd28669a961f1",
+      "inventory_sha256": "734ff2c4037aa311de95912a256bb7e223ab3fa81a699835a21d27bab90f53ab",
+      "scope": "Reviewed weekly API and patch inputs through Go commit 9d61e6947c5881c97b62078b48bfd28669a961f1. Updated Session.Delete removal-result parity and warning-event mappings implemented by recent Go commits ec4a7cadbe82946613eadb97d325f44407da5234 and fd854e845231509335c43d29dcb9a68b0d988891. Only leaves referencing this review were changed."
     }
   },
   "go_only": {},
@@ -1295,8 +1302,9 @@
           "TryRemoveValue(string)": {
             "go": "session.Delete(\"topic\")",
             "go_symbols": ["agent.Session.Delete"],
-            "status": "partial",
-            "note": "Both remove a key, but Go Delete does not return whether a value existed."
+            "status": "adapted",
+            "note": "Go stores state directly on Session and Delete now returns whether the key existed and was removed. The Go method has no per-call JSON options and does not reject an empty key.",
+            "review": "symbolmap-maintenance-2026-10-06"
           }
         }
       },
@@ -6490,10 +6498,37 @@
         "area": "workflows",
         "assembly": "Microsoft.Agents.AI.Workflows",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "note": "No built-in subworkflow warning event counterpart was located. ErrorEvent.SubWorkflowID identifies errors, not warning events; omission intent is unknown."
+          "go": "workflow.WorkflowWarningEvent{Message: \"warning\", SubWorkflowID: \"child\"}",
+          "go_symbols": [
+            "workflow.WorkflowWarningEvent",
+            "workflow.WorkflowWarningEvent.SubWorkflowID"
+          ],
+          "status": "adapted",
+          "note": "Go represents workflow and subworkflow warnings with one event struct. Setting SubWorkflowID carries the subworkflow identity instead of using a distinct subtype.",
+          "review": "symbolmap-maintenance-2026-10-06"
+        },
+        "constructors": {
+          "SubworkflowWarningEvent(string, string)": {
+            "go": "workflow.WorkflowWarningEvent{Message: \"warning\", SubWorkflowID: \"child\"}",
+            "go_symbols": [
+              "workflow.WorkflowWarningEvent",
+              "workflow.WorkflowWarningEvent.Message",
+              "workflow.WorkflowWarningEvent.SubWorkflowID"
+            ],
+            "status": "adapted",
+            "note": "The constructor becomes a struct literal with the warning message and optional subworkflow ID fields.",
+            "review": "symbolmap-maintenance-2026-10-06"
+          }
+        },
+        "properties": {
+          "SubWorkflowId": {
+            "go_symbols": [
+              "workflow.WorkflowWarningEvent.SubWorkflowID"
+            ],
+            "status": "mapped",
+            "note": "The .NET subtype property maps to the optional SubWorkflowID field on the shared Go warning event.",
+            "review": "symbolmap-maintenance-2026-10-06"
+          }
         }
       },
       "SuperStepCompletedEvent": {
@@ -6980,10 +7015,25 @@
         "area": "workflows",
         "assembly": "Microsoft.Agents.AI.Workflows",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "note": "No built-in warning event counterpart or warning-specific event emission was located. The extensible Go Event interface permits custom events but does not itself provide this warning type; omission intent is unknown."
+          "go": "workflow.WorkflowWarningEvent{Message: \"warning\"}",
+          "go_symbols": [
+            "workflow.WorkflowWarningEvent"
+          ],
+          "status": "mapped",
+          "note": "Warning event container; Data returns Message. Subworkflow warnings use the same Go type with SubWorkflowID populated.",
+          "review": "symbolmap-maintenance-2026-10-06"
+        },
+        "constructors": {
+          "WorkflowWarningEvent(string)": {
+            "go": "workflow.WorkflowWarningEvent{Message: \"warning\"}",
+            "go_symbols": [
+              "workflow.WorkflowWarningEvent",
+              "workflow.WorkflowWarningEvent.Message"
+            ],
+            "status": "mapped",
+            "note": "The primary-constructor message parameter maps to the Message field; Go Data returns that message.",
+            "review": "symbolmap-maintenance-2026-10-06"
+          }
         }
       }
     },
