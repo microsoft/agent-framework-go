@@ -329,6 +329,50 @@ func TestMergePreservesMappingsAndDeclarations(t *testing.T) {
 			t.Fatal("refreshing another package changed the unselected package's declarations or provenance")
 		}
 	})
+	t.Run("owning package refresh updates provenance", func(t *testing.T) {
+		fresh := extraction()
+		pkg := fresh.Packages["Example.Core"]
+		pkg.Version, pkg.SHA256 = "2.0.0", strings.Repeat("e", 64)
+		fresh.Packages["Example.Core"] = pkg
+		assembly := fresh.Assemblies["Core"]
+		assembly.Version, assembly.SHA256 = "2.0.0.0", strings.Repeat("f", 64)
+		fresh.Assemblies["Core"] = assembly
+		refreshed, err := symbolcatalog.Merge(decoded, fresh)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(refreshed.Dotnet.Packages["Example.Core"], pkg) || !reflect.DeepEqual(refreshed.Dotnet.Assemblies["Core"], assembly) {
+			t.Fatal("package and assembly provenance were not refreshed together")
+		}
+		if !reflect.DeepEqual(refreshed.Namespaces, decoded.Namespaces) || !reflect.DeepEqual(refreshed.Tests, decoded.Tests) {
+			t.Fatal("provenance refresh changed declarations, assessments, or test pairs")
+		}
+	})
+	t.Run("unowned local assembly refresh remains supported", func(t *testing.T) {
+		c, err := symbolcatalog.Decode([]byte(legacyCatalog))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fresh := extraction()
+		fresh.Packages = nil
+		local, err := symbolcatalog.Merge(c, fresh)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assembly := fresh.Assemblies["Core"]
+		assembly.Version, assembly.SHA256 = "2.0.0.0", strings.Repeat("f", 64)
+		fresh.Assemblies["Core"] = assembly
+		refreshed, err := symbolcatalog.Merge(local, fresh)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(refreshed.Dotnet.Packages) != 0 || !reflect.DeepEqual(refreshed.Dotnet.Assemblies["Core"], assembly) {
+			t.Fatal("local refresh lost assembly provenance or invented package provenance")
+		}
+		if !reflect.DeepEqual(refreshed.Namespaces, local.Namespaces) || !reflect.DeepEqual(refreshed.Tests, local.Tests) {
+			t.Fatal("local provenance refresh changed declarations, assessments, or test pairs")
+		}
+	})
 }
 
 func TestRefreshRetainsRemovedAssessments(t *testing.T) {
@@ -393,7 +437,11 @@ func TestUpdateFailurePreservesFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, failure := range []string{"scope", "duplicate target", "unknown assembly", "missing API hash", "invalid API hash", "dropped package assembly", "replaced package assembly"} {
+	for _, failure := range []string{
+		"scope", "duplicate target", "unknown assembly", "missing API hash", "invalid API hash",
+		"dropped package assembly", "replaced package assembly",
+		"local package-owned assembly", "foreign package-owned assembly",
+	} {
 		t.Run(failure, func(t *testing.T) {
 			broken := extraction()
 			want := ""
@@ -431,6 +479,15 @@ func TestUpdateFailurePreservesFile(t *testing.T) {
 				}
 				broken.Packages["Example.Core"] = symbolcatalog.Package{Version: "2.0.0", Assemblies: assemblies}
 				want = `package "Example.Core" no longer supplies assembly "Core"`
+			case "local package-owned assembly", "foreign package-owned assembly":
+				assembly := broken.Assemblies["Core"]
+				assembly.Version, assembly.SHA256 = "2.0.0.0", strings.Repeat("f", 64)
+				broken.Assemblies["Core"] = assembly
+				broken.Packages = nil
+				if failure == "foreign package-owned assembly" {
+					broken.Packages = map[string]symbolcatalog.Package{"Example.Other": {Version: "2.0.0", Assemblies: []string{"Core"}}}
+				}
+				want = `assembly "Core" belongs to package "Example.Core"`
 			}
 			if err := symbolcatalog.Update(file, broken); err == nil || want != "" && !strings.Contains(err.Error(), want) {
 				t.Fatalf("invalid refresh error = %v; want rejection containing %q", err, want)

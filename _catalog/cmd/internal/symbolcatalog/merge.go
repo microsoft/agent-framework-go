@@ -19,7 +19,8 @@ import (
 // Removed unreviewed declarations are dropped, but removed assessments are kept
 // with an unavailable marker so reconciliation can report them. Refreshing a
 // recorded package must still supply its previous assemblies; removing or
-// replacing an assembly requires a separately reviewed scope change.
+// replacing an assembly requires a separately reviewed scope change. Refreshing
+// a package-owned assembly also requires all its recorded packages as inputs.
 func Merge(c Catalog, inv Inventory) (Catalog, error) {
 	if inv.catalogLabels != nil {
 		return Catalog{}, fmt.Errorf("catalog reporting projection is not raw extraction")
@@ -57,10 +58,14 @@ func Merge(c Catalog, inv Inventory) (Catalog, error) {
 	if meta.Assemblies == nil {
 		meta.Assemblies = make(map[string]Assembly)
 	}
-	for _, id := range slices.Sorted(maps.Keys(inv.Packages)) {
+	for _, id := range slices.Sorted(maps.Keys(meta.Packages)) {
+		pkg, refreshed := inv.Packages[id]
 		for _, assembly := range meta.Packages[id].Assemblies {
 			_, supplied := inv.Assemblies[assembly]
-			if !supplied || !slices.Contains(inv.Packages[id].Assemblies, assembly) {
+			if supplied && !refreshed {
+				return Catalog{}, fmt.Errorf("assembly %q belongs to package %q; refresh its owning package to preserve provenance", assembly, id)
+			}
+			if refreshed && (!supplied || !slices.Contains(pkg.Assemblies, assembly)) {
 				return Catalog{}, fmt.Errorf("package %q no longer supplies assembly %q; review assembly scope changes before refreshing", id, assembly)
 			}
 		}
