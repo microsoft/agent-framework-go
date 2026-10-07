@@ -240,24 +240,28 @@ func TestCheckpointInfo_JsonRoundtrip(t *testing.T) {
 func TestEdgeInfo_JsonRoundtrip(t *testing.T) {
 	cases := []workflow.EdgeInfo{
 		{
+			Kind:         workflow.EdgeKindDirect,
 			Connection:   workflow.EdgeConnection{SourceIDs: []string{"a"}, SinkIDs: []string{"b"}},
 			Label:        "",
 			HasCondition: false,
 			HasAssigner:  false,
 		},
 		{
+			Kind:         workflow.EdgeKindDirect,
 			Connection:   workflow.EdgeConnection{SourceIDs: []string{"a"}, SinkIDs: []string{"b"}},
 			Label:        "labelled",
 			HasCondition: true,
 			HasAssigner:  false,
 		},
 		{
+			Kind:         workflow.EdgeKindFanOut,
 			Connection:   workflow.EdgeConnection{SourceIDs: []string{"src"}, SinkIDs: []string{"t1", "t2"}},
 			Label:        "",
 			HasCondition: false,
 			HasAssigner:  true,
 		},
 		{
+			Kind:         workflow.EdgeKindFanIn,
 			Connection:   workflow.EdgeConnection{SourceIDs: []string{"s1", "s2"}, SinkIDs: []string{"t"}},
 			Label:        "fanin",
 			HasCondition: false,
@@ -276,6 +280,9 @@ func TestEdgeInfo_JsonRoundtrip(t *testing.T) {
 			}
 			if !got.Connection.Equal(c.Connection) {
 				t.Errorf("Connection mismatch: %+v vs %+v", got.Connection, c.Connection)
+			}
+			if got.Kind != c.Kind {
+				t.Errorf("Kind = %v, want %v", got.Kind, c.Kind)
 			}
 			if got.Label != c.Label {
 				t.Errorf("Label = %q, want %q", got.Label, c.Label)

@@ -39,6 +39,9 @@ func NewCheckpointInfo(sessionID string) CheckpointInfo {
 // serialized, while representing condition and assigner callbacks only by their
 // presence.
 type EdgeInfo struct {
+	// Kind identifies the topology of the edge.
+	Kind EdgeKind
+
 	// Connection describes the edge endpoints and connection shape.
 	Connection EdgeConnection
 
@@ -55,6 +58,7 @@ type EdgeInfo struct {
 // newEdgeInfo creates the reflected edge metadata for edge.
 func newEdgeInfo(edge Edge) EdgeInfo {
 	return EdgeInfo{
+		Kind:         edge.Kind(),
 		Connection:   edge.Connection,
 		Label:        edge.Label,
 		HasCondition: edge.Condition != nil,
@@ -67,7 +71,8 @@ func newEdgeInfo(edge Edge) EdgeInfo {
 // Callback functions are compared by presence only; the function values
 // themselves are not comparable and are not represented in [EdgeInfo].
 func (e *EdgeInfo) Match(other Edge) bool {
-	return e.Connection.Equal(other.Connection) &&
+	return e.Kind == other.Kind() &&
+		e.Connection.Equal(other.Connection) &&
 		e.Label == other.Label &&
 		e.HasCondition == (other.Condition != nil) &&
 		e.HasAssigner == (other.Assigner != nil)

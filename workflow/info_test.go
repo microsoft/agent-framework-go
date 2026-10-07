@@ -81,6 +81,7 @@ func newTestWorkflow(t *testing.T, bindings ...workflow.ExecutorBinding) *workfl
 func runEdgeInfoMatch(t *testing.T, name string, edge, comparator workflow.Edge, expect bool) {
 	t.Helper()
 	info := workflow.EdgeInfo{
+		Kind:         edge.Kind(),
 		Connection:   edge.Connection,
 		Label:        edge.Label,
 		HasCondition: edge.Condition != nil,
