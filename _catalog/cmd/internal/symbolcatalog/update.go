@@ -10,8 +10,9 @@ import (
 	"path/filepath"
 )
 
-// Update merges extraction into an existing regular file. All decoding,
-// merging, encoding, and concurrent-edit checks finish before replacement.
+// Update merges extraction into an existing regular file. The caller must ensure
+// exclusive access to the destination until Update returns. The final content
+// check detects unexpected changes but is not an atomic compare-and-swap.
 func Update(file string, inv Inventory) (err error) {
 	info, err := os.Lstat(file)
 	if err != nil {

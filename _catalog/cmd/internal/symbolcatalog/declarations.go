@@ -72,6 +72,11 @@ func (inv Inventory) Validate() error {
 	if len(inv.Assemblies) == 0 || len(inv.Types) == 0 {
 		return errors.New("inventory assemblies and types must not be empty")
 	}
+	for _, name := range slices.Sorted(maps.Keys(inv.Assemblies)) {
+		if !validHash(inv.Assemblies[name].SHA256) {
+			return fmt.Errorf("inventory %s: API assembly SHA256 is required", name)
+		}
+	}
 	for _, name := range slices.Sorted(maps.Keys(inv.Types)) {
 		typ := inv.Types[name]
 		if _, exists := inv.Assemblies[typ.Assembly]; typ.Assembly == "" || !exists {
@@ -191,9 +196,17 @@ func (c Catalog) Declarations() (Inventory, error) {
 			inv.catalogLabels[owner] = full
 		}
 	}
+	if len(c.Tests) != 0 && meta.Tests == nil {
+		return Inventory{}, errors.New("dotnet.tests: metadata is required for stored tests")
+	}
 	if meta.Tests != nil {
 		if meta.Tests.IdentityFormat != testinventory.IdentityFormat || len(meta.Tests.Assemblies) == 0 {
 			return Inventory{}, errors.New("dotnet.tests requires test-name-v1 and nonempty assemblies")
+		}
+		for _, assembly := range slices.Sorted(maps.Keys(c.Tests)) {
+			if _, present := meta.Tests.Assemblies[assembly]; !present {
+				return Inventory{}, fmt.Errorf("dotnet.tests: metadata is required for test assembly %q", assembly)
+			}
 		}
 		inv.Tests = &testinventory.Inventory{
 			IdentityFormat: meta.Tests.IdentityFormat,

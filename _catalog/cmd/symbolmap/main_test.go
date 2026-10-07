@@ -820,7 +820,7 @@ func TestGoOnlyReconciliation(t *testing.T) {
 	})
 	minimal := `{"schema_version":0,"baseline":` + sampleBaselineJSON + `,"namespaces":{"Example":{"Placeholder":{"area":"agents","assembly":"Core","mapping":{"go":"","go_symbols":[],"status":"unmapped","note":"No counterpart found."}}}}}`
 	entries := `{"agent.OnlyInGo":{"note":"Go helper."},"agent.Missing":{"note":"Removed Go helper."},"provider/other.Extra":{"note":"Go provider helper."}}`
-	inventory := `{"schema_version":1,"identity_format":"ecma335-v1","assemblies":{"Core":{"informational_version":"1.0.0+1111111111111111111111111111111111111111"}},"types":{"Example.Placeholder":{"assembly":"Core","kind":"class"}}}`
+	inventory := sampleAPIInventoryJSON
 	file := writeCatalog(t, catalogWithInventory(t, catalogWithGoOnly(minimal, entries), inventory))
 	args := []string{"reconcile", "-file", file, "-go-root", root}
 	var report reconciliationReport
@@ -1588,7 +1588,7 @@ func expectedMappings() []reportedMapping {
 
 const (
 	validTestMappingJSON           = `"agent.TestCombined"`
-	sampleAPIInventoryJSON         = `{"schema_version":1,"identity_format":"ecma335-v1","assemblies":{"Core":{"informational_version":"1.0.0+1111111111111111111111111111111111111111"}},"types":{"Example.Placeholder":{"assembly":"Core","kind":"class"}}}`
+	sampleAPIInventoryJSON         = `{"schema_version":1,"identity_format":"ecma335-v1","assemblies":{"Core":{"informational_version":"1.0.0+1111111111111111111111111111111111111111","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},"types":{"Example.Placeholder":{"assembly":"Core","kind":"class"}}}`
 	sampleTestAssemblyMetadataJSON = `"commit":"3333333333333333333333333333333333333333","target_framework":".NETCoreApp,Version=v10.0","sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"`
 	sampleTestNestedType           = "Outer`1+Inner`1"
 	sampleTestGenericMethod        = "Generic"
@@ -1974,7 +1974,7 @@ func TestTestInventoryValidation(t *testing.T) {
 			}
 		})
 	}
-	// New test validation must not tighten the old API metadata reader.
+	// Unknown optional API metadata remains compatible.
 	compatible := strings.Replace(inventoryWithTests(sampleTestSectionJSON), `"kind":"class"`, `"kind":"class","future_optional_metadata":true`, 1)
 	inv, err := symbolcatalog.DecodeInventory([]byte(compatible))
 	if err != nil || inv.Tests == nil || inv.Tests.IdentityFormat != "test-name-v1" || len(inv.Types) != 1 {
@@ -1987,6 +1987,7 @@ func TestTestInventoryValidation(t *testing.T) {
 		{"unified test identity", `"identity_format": "test-name-v1"`, `"identity_format": "ecma335-v1"`, "dotnet.tests"},
 		{"unified test commit", strings.Repeat("3", 40), "main", "full source revision"},
 		{"unified test hash", strings.Repeat("b", 64), strings.Repeat("g", 64), "assembly SHA256"},
+		{"unified API hash", `"sha256": "` + strings.Repeat("a", 64) + `",`, `"sha256": "",`, "API assembly SHA256"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if !strings.Contains(data, test.old) {
@@ -1998,6 +1999,31 @@ func TestTestInventoryValidation(t *testing.T) {
 				err := run([]string{command, "-file", file, "-go-root", filepath.Join(t.TempDir(), "not-needed"), "-symbol", "not-present", "-summary"}, &out, &diagnostics)
 				if err == nil || !strings.Contains(err.Error(), test.want) || out.Len() != 0 {
 					t.Fatalf("%s ignored malformed unified test metadata or emitted a partial report: %v, %q", command, err, out.String())
+				}
+			}
+		})
+	}
+	for _, missing := range []string{"test metadata section", "test assembly metadata"} {
+		t.Run(missing, func(t *testing.T) {
+			c, err := symbolcatalog.Decode([]byte(data))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if missing == "test metadata section" {
+				c.Dotnet.Tests = nil
+			} else {
+				delete(c.Dotnet.Tests.Assemblies, "Core.Tests")
+			}
+			encoded, err := json.Marshal(c)
+			if err != nil {
+				t.Fatal(err)
+			}
+			file := writeCatalog(t, string(encoded))
+			for _, command := range []string{"reconcile", "tests"} {
+				var out, diagnostics bytes.Buffer
+				err := run([]string{command, "-file", file, "-go-root", filepath.Join(t.TempDir(), "not-needed"), "-symbol", "not-present", "-summary", "-check"}, &out, &diagnostics)
+				if err == nil || !strings.Contains(err.Error(), "dotnet.tests") || out.Len() != 0 {
+					t.Fatalf("%s failed to reject missing test provenance before indexing: %v, stdout %q", command, err, out.String())
 				}
 			}
 		})
@@ -2334,6 +2360,20 @@ func TestTestReconciliationUsesExactNames(t *testing.T) {
 		{"global namespace", `{"Core.Tests":{"GlobalTests":{"All":` + validTestMappingJSON + `}}}`, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			if test.name == "wrong assembly" {
+				c, err := symbolcatalog.Decode([]byte(catalogWithTests(sampleCatalogJSON, test.entries)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				inv, err := symbolcatalog.DecodeInventory([]byte(inventoryWithTests(sampleTestSectionJSON)))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := symbolcatalog.Merge(c, inv); err == nil || !strings.Contains(err.Error(), `metadata is required for test assembly "core.Tests"`) {
+					t.Fatalf("case-mismatched assembly must fail validation without normalization: %v", err)
+				}
+				return
+			}
 			args := testCommandArgs(t, test.entries, inventoryWithTests(sampleTestSectionJSON))
 			var got testReconciliationReport
 			decodeOutput(t, commandOutput(t, append(args, "-limit=0")...), &got)

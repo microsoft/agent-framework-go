@@ -17,7 +17,9 @@ import (
 // Merge refreshes supplied assemblies without modifying either input. Existing
 // assessments and pairs remain unchanged; extraction never assigns counterparts.
 // Removed unreviewed declarations are dropped, but removed assessments are kept
-// with an unavailable marker so reconciliation can report them.
+// with an unavailable marker so reconciliation can report them. Refreshing a
+// recorded package must still supply its previous assemblies; removing or
+// replacing an assembly requires a separately reviewed scope change.
 func Merge(c Catalog, inv Inventory) (Catalog, error) {
 	if inv.catalogLabels != nil {
 		return Catalog{}, fmt.Errorf("catalog reporting projection is not raw extraction")
@@ -54,6 +56,14 @@ func Merge(c Catalog, inv Inventory) (Catalog, error) {
 	meta.Selection = inv.Selection
 	if meta.Assemblies == nil {
 		meta.Assemblies = make(map[string]Assembly)
+	}
+	for _, id := range slices.Sorted(maps.Keys(inv.Packages)) {
+		for _, assembly := range meta.Packages[id].Assemblies {
+			_, supplied := inv.Assemblies[assembly]
+			if !supplied || !slices.Contains(inv.Packages[id].Assemblies, assembly) {
+				return Catalog{}, fmt.Errorf("package %q no longer supplies assembly %q; review assembly scope changes before refreshing", id, assembly)
+			}
+		}
 	}
 	maps.Copy(meta.Assemblies, inv.Assemblies)
 	if len(inv.Packages) != 0 {

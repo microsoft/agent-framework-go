@@ -27,6 +27,9 @@ func extraction() symbolcatalog.Inventory {
 	return symbolcatalog.Inventory{
 		SchemaVersion: 1, IdentityFormat: "ecma335-v1",
 		Selection: symbolcatalog.Selection{Namespaces: []string{}},
+		Packages: map[string]symbolcatalog.Package{
+			"Example.Core": {Version: "1.0.0", Assemblies: []string{"Core"}},
+		},
 		Assemblies: map[string]symbolcatalog.Assembly{
 			"Core": {Version: "1.0.0.0", SHA256: strings.Repeat("b", 64)},
 		},
@@ -310,6 +313,22 @@ func TestMergePreservesMappingsAndDeclarations(t *testing.T) {
 			t.Fatalf("positional return binding was not idempotent: %v", err)
 		}
 	})
+	t.Run("unrefreshed package remains unchanged", func(t *testing.T) {
+		partial := extraction()
+		partial.Packages = map[string]symbolcatalog.Package{"Example.Other": {Assemblies: []string{"Other"}}}
+		partial.Assemblies = map[string]symbolcatalog.Assembly{"Other": {SHA256: strings.Repeat("e", 64)}}
+		partial.Types = map[string]symbolcatalog.Declaration{"Other.Widget": {Assembly: "Other", Kind: "class"}}
+		partial.Tests = nil
+		refreshed, err := symbolcatalog.Merge(decoded, partial)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(refreshed.Namespaces["Example"], decoded.Namespaces["Example"]) ||
+			!reflect.DeepEqual(refreshed.Dotnet.Packages["Example.Core"], decoded.Dotnet.Packages["Example.Core"]) ||
+			!reflect.DeepEqual(refreshed.Dotnet.Assemblies["Core"], decoded.Dotnet.Assemblies["Core"]) {
+			t.Fatal("refreshing another package changed the unselected package's declarations or provenance")
+		}
+	})
 }
 
 func TestRefreshRetainsRemovedAssessments(t *testing.T) {
@@ -374,9 +393,10 @@ func TestUpdateFailurePreservesFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, failure := range []string{"scope", "duplicate target", "unknown assembly"} {
+	for _, failure := range []string{"scope", "duplicate target", "unknown assembly", "missing API hash", "invalid API hash", "dropped package assembly", "replaced package assembly"} {
 		t.Run(failure, func(t *testing.T) {
 			broken := extraction()
+			want := ""
 			switch failure {
 			case "scope":
 				broken.Selection.IncludeProtected = true
@@ -392,9 +412,28 @@ func TestUpdateFailurePreservesFile(t *testing.T) {
 				broken.IdentityFormat = "unsupported"
 			case "unknown assembly":
 				delete(broken.Assemblies, "Core")
+			case "missing API hash", "invalid API hash":
+				assembly := broken.Assemblies["Core"]
+				assembly.SHA256 = ""
+				if failure == "invalid API hash" {
+					assembly.SHA256 = strings.Repeat("g", 64)
+				}
+				broken.Assemblies["Core"] = assembly
+				want = "API assembly SHA256"
+			case "dropped package assembly", "replaced package assembly":
+				broken.Assemblies = map[string]symbolcatalog.Assembly{"Other": {SHA256: strings.Repeat("e", 64)}}
+				broken.Types = map[string]symbolcatalog.Declaration{"Other.Widget": {Assembly: "Other", Kind: "class"}}
+				assemblies := []string{"Other"}
+				if failure == "replaced package assembly" {
+					broken.Assemblies["Replacement"] = symbolcatalog.Assembly{SHA256: strings.Repeat("f", 64)}
+					broken.Types["Other.Replacement"] = symbolcatalog.Declaration{Assembly: "Replacement", Kind: "class"}
+					assemblies = append(assemblies, "Replacement")
+				}
+				broken.Packages["Example.Core"] = symbolcatalog.Package{Version: "2.0.0", Assemblies: assemblies}
+				want = `package "Example.Core" no longer supplies assembly "Core"`
 			}
-			if err := symbolcatalog.Update(file, broken); err == nil {
-				t.Fatal("invalid refresh succeeded")
+			if err := symbolcatalog.Update(file, broken); err == nil || want != "" && !strings.Contains(err.Error(), want) {
+				t.Fatalf("invalid refresh error = %v; want rejection containing %q", err, want)
 			}
 			after, err := os.ReadFile(file)
 			if err != nil || !bytes.Equal(before, after) {

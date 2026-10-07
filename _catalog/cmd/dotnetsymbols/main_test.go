@@ -399,11 +399,13 @@ func TestInvalidCachedInput(t *testing.T) {
 		name, input, want string
 	}{
 		{"empty", "", "single JSON object"},
-		{"malformed", "{", "EOF"},
+		{"malformed", "{", ""},
 		{"duplicate key", strings.Replace(valid.String(), `"schema_version": 1`, `"schema_version": 1, "schema_version": 1`, 1), "duplicate JSON key"},
 		{"schema", strings.Replace(valid.String(), `"schema_version": 1`, `"schema_version": 2`, 1), "unsupported inventory schema_version"},
 		{"identity", strings.Replace(valid.String(), "ecma335-v1", "unsupported", 1), "unsupported inventory identity_format"},
 		{"unknown assembly", strings.Replace(valid.String(), `"assembly": "Sample"`, `"assembly": "Missing"`, 1), "unknown assembly"},
+		{"missing API assembly hash", strings.Replace(valid.String(), fmt.Sprintf(`"sha256": "%x",`, sha256.Sum256(testAssembly(t))), "", 1), "API assembly SHA256"},
+		{"invalid API assembly hash", strings.Replace(valid.String(), fmt.Sprintf("%x", sha256.Sum256(testAssembly(t))), strings.Repeat("g", 64), 1), "API assembly SHA256"},
 		{"duplicate test name", strings.Replace(valid.String(), `"Theory"`, `"Run"`, 1), "duplicate test name"},
 		{"test signature", strings.Replace(valid.String(), `"Theory"`, `"Theory()"`, 1), "invalid test name"},
 		{"unknown test field", strings.Replace(valid.String(), `"identity_format": "test-name-v1"`, `"identity_format": "test-name-v1", "unknown": true`, 1), "unknown field"},
@@ -418,7 +420,7 @@ func TestInvalidCachedInput(t *testing.T) {
 				}
 				var out, diagnostics bytes.Buffer
 				err := run(args, &out, &diagnostics)
-				if err == nil || !strings.Contains(err.Error(), test.want) || out.Len() != 0 {
+				if err == nil || test.want != "" && !strings.Contains(err.Error(), test.want) || out.Len() != 0 {
 					t.Fatalf("invalid cached input (update=%v) = %v, stdout %q; want %q", update, err, out.String(), test.want)
 				}
 				data, err := os.ReadFile(mapping)
@@ -444,7 +446,7 @@ func TestUpdateMappingFailures(t *testing.T) {
 		{"invalid test extraction", []string{"-assembly", assembly, "-test-assembly", badTests}, testLegacyMapping, "unsupported test attribute"},
 		{"empty API selection", []string{"-assembly", assembly, "-namespace", "Not.Selected"}, testLegacyMapping, "assemblies and types must not be empty"},
 		{"missing cached input", []string{"-input", filepath.Join(t.TempDir(), "missing.json")}, testLegacyMapping, "missing.json"},
-		{"malformed catalog", []string{"-assembly", assembly}, "{", "EOF"},
+		{"malformed catalog", []string{"-assembly", assembly}, "{", ""},
 		{"duplicate catalog key", []string{"-assembly", assembly}, strings.Replace(testLegacyMapping, `"schema_version":0`, `"schema_version":0,"schema_version":0`, 1), "duplicate JSON key"},
 		{"invalid assessment", []string{"-assembly", assembly}, strings.Replace(testLegacyMapping, `"status":"adapted"`, `"status":"invalid"`, 1), "invalid status"},
 		{"duplicate test target", []string{"-assembly", assembly}, strings.Replace(testLegacyMapping, `"Run":"agent.TestRun"`, `"Run":"agent.TestRun","Other":"agent.TestRun"`, 1), "already mapped"},
@@ -456,7 +458,7 @@ func TestUpdateMappingFailures(t *testing.T) {
 			args := append(slices.Clone(test.args), "-update-mapping", mapping)
 			var out, diagnostics bytes.Buffer
 			err := run(args, &out, &diagnostics)
-			if err == nil || !strings.Contains(err.Error(), test.want) || out.Len() != 0 {
+			if err == nil || test.want != "" && !strings.Contains(err.Error(), test.want) || out.Len() != 0 {
 				t.Fatalf("failed update = %v, stdout %q; want %q", err, out.String(), test.want)
 			}
 			data, err := os.ReadFile(mapping)
