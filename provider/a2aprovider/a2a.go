@@ -71,10 +71,9 @@ func NewAgent(aclient *a2aclient.Client, config AgentConfig) *agent.Agent {
 
 func (a *a2aProvider) createSession(ctx context.Context, session *agent.Session, options ...agent.Option) error {
 	contextID := session.ServiceID()
-	if contextID == "" {
-		contextID, _ = agent.GetOption(options, agent.WithServiceID)
-	}
-	if contextID != "" && strings.TrimSpace(contextID) == "" {
+	optionContextID, hasContextID := agent.GetOption(options, agent.WithServiceID)
+	contextID = cmp.Or(contextID, optionContextID)
+	if (hasContextID || contextID != "") && strings.TrimSpace(contextID) == "" {
 		return errors.New("a2aprovider: context ID cannot be blank")
 	}
 	taskID, hasTaskID := agent.GetOption(options, WithTaskID)
@@ -121,36 +120,11 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 		if len(messages) == 0 {
 			return
 		}
-		// Collect the parts of every input message into a single A2A message so the
-		// run issues exactly one request, matching the framework's one-run/one-request
-		// contract (and the .NET/Python A2A providers, which map a run's messages to a
-		// single A2A Message). Issuing one request per message would also cross-link the
-		// later messages to the task created by the first via ReferenceTasks/TaskID.
-		var parts a2a.ContentParts
-		var msgID string
-		var metadata map[string]any
-		for _, msg := range messages {
-			var err error
-			parts, err = contentsToParts(msg.Contents, parts)
-			if err != nil {
-				yield(nil, err)
-				return
-			}
-			if msg.ID != "" {
-				msgID = msg.ID
-			}
-			if len(msg.AdditionalProperties) > 0 {
-				if metadata == nil {
-					metadata = make(map[string]any, len(msg.AdditionalProperties))
-				}
-				maps.Copy(metadata, msg.AdditionalProperties)
-			}
+		userMsg, err := messagesToA2AMessage(session, messages)
+		if err != nil {
+			yield(nil, err)
+			return
 		}
-		// Build a single combined message from the collected parts, ID and metadata,
-		// then reuse createA2AMessage for the ContextID/task-linking logic so the run
-		// issues exactly one request.
-		combined := &message.Message{ID: msgID, AdditionalProperties: metadata}
-		userMsg := createA2AMessage(session, combined, parts)
 		userMsg.ContextID = contextID
 
 		params := &a2a.SendMessageRequest{Message: userMsg}
@@ -161,9 +135,8 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 		if stream {
 			seq = a.client.SendStreamingMessage(ctx, params)
 		} else {
-			if allowBackground, _ := agent.GetOption(options, agent.AllowBackgroundResponses); allowBackground {
-				params.Config = &a2a.SendMessageConfig{ReturnImmediately: true}
-			}
+			allowBackground, _ := agent.GetOption(options, agent.AllowBackgroundResponses)
+			params.Config = &a2a.SendMessageConfig{ReturnImmediately: allowBackground}
 			resp, err := a.client.SendMessage(ctx, params)
 			seq = func(yield func(a2a.Event, error) bool) {
 				yield(resp, err)
@@ -171,6 +144,32 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 		}
 		sendMsg(session, contextID, seq, stream, yield)
 	}
+}
+
+// messagesToA2AMessage combines a run's messages into one request, preserving
+// content order, the last nonempty message ID, and merged message metadata.
+func messagesToA2AMessage(session *agent.Session, messages []*message.Message) (*a2a.Message, error) {
+	var parts a2a.ContentParts
+	var msgID string
+	var metadata map[string]any
+	for _, msg := range messages {
+		var err error
+		parts, err = contentsToParts(msg.Contents, parts)
+		if err != nil {
+			return nil, err
+		}
+		if msg.ID != "" {
+			msgID = msg.ID
+		}
+		if len(msg.AdditionalProperties) > 0 {
+			if metadata == nil {
+				metadata = make(map[string]any, len(msg.AdditionalProperties))
+			}
+			maps.Copy(metadata, msg.AdditionalProperties)
+		}
+	}
+	combined := &message.Message{ID: msgID, AdditionalProperties: metadata}
+	return createA2AMessage(session, combined, parts), nil
 }
 
 func createA2AMessage(session *agent.Session, msg *message.Message, parts a2a.ContentParts) *a2a.Message {
@@ -253,6 +252,13 @@ func sendMsg(session *agent.Session, contextID string, seq iter.Seq2[a2a.Event, 
 			}
 			return yield(update, err)
 		}
+		if msg, ok := e.(*a2a.Message); ok && !stream {
+			// Keep response metadata separate from message-scoped metadata when
+			// the non-streaming response is assembled from updates.
+			if len(msg.Metadata) > 0 && !forward(&agent.ResponseUpdate{AdditionalProperties: cloneMetadata(msg.Metadata)}, nil) {
+				return
+			}
+		}
 		switch evt := e.(type) {
 		case *a2a.Task:
 			taskID = string(evt.ID)
@@ -272,20 +278,14 @@ func sendMsg(session *agent.Session, contextID string, seq iter.Seq2[a2a.Event, 
 				return
 			}
 		case *a2a.TaskStatusUpdateEvent:
-			var (
-				messageID string
-				contents  []message.Content
-			)
+			var messageID string
 			if e.Status.Message != nil {
 				messageID = e.Status.Message.ID
-				if e.Status.State == a2a.TaskStateInputRequired {
-					var err error
-					contents, err = partsToContents(e.Status.Message.Parts, nil)
-					if err != nil {
-						yield(nil, err)
-						return
-					}
-				}
+			}
+			contents, err := statusInputContents(&e.Status)
+			if err != nil {
+				yield(nil, err)
+				return
 			}
 			update := newResponseUpdate(e, e.Metadata, string(e.TaskID), messageID, message.RoleAssistant, contents)
 			update.FinishReason = finishReasonForTaskState(e.Status.State)
@@ -336,28 +336,11 @@ func newResponseUpdate(raw any, additionalProperties map[string]any, responseID,
 	}
 }
 
-// mergeMetadata combines a base metadata map with additional maps into a new
-// map, cloning so the inputs are never mutated. Keys from later maps take
-// precedence over earlier ones. It returns nil when every source is empty, so a
-// task with no metadata yields no metadata map rather than an empty one.
-func mergeMetadata(base map[string]any, extra ...map[string]any) map[string]any {
-	var merged map[string]any
-	if len(base) > 0 {
-		merged = maps.Clone(base)
-	}
-	for _, m := range extra {
-		if len(m) == 0 {
-			continue
-		}
-		if merged == nil {
-			merged = make(map[string]any, len(m))
-		}
-		maps.Copy(merged, m)
-	}
-	return merged
-}
-
 func yieldTask(yield func(*agent.ResponseUpdate, error) bool, task *a2a.Task, splitArtifacts bool) bool {
+	if task == nil {
+		yield(nil, errors.New("a2aprovider: task cannot be nil"))
+		return false
+	}
 	var continuationToken string
 	switch task.Status.State {
 	case a2a.TaskStateSubmitted, a2a.TaskStateWorking:
@@ -365,66 +348,39 @@ func yieldTask(yield func(*agent.ResponseUpdate, error) bool, task *a2a.Task, sp
 	}
 	finishReason := finishReasonForTaskState(task.Status.State)
 	if splitArtifacts {
-		var yielded bool
-		for _, artifact := range task.Artifacts {
-			contents, err := partsToContents(artifact.Parts, nil)
-			if err != nil {
-				yield(nil, err)
-				return false
-			}
-			update := newResponseUpdate(artifact, mergeMetadata(task.Metadata, artifact.Metadata), string(task.ID), string(artifact.ID), message.RoleAssistant, contents)
+		messages, err := taskToMessages(task)
+		if err != nil {
+			yield(nil, err)
+			return false
+		}
+		for _, msg := range messages {
+			update := newResponseUpdate(msg.RawRepresentation, msg.AdditionalProperties, string(task.ID), msg.ID, msg.Role, msg.Contents)
 			update.ContinuationToken = continuationToken
 			update.FinishReason = finishReason
-			yielded = true
 			if !yield(update, nil) {
 				return false
 			}
 		}
-		if task.Status.Message != nil && task.Status.State == a2a.TaskStateInputRequired {
-			contents, err := partsToContents(task.Status.Message.Parts, nil)
-			if err != nil {
-				yield(nil, err)
-				return false
-			}
-			update := newResponseUpdate(task.Status, nil, string(task.ID), task.Status.Message.ID, message.RoleAssistant, contents)
-			update.ContinuationToken = continuationToken
-			update.FinishReason = finishReason
-			yielded = true
-			if !yield(update, nil) {
-				return false
-			}
-		}
-		if yielded {
+		var raw any
+		if len(messages) == 0 {
+			raw = task
+		} else if len(task.Metadata) == 0 {
 			return true
 		}
-		update := newResponseUpdate(task, cloneMetadata(task.Metadata), string(task.ID), "", "", nil)
+		update := newResponseUpdate(raw, cloneMetadata(task.Metadata), string(task.ID), "", "", nil)
 		update.ContinuationToken = continuationToken
 		update.FinishReason = finishReason
 		return yield(update, nil)
 	}
 
-	var contents []message.Content
+	contents, err := taskToContents(task)
+	if err != nil {
+		yield(nil, err)
+		return false
+	}
 	messageID := ""
 	if task.Status.Message != nil {
 		messageID = task.Status.Message.ID
-		// Mirror the streaming TaskStatusUpdateEvent path: surface the status
-		// message when it carries an input-required follow-up question.
-		if task.Status.State == a2a.TaskStateInputRequired {
-			var err error
-			contents, err = partsToContents(task.Status.Message.Parts, contents)
-			if err != nil {
-				yield(nil, err)
-				return false
-			}
-		}
-	}
-	for _, artifact := range task.Artifacts {
-		var err error
-		contents, err = partsToContents(artifact.Parts, contents)
-		if err != nil {
-			yield(nil, err)
-			return false
-		}
 	}
 	update := newResponseUpdate(task, cloneMetadata(task.Metadata), string(task.ID), messageID, message.RoleAssistant, contents)
 	update.ContinuationToken = continuationToken
@@ -550,11 +506,7 @@ func contentsToParts(contents []message.Content, parts a2a.ContentParts) (a2a.Co
 			}
 			part = a2a.NewTextPart(string(data))
 		default:
-			data, err := json.Marshal(c)
-			if err != nil {
-				return nil, fmt.Errorf("unsupported content type: %T", c)
-			}
-			part = a2a.NewTextPart(string(data))
+			continue
 		}
 		if part != nil {
 			part.Metadata = cloneMetadata(content.Header().AdditionalProperties)

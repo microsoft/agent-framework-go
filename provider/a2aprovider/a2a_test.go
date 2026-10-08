@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,6 +37,7 @@ type mockA2ATransport struct {
 	getTaskCalled              bool
 	sendMessageCallCount       int
 	sendStreamingCallCount     int
+	requestMethods             []string
 	// rawStreamingResponse yields streamingResponseToReturn verbatim, without
 	// backfilling an empty ContextID from the request. It lets tests exercise
 	// bare streamed messages that carry no context ID.
@@ -42,6 +45,7 @@ type mockA2ATransport struct {
 }
 
 func (m *mockA2ATransport) SendMessage(ctx context.Context, _ a2aclient.ServiceParams, params *a2a.SendMessageRequest) (a2a.SendMessageResult, error) {
+	m.requestMethods = append(m.requestMethods, "SendMessage")
 	m.sendMessageCalled = true
 	m.sendMessageCallCount++
 	m.capturedMessageSendParams = params
@@ -57,6 +61,7 @@ func (m *mockA2ATransport) SendMessage(ctx context.Context, _ a2aclient.ServiceP
 }
 
 func (m *mockA2ATransport) SendStreamingMessage(ctx context.Context, _ a2aclient.ServiceParams, params *a2a.SendMessageRequest) iter.Seq2[a2a.Event, error] {
+	m.requestMethods = append(m.requestMethods, "SendStreamingMessage")
 	m.sendStreamingMessageCalled = true
 	m.sendStreamingCallCount++
 	m.capturedMessageSendParams = params
@@ -140,6 +145,7 @@ func (m *mockA2ATransport) SendStreamingMessage(ctx context.Context, _ a2aclient
 }
 
 func (m *mockA2ATransport) GetTask(ctx context.Context, _ a2aclient.ServiceParams, params *a2a.GetTaskRequest) (*a2a.Task, error) {
+	m.requestMethods = append(m.requestMethods, "GetTask")
 	m.getTaskCalled = true
 	m.capturedGetTaskReq = params
 	if m.getTaskErrToReturn != nil {
@@ -162,6 +168,7 @@ func (m *mockA2ATransport) CancelTask(ctx context.Context, _ a2aclient.ServicePa
 }
 
 func (m *mockA2ATransport) SubscribeToTask(ctx context.Context, _ a2aclient.ServiceParams, params *a2a.SubscribeToTaskRequest) iter.Seq2[a2a.Event, error] {
+	m.requestMethods = append(m.requestMethods, "SubscribeToTask")
 	m.subscribeToTaskCalled = true
 	m.capturedSubscribeToTaskReq = params
 	return func(yield func(a2a.Event, error) bool) {
@@ -591,8 +598,8 @@ func TestRunAllowBackgroundResponsesSetsReturnImmediately(t *testing.T) {
 		if transport.capturedMessageSendParams == nil {
 			t.Fatal("capturedMessageSendParams is nil")
 		}
-		if cfg := transport.capturedMessageSendParams.Config; cfg != nil {
-			t.Errorf("Config = %+v, want nil to preserve the default wire request", cfg)
+		if cfg := transport.capturedMessageSendParams.Config; cfg == nil || cfg.ReturnImmediately {
+			t.Errorf("Config = %+v, want blocking configuration", cfg)
 		}
 	})
 }
@@ -1537,41 +1544,6 @@ func TestRunWithAgentTaskResponse(t *testing.T) {
 	}
 }
 
-// TestRunWithInputRequiredTaskMessage verifies that a non-streaming Task response
-// in an InputRequired state surfaces the text carried in Status.Message (when the
-// task has no artifacts), matching the streaming TaskStatusUpdateEvent path.
-func TestRunWithInputRequiredTaskMessage(t *testing.T) {
-	const question = "What color should the background be?"
-	transport := &mockA2ATransport{
-		responseToReturn: &a2a.Task{
-			ID:        a2a.TaskID("task-1"),
-			ContextID: "context-1",
-			Status: a2a.TaskStatus{
-				State: a2a.TaskStateInputRequired,
-				Message: &a2a.Message{
-					ID:    "msg-1",
-					Role:  a2a.MessageRoleAgent,
-					Parts: a2a.ContentParts{a2a.NewTextPart(question)},
-				},
-			},
-		},
-	}
-	a := newTestAgent(transport, agent.Config{})
-
-	session, err := a.CreateSession(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := a.RunText(t.Context(), "make the background transparent", agent.WithSession(session)).Collect()
-	if err != nil {
-		t.Fatalf("error = %v, want nil", err)
-	}
-	if got := result.String(); got != question {
-		t.Errorf("response text = %q, want %q", got, question)
-	}
-}
-
 // TestRunWithVariousTaskStates tests continuation token behavior for different task states
 func TestRunWithVariousTaskStates(t *testing.T) {
 	tests := []struct {
@@ -1630,39 +1602,6 @@ func TestRunWithVariousTaskStates(t *testing.T) {
 				})
 			}
 		})
-	}
-}
-
-func TestRunWithTaskPreservesArtifactMessageBoundaries(t *testing.T) {
-	transport := &mockA2ATransport{responseToReturn: &a2a.Task{
-		ID:        "task-1",
-		ContextID: "context-1",
-		Status:    a2a.TaskStatus{State: a2a.TaskStateCompleted},
-		Metadata:  map[string]any{"task": "metadata"},
-		Artifacts: []*a2a.Artifact{
-			{ID: "artifact-1", Metadata: map[string]any{"kind": "first"}, Parts: a2a.ContentParts{a2a.NewTextPart("one")}},
-			{ID: "artifact-2", Metadata: map[string]any{"kind": "second"}, Parts: a2a.ContentParts{a2a.NewTextPart("two")}},
-		},
-	}}
-	a := newTestAgent(transport, agent.Config{})
-
-	response, err := a.RunText(t.Context(), "start").Collect()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(response.Messages) != 2 {
-		t.Fatalf("message count = %d, want 2", len(response.Messages))
-	}
-	for i, want := range []struct {
-		id, text, kind string
-	}{{"artifact-1", "one", "first"}, {"artifact-2", "two", "second"}} {
-		msg := response.Messages[i]
-		if msg.ID != want.id || msg.String() != want.text || msg.AdditionalProperties["kind"] != want.kind {
-			t.Errorf("message %d = id:%q text:%q metadata:%v", i, msg.ID, msg.String(), msg.AdditionalProperties)
-		}
-		if msg.AdditionalProperties["task"] != "metadata" {
-			t.Errorf("message %d lost task metadata", i)
-		}
 	}
 }
 
@@ -1749,6 +1688,9 @@ func TestRunStreamingWithContinuationToken_UsesSubscribeToTask(t *testing.T) {
 	if transport.sendStreamingMessageCalled {
 		t.Fatal("SendStreamingMessage was called, want SubscribeToTask only")
 	}
+	if !slices.Equal(transport.requestMethods, []string{"SubscribeToTask"}) {
+		t.Errorf("request methods = %v, want [SubscribeToTask]", transport.requestMethods)
+	}
 	if got := updates[0].String(); got != "Continuation response" {
 		t.Errorf("update.String() = %q, want %q", got, "Continuation response")
 	}
@@ -1833,6 +1775,9 @@ func TestRunStreamingWithContinuationTokenWhenSubscribeFailsWithUnsupportedOpera
 	if !transport.getTaskCalled {
 		t.Fatal("GetTask was not called after SubscribeToTask fallback")
 	}
+	if !slices.Equal(transport.requestMethods, []string{"SubscribeToTask", "GetTask"}) {
+		t.Errorf("request methods = %v, want [SubscribeToTask GetTask]", transport.requestMethods)
+	}
 }
 
 func TestRunStreamingWithContinuationTokenWhenSubscribeFailsWithUnsupportedOperationUpdatesSession(t *testing.T) {
@@ -1911,6 +1856,9 @@ func TestRunStreamingWithContinuationTokenWhenSubscribeFailsWithNonUnsupportedEr
 			if transport.getTaskCalled {
 				t.Fatal("GetTask was called, want no fallback for non-unsupported errors")
 			}
+			if !slices.Equal(transport.requestMethods, []string{"SubscribeToTask"}) {
+				t.Errorf("request methods = %v, want [SubscribeToTask]", transport.requestMethods)
+			}
 			if transport.capturedSubscribeToTaskReq == nil || transport.capturedSubscribeToTaskReq.ID != "error-task-123" {
 				t.Errorf("subscription request = %#v, want error-task-123", transport.capturedSubscribeToTaskReq)
 			}
@@ -1949,6 +1897,9 @@ func TestRunStreamingWithContinuationTokenWhenSubscribeAndGetTaskBothFailPropaga
 	}
 	if transport.capturedGetTaskReq == nil || transport.capturedGetTaskReq.ID != "failed-task-789" {
 		t.Errorf("poll request = %#v, want failed-task-789", transport.capturedGetTaskReq)
+	}
+	if !slices.Equal(transport.requestMethods, []string{"SubscribeToTask", "GetTask"}) {
+		t.Errorf("request methods = %v, want [SubscribeToTask GetTask]", transport.requestMethods)
 	}
 }
 
@@ -2360,15 +2311,21 @@ func TestRunWithAgentTaskResponse_SurfacesArtifactMetadata(t *testing.T) {
 		updates = append(updates, update)
 	}
 
-	if len(updates) != 1 {
-		t.Fatalf("len(updates) = %d, want 1", len(updates))
+	if len(updates) != 2 {
+		t.Fatalf("len(updates) = %d, want artifact and response updates", len(updates))
 	}
 	props := updates[0].AdditionalProperties
 	if got, ok := props["ext"]; !ok || got != "v" {
 		t.Errorf("AdditionalProperties[ext] = %v (ok=%v), want %q", got, ok, "v")
 	}
-	if got, ok := props["task-key"]; !ok || got != "task-value" {
-		t.Errorf("AdditionalProperties[task-key] = %v (ok=%v), want %q", got, ok, "task-value")
+	if _, ok := props["task-key"]; ok {
+		t.Error("artifact update contains task metadata")
+	}
+	if updates[0].MessageID != "art-1" || updates[1].MessageID != "" || updates[1].AdditionalProperties["task-key"] != "task-value" {
+		t.Error("artifact identity or response-scoped task metadata was lost")
+	}
+	if updates[1].RawRepresentation != nil {
+		t.Errorf("response metadata update raw = %T, want nil", updates[1].RawRepresentation)
 	}
 }
 
@@ -2404,10 +2361,12 @@ func TestRunWithAgentTaskResponse_NoMetadataYieldsNilProperties(t *testing.T) {
 	}
 
 	if len(updates) != 1 {
-		t.Fatalf("len(updates) = %d, want 1", len(updates))
+		t.Fatalf("len(updates) = %d, want one artifact update", len(updates))
 	}
-	if props := updates[0].AdditionalProperties; props != nil {
-		t.Errorf("AdditionalProperties = %v, want nil", props)
+	for _, update := range updates {
+		if props := update.AdditionalProperties; props != nil {
+			t.Errorf("AdditionalProperties = %v, want nil", props)
+		}
 	}
 }
 
@@ -2515,5 +2474,530 @@ func TestRunStreamingWithTaskArtifactUpdateEvent(t *testing.T) {
 	}
 	if got := latestTaskID(session); got != taskID {
 		t.Errorf("session.TaskID = %q, want %q", got, taskID)
+	}
+}
+
+func TestConstructorWithAllProperties(t *testing.T) {
+	a := newTestAgent(&mockA2ATransport{}, agent.Config{
+		ID: "test-id", Name: "test-name", Description: "test-description",
+	})
+	if a.ID() != "test-id" || a.Name() != "test-name" || a.Description() != "test-description" {
+		t.Errorf("agent properties = %q, %q, %q", a.ID(), a.Name(), a.Description())
+	}
+}
+
+func TestConstructorWithDefaultProperties(t *testing.T) {
+	a := newTestAgent(&mockA2ATransport{}, agent.Config{})
+	if a.ID() == "" {
+		t.Error("agent ID is empty")
+	}
+	if a.Name() != "" || a.Description() != "" {
+		t.Errorf("name and description = %q, %q, want empty", a.Name(), a.Description())
+	}
+}
+
+func TestConstructorWithEmptyConfig(t *testing.T) {
+	config := agent.Config{}
+	a := newTestAgent(&mockA2ATransport{}, config)
+	if a.ID() == "" {
+		t.Error("agent ID is empty")
+	}
+	if a.Name() != "" || a.Description() != "" {
+		t.Errorf("name and description = %q, %q, want empty", a.Name(), a.Description())
+	}
+}
+
+func TestConstructorWithConfigProperties(t *testing.T) {
+	config := agent.Config{
+		ID: "options-id", Name: "options-name", Description: "options-description",
+	}
+	a := newTestAgent(&mockA2ATransport{}, config)
+	if a.ID() != "options-id" || a.Name() != "options-name" || a.Description() != "options-description" {
+		t.Errorf("agent properties = %q, %q, %q", a.ID(), a.Name(), a.Description())
+	}
+}
+
+func TestConstructorIsolatesConfigMutation(t *testing.T) {
+	config := agent.Config{
+		ID: "original-id", Name: "Original Name", Description: "Original Description",
+	}
+	a := newTestAgent(&mockA2ATransport{}, config)
+	config.ID = "mutated-id"
+	config.Name = "Mutated Name"
+	config.Description = "Mutated Description"
+	if a.ID() != "original-id" || a.Name() != "Original Name" || a.Description() != "Original Description" {
+		t.Errorf("agent properties after config mutation = %q, %q, %q", a.ID(), a.Name(), a.Description())
+	}
+}
+
+func TestConstructorWithConfigRejectsNilClient(t *testing.T) {
+	config := a2a1.AgentConfig{}
+	defer func() {
+		if recover() == nil {
+			t.Error("NewAgent with nil client did not panic")
+		}
+	}()
+	a2a1.NewAgent(nil, config)
+}
+
+func TestCreateSessionWithContextID(t *testing.T) {
+	a := newTestAgent(&mockA2ATransport{}, agent.Config{})
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("test-context-123"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session == nil {
+		t.Fatal("session is nil")
+	}
+	if session.ServiceID() != "test-context-123" || latestTaskID(session) != "" {
+		t.Errorf("session IDs = %q, %q, want test-context-123 and empty task ID", session.ServiceID(), latestTaskID(session))
+	}
+}
+
+func TestCreateSessionWithContextAndTaskIDs(t *testing.T) {
+	a := newTestAgent(&mockA2ATransport{}, agent.Config{})
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("test-context-456"), a2a1.WithTaskID("test-task-789"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session == nil {
+		t.Fatal("session is nil")
+	}
+	if session.ServiceID() != "test-context-456" || latestTaskID(session) != "test-task-789" {
+		t.Errorf("session IDs = %q, %q, want test-context-456 and test-task-789", session.ServiceID(), latestTaskID(session))
+	}
+}
+
+func TestCreateSessionRejectsInvalidContextID(t *testing.T) {
+	a := newTestAgent(&mockA2ATransport{}, agent.Config{})
+	for _, test := range []struct{ name, id string }{
+		{"null", ""}, {"empty", ""}, {"space", " "}, {"tab", "\t"}, {"newline", "\r\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := a.CreateSession(t.Context(), agent.WithServiceID(test.id)); err == nil {
+				t.Errorf("CreateSession with context ID %q succeeded, want error", test.id)
+			}
+		})
+	}
+}
+
+func TestCreateSessionRejectsInvalidContextIDWithTaskID(t *testing.T) {
+	a := newTestAgent(&mockA2ATransport{}, agent.Config{})
+	for _, test := range []struct{ name, id string }{
+		{"null", ""}, {"empty", ""}, {"space", " "}, {"tab", "\t"}, {"newline", "\r\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := a.CreateSession(t.Context(), agent.WithServiceID(test.id), a2a1.WithTaskID("valid-task-id")); err == nil {
+				t.Errorf("CreateSession with context ID %q and valid task ID succeeded, want error", test.id)
+			}
+		})
+	}
+}
+
+func TestCreateSessionRejectsInvalidTaskIDWithContextID(t *testing.T) {
+	a := newTestAgent(&mockA2ATransport{}, agent.Config{})
+	for _, test := range []struct{ name, id string }{
+		{"null", ""}, {"empty", ""}, {"space", " "}, {"tab", "\t"}, {"newline", "\r\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := a.CreateSession(t.Context(), agent.WithServiceID("valid-context-id"), a2a1.WithTaskID(test.id)); err == nil {
+				t.Errorf("CreateSession with valid context ID and task ID %q succeeded, want error", test.id)
+			}
+		})
+	}
+}
+
+func TestRunWithMessageResponseMetadata(t *testing.T) {
+	transport := &mockA2ATransport{responseToReturn: &a2a.Message{
+		ID: "response-123", Role: a2a.MessageRoleAgent,
+		Parts:    a2a.ContentParts{a2a.NewTextPart("Response with metadata")},
+		Metadata: map[string]any{"responseKey1": "responseValue1", "responseCount": 99},
+	}}
+	a := newTestAgent(transport, agent.Config{})
+	result, err := a.Run(t.Context(), []*message.Message{message.NewText("Test message")}).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil {
+		t.Fatal("response is nil")
+	}
+	if result.AdditionalProperties == nil {
+		t.Fatal("response additional properties are nil")
+	}
+	if got := result.AdditionalProperties["responseKey1"]; got != "responseValue1" {
+		t.Errorf("responseKey1 = %#v, want responseValue1", got)
+	}
+	if got := result.AdditionalProperties["responseCount"]; got != 99 {
+		t.Errorf("responseCount = %#v, want 99", got)
+	}
+}
+
+func TestRunWithSubmittedTaskResponseMetadata(t *testing.T) {
+	transport := &mockA2ATransport{responseToReturn: &a2a.Task{
+		ID: "task-789", ContextID: "context-456",
+		Status:   a2a.TaskStatus{State: a2a.TaskStateSubmitted},
+		Metadata: map[string]any{"key1": "value1", "count": 42},
+	}}
+	a := newTestAgent(transport, agent.Config{})
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := a.RunText(t.Context(), "Start a long-running task", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil {
+		t.Fatal("response is nil")
+	}
+	if result.AgentID != a.ID() {
+		t.Errorf("AgentID = %q, want %q", result.AgentID, a.ID())
+	}
+	if result.ID != "task-789" || result.FinishReason != "" {
+		t.Errorf("response ID and finish reason = %q, %q, want task-789 and empty", result.ID, result.FinishReason)
+	}
+	raw, ok := result.RawRepresentation.(*a2a.Task)
+	if !ok || raw == nil {
+		t.Errorf("raw response = %#v, want *a2a.Task", result.RawRepresentation)
+	} else if raw.ID != "task-789" {
+		t.Errorf("raw task ID = %q, want task-789", raw.ID)
+	}
+	if result.ContinuationToken == "" {
+		t.Error("continuation token is empty")
+	} else if got := agenttest.DecodeContinuationToken(t, result.ContinuationToken).InnerToken; got != "task-789" {
+		t.Errorf("continuation task ID = %q, want task-789", got)
+	}
+	if session.ServiceID() != "context-456" || latestTaskID(session) != "task-789" {
+		t.Errorf("session IDs = %q, %q, want context-456 and task-789", session.ServiceID(), latestTaskID(session))
+	}
+	if result.AdditionalProperties == nil {
+		t.Fatal("response additional properties are nil")
+	}
+	if got := result.AdditionalProperties["key1"]; got != "value1" {
+		t.Errorf("key1 = %#v, want value1", got)
+	}
+	if got := result.AdditionalProperties["count"]; got != 42 {
+		t.Errorf("count = %#v, want 42", got)
+	}
+}
+
+func TestRunWithTaskResponsePreservesMetadataAndRawScopes(t *testing.T) {
+	for _, inputRequired := range []bool{false, true} {
+		for _, metadata := range []bool{false, true} {
+			for _, artifacts := range []int{0, 1, 2} {
+				t.Run(fmt.Sprintf("input-required=%t/metadata=%t/artifacts=%d", inputRequired, metadata, artifacts), func(t *testing.T) {
+					task := &a2a.Task{ID: "task", ContextID: "ctx", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted}}
+					if metadata {
+						task.Metadata = map[string]any{"task-only": "task-value", "shared": "task"}
+					}
+					for i := range artifacts {
+						task.Artifacts = append(task.Artifacts, &a2a.Artifact{
+							ID: a2a.ArtifactID(fmt.Sprintf("artifact-%d", i)),
+							Parts: a2a.ContentParts{&a2a.Part{
+								Content: a2a.Text(fmt.Sprintf("reply-%d", i)), Metadata: map[string]any{"part-only": i},
+							}},
+							Metadata: map[string]any{"artifact-only": i, "shared": "artifact"},
+						})
+					}
+					if inputRequired {
+						task.Status = a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: &a2a.Message{
+							ID: "input", Role: a2a.MessageRoleAgent, Parts: a2a.ContentParts{a2a.NewTextPart("question")},
+						}}
+					}
+					a := newTestAgent(&mockA2ATransport{responseToReturn: task}, agent.Config{})
+					result, err := a.RunText(t.Context(), "hello").Collect()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !reflect.DeepEqual(result.AdditionalProperties, task.Metadata) {
+						t.Errorf("response metadata = %#v, want task metadata %#v", result.AdditionalProperties, task.Metadata)
+					}
+					var wantRaw any = task
+					if artifacts > 0 || inputRequired {
+						rawValues := make([]any, 0, artifacts+1)
+						for _, artifact := range task.Artifacts {
+							rawValues = append(rawValues, artifact)
+						}
+						if inputRequired {
+							rawValues = append(rawValues, task.Status)
+						}
+						if len(rawValues) == 1 {
+							wantRaw = rawValues[0]
+						} else {
+							wantRaw = rawValues
+						}
+					}
+					if !reflect.DeepEqual(result.RawRepresentation, wantRaw) {
+						t.Errorf("response raw = %#v, want collected raw values %#v", result.RawRepresentation, wantRaw)
+					}
+					if result.ID != string(task.ID) || result.ConversationID == nil || *result.ConversationID != task.ContextID {
+						t.Errorf("response IDs = %q, %v, want task and ctx", result.ID, result.ConversationID)
+					}
+					wantMessages := artifacts
+					if inputRequired {
+						wantMessages++
+					}
+					// The existing iterator collector retains one empty lifecycle message.
+					if len(result.Messages) != max(1, wantMessages) {
+						t.Fatalf("messages = %d, want %d", len(result.Messages), max(1, wantMessages))
+					}
+					if wantMessages == 0 && result.Messages[0].RawRepresentation != task {
+						t.Errorf("empty message raw = %T, want *a2a.Task", result.Messages[0].RawRepresentation)
+					}
+					for i, artifact := range task.Artifacts {
+						msg := result.Messages[i]
+						if !reflect.DeepEqual(msg.AdditionalProperties, artifact.Metadata) || msg.RawRepresentation != artifact {
+							t.Errorf("artifact message %d metadata/raw = %#v/%T, want only artifact data", i, msg.AdditionalProperties, msg.RawRepresentation)
+						}
+						if msg.ID != string(artifact.ID) || msg.String() != fmt.Sprintf("reply-%d", i) || len(msg.Contents) != 1 || msg.Contents[0].Header().AdditionalProperties["part-only"] != i {
+							t.Errorf("artifact message %d lost identity, content, or part metadata: %#v", i, msg)
+						}
+						if artifact.Metadata["shared"] != "artifact" {
+							t.Error("conversion mutated artifact metadata")
+						}
+					}
+					if inputRequired {
+						msg := result.Messages[artifacts]
+						raw, ok := msg.RawRepresentation.(a2a.TaskStatus)
+						if !ok || raw.State != a2a.TaskStateInputRequired || raw.Message != task.Status.Message {
+							t.Errorf("input message raw = %#v, want the task status by value", msg.RawRepresentation)
+						}
+						if msg.ID != "input" || msg.String() != "question" || msg.AdditionalProperties != nil {
+							t.Errorf("input message = %#v, want question without task metadata", msg)
+						}
+					}
+					if metadata && task.Metadata["shared"] != "task" {
+						t.Error("conversion mutated task metadata")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRunWithTaskResponseScopesSurviveCollectedMiddleware(t *testing.T) {
+	task := &a2a.Task{
+		ID: "task", ContextID: "ctx", Status: a2a.TaskStatus{State: a2a.TaskStateCompleted},
+		Metadata: map[string]any{"shared": "task"},
+		Artifacts: []*a2a.Artifact{{
+			ID: "artifact", Parts: a2a.ContentParts{a2a.NewTextPart("reply")}, Metadata: map[string]any{"shared": "artifact"},
+		}},
+	}
+	middleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			response, err := agent.ResponseStream(next(ctx, messages, options...)).Collect()
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			for _, update := range response.ToUpdates() {
+				if !yield(update, nil) {
+					return
+				}
+			}
+		}
+	})
+	a := newTestAgent(&mockA2ATransport{responseToReturn: task}, agent.Config{Middlewares: []agent.Middleware{middleware, middleware}})
+	result, err := a.RunText(t.Context(), "hello").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.AdditionalProperties, task.Metadata) {
+		t.Errorf("response metadata = %#v, want task metadata after middleware", result.AdditionalProperties)
+	}
+	if result.RawRepresentation != task.Artifacts[0] {
+		t.Errorf("response raw = %T, want the collected artifact after middleware", result.RawRepresentation)
+	}
+	if len(result.Messages) != 1 {
+		t.Fatalf("messages = %d, want one artifact message", len(result.Messages))
+	}
+	msg := result.Messages[0]
+	if msg.ID != "artifact" || msg.String() != "reply" || !reflect.DeepEqual(msg.AdditionalProperties, task.Artifacts[0].Metadata) || msg.RawRepresentation != task.Artifacts[0] {
+		t.Errorf("message = %#v, want unchanged artifact message after middleware", msg)
+	}
+}
+
+func TestRunWithBackgroundResponsesRequiresSession(t *testing.T) {
+	a := newTestAgent(&mockA2ATransport{}, agent.Config{})
+	_, err := a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, agent.AllowBackgroundResponses(true)).Collect()
+	if err == nil {
+		t.Fatal("run without a session succeeded, want error")
+	}
+}
+
+func TestRunStreamingWithBackgroundResponsesRequiresSession(t *testing.T) {
+	a := newTestAgent(&mockA2ATransport{}, agent.Config{})
+	var gotErr error
+	for _, err := range a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, agent.AllowBackgroundResponses(true), agent.Stream(true)) {
+		if err != nil {
+			gotErr = err
+		}
+	}
+	if gotErr == nil {
+		t.Fatal("streaming run without a session succeeded, want error")
+	}
+}
+
+func TestRunWithNilRequestMetadata(t *testing.T) {
+	transport := &mockA2ATransport{responseToReturn: &a2a.Message{
+		ID: "response-123", Role: a2a.MessageRoleAgent,
+		Parts: a2a.ContentParts{a2a.NewTextPart("Response")},
+	}}
+	a := newTestAgent(transport, agent.Config{})
+	if _, err := a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, a2a1.WithMetadata(nil)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if transport.capturedMessageSendParams == nil {
+		t.Fatal("no send request was captured")
+	}
+	if transport.capturedMessageSendParams.Metadata != nil {
+		t.Errorf("request metadata = %#v, want nil", transport.capturedMessageSendParams.Metadata)
+	}
+}
+
+func assertBlockingSendConfig(t *testing.T, transport *mockA2ATransport) {
+	t.Helper()
+	if transport.capturedMessageSendParams == nil {
+		t.Fatal("no send request was captured")
+	}
+	config := transport.capturedMessageSendParams.Config
+	if config == nil {
+		t.Fatal("send configuration is nil, want non-nil blocking configuration")
+	}
+	if config.ReturnImmediately {
+		t.Error("ReturnImmediately = true, want false")
+	}
+}
+
+func TestRunWithBackgroundResponsesDisabledSetsBlockingConfig(t *testing.T) {
+	transport := &mockA2ATransport{}
+	a := newTestAgent(transport, agent.Config{})
+	if _, err := a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, agent.AllowBackgroundResponses(false)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	assertBlockingSendConfig(t, transport)
+}
+
+func TestRunWithDefaultOptionsSetsBlockingConfig(t *testing.T) {
+	transport := &mockA2ATransport{}
+	a := newTestAgent(transport, agent.Config{})
+	if _, err := a.Run(t.Context(), []*message.Message{message.NewText("Test message")}).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	assertBlockingSendConfig(t, transport)
+}
+
+func TestRunWithNilOptionsSetsBlockingConfig(t *testing.T) {
+	transport := &mockA2ATransport{}
+	a := newTestAgent(transport, agent.Config{})
+	var options []agent.Option
+	if _, err := a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, options...).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	assertBlockingSendConfig(t, transport)
+}
+
+func TestRunStreamingOmitsSendConfig(t *testing.T) {
+	transport := &mockA2ATransport{streamingResponseToReturn: &a2a.Message{
+		ID: "response-123", Role: a2a.MessageRoleAgent,
+		Parts: a2a.ContentParts{a2a.NewTextPart("Streaming response")},
+	}}
+	a := newTestAgent(transport, agent.Config{})
+	for _, err := range a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if transport.capturedMessageSendParams == nil {
+		t.Fatal("no send request was captured")
+	}
+	if transport.capturedMessageSendParams.Config != nil {
+		t.Errorf("send configuration = %#v, want nil", transport.capturedMessageSendParams.Config)
+	}
+}
+
+func TestRunStreamingForwardsRequestMetadata(t *testing.T) {
+	transport := &mockA2ATransport{streamingResponseToReturn: &a2a.Message{
+		ID: "stream-123", Role: a2a.MessageRoleAgent,
+		Parts: a2a.ContentParts{a2a.NewTextPart("Streaming response")},
+	}}
+	a := newTestAgent(transport, agent.Config{})
+	metadata := map[string]any{"streamKey1": "streamValue1", "streamKey2": 100, "streamKey3": false}
+	for _, err := range a.Run(t.Context(), []*message.Message{message.NewText("Test streaming message")}, a2a1.WithMetadata(metadata), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if transport.capturedMessageSendParams == nil {
+		t.Fatal("no send request was captured")
+	}
+	got := transport.capturedMessageSendParams.Metadata
+	if got == nil {
+		t.Fatal("request metadata is nil")
+	}
+	if got["streamKey1"] != "streamValue1" || got["streamKey2"] != 100 || got["streamKey3"] != false {
+		t.Errorf("request metadata = %#v, want streamValue1, 100 and false", got)
+	}
+}
+
+func TestRunStreamingWithNilRequestMetadata(t *testing.T) {
+	transport := &mockA2ATransport{streamingResponseToReturn: &a2a.Message{
+		ID: "stream-123", Role: a2a.MessageRoleAgent,
+		Parts: a2a.ContentParts{a2a.NewTextPart("Streaming response")},
+	}}
+	a := newTestAgent(transport, agent.Config{})
+	for _, err := range a.Run(t.Context(), []*message.Message{message.NewText("Test streaming message")}, a2a1.WithMetadata(nil), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if transport.capturedMessageSendParams == nil {
+		t.Fatal("no send request was captured")
+	}
+	if transport.capturedMessageSendParams.Metadata != nil {
+		t.Errorf("request metadata = %#v, want nil", transport.capturedMessageSendParams.Metadata)
+	}
+}
+
+func TestRunStreamingWithInputRequiredStatusContents(t *testing.T) {
+	transport := &mockA2ATransport{streamingResponseToReturn: &a2a.TaskStatusUpdateEvent{
+		TaskID: "task-input-123", ContextID: "ctx-input-456",
+		Status: a2a.TaskStatus{
+			State: a2a.TaskStateInputRequired,
+			Message: &a2a.Message{
+				ID: "input-msg-789", Parts: a2a.ContentParts{a2a.NewTextPart("Where would you like to fly?")},
+			},
+		},
+	}}
+	a := newTestAgent(transport, agent.Config{})
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var updates []*agent.ResponseUpdate
+	for update, err := range a.RunText(t.Context(), "I'd like to book a flight.", agent.WithSession(session), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		updates = append(updates, update)
+	}
+	if len(updates) != 1 {
+		t.Fatalf("updates = %d, want 1", len(updates))
+	}
+	update := updates[0]
+	if update.ResponseID != "task-input-123" || update.MessageID != "input-msg-789" || update.FinishReason != "" {
+		t.Errorf("response ID, message ID and finish reason = %q, %q, %q", update.ResponseID, update.MessageID, update.FinishReason)
+	}
+	var texts []*message.TextContent
+	for _, content := range update.Contents {
+		if text, ok := content.(*message.TextContent); ok {
+			texts = append(texts, text)
+		}
+	}
+	if len(texts) != 1 {
+		t.Fatalf("text contents = %d, want 1", len(texts))
+	}
+	if texts[0].Text != "Where would you like to fly?" {
+		t.Errorf("text = %q, want Where would you like to fly?", texts[0].Text)
 	}
 }

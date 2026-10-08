@@ -13,7 +13,7 @@
   "dotnet": {
     "schema_version": 1,
     "identity_format": "ecma335-v1",
-    "sha256": "5d02a2515591c44bbdce034f348f97dec229527fae3aa34d0c1ee6135fc5e4bf",
+    "sha256": "aee1d5164814288ab9a479b2c726661a1d5237266f8ec2aec9be9b090985e72c",
     "selection": {
       "namespaces": [],
       "include_protected": false
@@ -64,11 +64,32 @@
         "sha256": "4a69e9f167a6b87af560961b72fcb34f98cc2808104de36d1af05097ce25fe37",
         "reference_assembly": false
       },
+      "Microsoft.Agents.AI.A2A": {
+        "version": "1.22.0.0",
+        "informational_version": "1.22.0-preview+0c9944cc9f577d51277ac7c55dbc388b60a577af",
+        "target_framework": ".NETCoreApp,Version=v10.0",
+        "sha256": "6c2d12f3eba6dc14580db1cc8f1d2781ff8ec08e6d0ef461b6e8b932516057d2",
+        "reference_assembly": false
+      },
       "Microsoft.Agents.AI.Abstractions": {
         "version": "1.22.0.0",
         "informational_version": "1.22.0+0c9944cc9f577d51277ac7c55dbc388b60a577af",
         "target_framework": ".NETCoreApp,Version=v8.0",
         "sha256": "084d23f8e4575e502d0c3e005671e4009157405ee5665b4b9e993c63b1e86f91",
+        "reference_assembly": false
+      },
+      "Microsoft.Agents.AI.Hosting.A2A": {
+        "version": "1.22.0.0",
+        "informational_version": "1.22.0-preview+0c9944cc9f577d51277ac7c55dbc388b60a577af",
+        "target_framework": ".NETCoreApp,Version=v10.0",
+        "sha256": "7a95ea74d16f5bd3786b5316606142666e336c853471cb59b370ff5340320ef0",
+        "reference_assembly": false
+      },
+      "Microsoft.Agents.AI.Hosting.A2A.AspNetCore": {
+        "version": "1.22.0.0",
+        "informational_version": "1.22.0-preview+0c9944cc9f577d51277ac7c55dbc388b60a577af",
+        "target_framework": ".NETCoreApp,Version=v10.0",
+        "sha256": "6455f21f80b974b9380cde82c18167121befa53a2c9741786c1fa1b4717c33b4",
         "reference_assembly": false
       },
       "Microsoft.Agents.AI.Workflows": {
@@ -596,53 +617,53 @@
     },
     "Microsoft.Agents.AI.A2A.UnitTests": {
       "Microsoft.Agents.AI.A2A.UnitTests.A2AAIContentExtensionsTests": {
-        "ToA2AParts_WithEmptyCollection_ReturnsNull": null,
-        "ToA2AParts_WithMixedSupportedAndUnsupportedContent_IgnoresUnsupportedContent": null,
-        "ToA2AParts_WithMultipleContents_ReturnsListWithAllParts": null
+        "ToA2AParts_WithEmptyCollection_ReturnsNull": "provider/a2aprovider.TestContentsToPartsEmpty",
+        "ToA2AParts_WithMixedSupportedAndUnsupportedContent_IgnoresUnsupportedContent": "provider/a2aprovider.TestContentsToPartsIgnoresUnsupported",
+        "ToA2AParts_WithMultipleContents_ReturnsListWithAllParts": "provider/a2aprovider.TestContentsToPartsMultiple"
       },
       "Microsoft.Agents.AI.A2A.UnitTests.A2AAgentCardExtensionsTests": {
-        "AsAIAgent_ReturnsAIAgent": null,
-        "AsAIAgent_WithAgentOptions_FallsBackToCardValues": null,
-        "AsAIAgent_WithAgentOptions_OverridesCardValues": null,
-        "AsAIAgent_WithEmptyAgentOptions_UsesCardValues": null,
-        "AsAIAgent_WithNoMatchingBinding_ThrowsException": null,
-        "AsAIAgent_WithNoSupportedInterfaces_ThrowsException": null,
-        "AsAIAgent_WithNullOptions_UsesDefaultBindingPreference": null,
-        "AsAIAgent_WithPreferredBindings_UsesMatchingInterfaceAsync": null,
-        "RunIAgentAsync_SendsRequestToTheUrlSpecifiedInAgentCardAsync": null
+        "AsAIAgent_ReturnsAIAgent": "provider/a2aprovider.TestNewAgentFromCardReturnsAgent",
+        "AsAIAgent_WithAgentOptions_FallsBackToCardValues": "provider/a2aprovider.TestNewAgentFromCardWithConfigFallsBackToCardValues",
+        "AsAIAgent_WithAgentOptions_OverridesCardValues": "provider/a2aprovider.TestNewAgentFromCardWithConfigOverridesCardValues",
+        "AsAIAgent_WithEmptyAgentOptions_UsesCardValues": "provider/a2aprovider.TestNewAgentFromCardWithEmptyConfigUsesCardValues",
+        "AsAIAgent_WithNoMatchingBinding_ThrowsException": "provider/a2aprovider.TestNewAgentFromCardWithNoMatchingTransport",
+        "AsAIAgent_WithNoSupportedInterfaces_ThrowsException": "provider/a2aprovider.TestNewAgentFromCardWithNoSupportedInterfaces",
+        "AsAIAgent_WithNullOptions_UsesDefaultBindingPreference": "provider/a2aprovider.TestNewAgentFromCardWithDefaultOptions",
+        "AsAIAgent_WithPreferredBindings_UsesMatchingInterfaceAsync": "provider/a2aprovider.TestNewAgentFromCardWithPreferredTransportsUsesMatchingInterface",
+        "RunIAgentAsync_SendsRequestToTheUrlSpecifiedInAgentCardAsync": "provider/a2aprovider.TestNewAgentFromCardSendsRequestToCardURL"
       },
       "Microsoft.Agents.AI.A2A.UnitTests.A2AAgentSessionTests": {
-        "Constructor_RoundTrip_SerializationPreservesState": null,
-        "Constructor_RoundTrip_SerializationPreservesStateBag": null
+        "Constructor_RoundTrip_SerializationPreservesState": "provider/a2aprovider.TestA2ASessionJSONRoundTripPreservesIDs",
+        "Constructor_RoundTrip_SerializationPreservesStateBag": "provider/a2aprovider.TestA2ASessionJSONRoundTripPreservesState"
       },
       "Microsoft.Agents.AI.A2A.UnitTests.A2AAgentTaskExtensionsTests": {
-        "ToAIContents_WithEmptyArtifactsAndNoUserInputRequests_ReturnsNull": null,
-        "ToAIContents_WithInputRequiredStatus_IncludesStatusContents": null,
-        "ToAIContents_WithMultipleArtifacts_FlattenAllContents": null,
-        "ToAIContents_WithNullAgentTask_ThrowsArgumentNullException": null,
-        "ToAIContents_WithNullArtifactsAndNoUserInputRequests_ReturnsNull": null,
-        "ToChatMessages_WithArtifactsAndInputRequired_IncludesBoth": null,
-        "ToChatMessages_WithEmptyArtifactsAndNoUserInputRequests_ReturnsNull": null,
-        "ToChatMessages_WithInputRequiredStatus_IncludesStatusContents": null,
-        "ToChatMessages_WithNullAgentTask_ThrowsArgumentNullException": null,
-        "ToChatMessages_WithNullArtifactsAndNoUserInputRequests_ReturnsNull": null,
-        "ToChatMessages_WithValidArtifact_ReturnsChatMessages": null
+        "ToAIContents_WithEmptyArtifactsAndNoUserInputRequests_ReturnsNull": "provider/a2aprovider.TestTaskToContentsEmptyArtifacts",
+        "ToAIContents_WithInputRequiredStatus_IncludesStatusContents": "provider/a2aprovider.TestTaskToContentsInputRequired",
+        "ToAIContents_WithMultipleArtifacts_FlattenAllContents": "provider/a2aprovider.TestTaskToContentsMultipleArtifacts",
+        "ToAIContents_WithNullAgentTask_ThrowsArgumentNullException": "provider/a2aprovider.TestTaskToContentsNilTask",
+        "ToAIContents_WithNullArtifactsAndNoUserInputRequests_ReturnsNull": "provider/a2aprovider.TestTaskToContentsNilArtifacts",
+        "ToChatMessages_WithArtifactsAndInputRequired_IncludesBoth": "provider/a2aprovider.TestTaskToMessagesArtifactsAndInputRequired",
+        "ToChatMessages_WithEmptyArtifactsAndNoUserInputRequests_ReturnsNull": "provider/a2aprovider.TestTaskToMessagesEmptyArtifacts",
+        "ToChatMessages_WithInputRequiredStatus_IncludesStatusContents": "provider/a2aprovider.TestTaskToMessagesInputRequired",
+        "ToChatMessages_WithNullAgentTask_ThrowsArgumentNullException": "provider/a2aprovider.TestTaskToMessagesNilTask",
+        "ToChatMessages_WithNullArtifactsAndNoUserInputRequests_ReturnsNull": "provider/a2aprovider.TestTaskToMessagesNilArtifacts",
+        "ToChatMessages_WithValidArtifact_ReturnsChatMessages": "provider/a2aprovider.TestTaskToMessagesArtifact"
       },
       "Microsoft.Agents.AI.A2A.UnitTests.A2AAgentTests": {
-        "Constructor_WithAllParameters_InitializesPropertiesCorrectly": null,
-        "Constructor_WithDefaultParameters_UsesBaseProperties": null,
-        "Constructor_WithEmptyOptions_UsesBaseProperties": null,
+        "Constructor_WithAllParameters_InitializesPropertiesCorrectly": "provider/a2aprovider.TestConstructorWithAllProperties",
+        "Constructor_WithDefaultParameters_UsesBaseProperties": "provider/a2aprovider.TestConstructorWithDefaultProperties",
+        "Constructor_WithEmptyOptions_UsesBaseProperties": "provider/a2aprovider.TestConstructorWithEmptyConfig",
         "Constructor_WithIA2AClient_InitializesCorrectly": null,
         "Constructor_WithNullA2AClient_ThrowsArgumentNullException": "provider/a2aprovider.TestConstructorWithNilClient",
         "Constructor_WithNullOptions_ThrowsArgumentNullException": null,
-        "Constructor_WithOptions_InitializesPropertiesCorrectly": null,
-        "Constructor_WithOptions_IsolatesAgentFromOptionsMutation": null,
-        "Constructor_WithOptions_NullA2AClient_ThrowsArgumentNullException": null,
-        "CreateSessionAsync_WithContextIdAndTaskId_CreatesSessionWithBothIdsAsync": null,
-        "CreateSessionAsync_WithContextId_CreatesSessionWithContextIdAsync": null,
-        "CreateSessionAsync_WithInvalidContextIdAndValidTaskId_ThrowsArgumentExceptionAsync": null,
-        "CreateSessionAsync_WithInvalidContextId_ThrowsArgumentExceptionAsync": null,
-        "CreateSessionAsync_WithValidContextIdAndInvalidTaskId_ThrowsArgumentExceptionAsync": null,
+        "Constructor_WithOptions_InitializesPropertiesCorrectly": "provider/a2aprovider.TestConstructorWithConfigProperties",
+        "Constructor_WithOptions_IsolatesAgentFromOptionsMutation": "provider/a2aprovider.TestConstructorIsolatesConfigMutation",
+        "Constructor_WithOptions_NullA2AClient_ThrowsArgumentNullException": "provider/a2aprovider.TestConstructorWithConfigRejectsNilClient",
+        "CreateSessionAsync_WithContextIdAndTaskId_CreatesSessionWithBothIdsAsync": "provider/a2aprovider.TestCreateSessionWithContextAndTaskIDs",
+        "CreateSessionAsync_WithContextId_CreatesSessionWithContextIdAsync": "provider/a2aprovider.TestCreateSessionWithContextID",
+        "CreateSessionAsync_WithInvalidContextIdAndValidTaskId_ThrowsArgumentExceptionAsync": "provider/a2aprovider.TestCreateSessionRejectsInvalidContextIDWithTaskID",
+        "CreateSessionAsync_WithInvalidContextId_ThrowsArgumentExceptionAsync": "provider/a2aprovider.TestCreateSessionRejectsInvalidContextID",
+        "CreateSessionAsync_WithValidContextIdAndInvalidTaskId_ThrowsArgumentExceptionAsync": "provider/a2aprovider.TestCreateSessionRejectsInvalidTaskIDWithContextID",
         "GetService_RequestingA2AAgentType_ReturnsBaseImplementation": null,
         "GetService_RequestingAIAgentMetadata_ReturnsConsistentMetadata": null,
         "GetService_RequestingAIAgentMetadata_ReturnsMetadata": null,
@@ -654,45 +675,45 @@
         "GetService_WithServiceKey_ReturnsNull": null,
         "RunAsync_AllowsNonUserRoleMessagesAsync": "provider/a2aprovider.TestRunAllowsNonUserRoleMessages",
         "RunAsync_WithAdditionalProperties_PropagatesThemAsMetadataToSendMessageRequestAsync": "provider/a2aprovider.TestRunForwardsRequestMetadata",
-        "RunAsync_WithAgentMessageResponseMetadata_ReturnsMetadataAsAdditionalPropertiesAsync": null,
-        "RunAsync_WithAgentTaskResponse_ReturnsTaskResponseCorrectlyAsync": null,
+        "RunAsync_WithAgentMessageResponseMetadata_ReturnsMetadataAsAdditionalPropertiesAsync": "provider/a2aprovider.TestRunWithMessageResponseMetadata",
+        "RunAsync_WithAgentTaskResponse_ReturnsTaskResponseCorrectlyAsync": "provider/a2aprovider.TestRunWithSubmittedTaskResponseMetadata",
         "RunAsync_WithAgentTask_UpdatesSessionTaskIdAsync": "provider/a2aprovider.TestRunWithAgentTask",
-        "RunAsync_WithAllowBackgroundResponsesAndNoSession_ThrowsInvalidOperationExceptionAsync": null,
-        "RunAsync_WithAllowBackgroundResponsesFalse_SetsReturnImmediatelyToFalseAsync": null,
+        "RunAsync_WithAllowBackgroundResponsesAndNoSession_ThrowsInvalidOperationExceptionAsync": "provider/a2aprovider.TestRunWithBackgroundResponsesRequiresSession",
+        "RunAsync_WithAllowBackgroundResponsesFalse_SetsReturnImmediatelyToFalseAsync": "provider/a2aprovider.TestRunWithBackgroundResponsesDisabledSetsBlockingConfig",
         "RunAsync_WithAllowBackgroundResponsesTrue_SetsReturnImmediatelyToTrueAsync": "provider/a2aprovider.TestRunAllowBackgroundResponsesSetsReturnImmediately",
         "RunAsync_WithContinuationTokenAndMessages_ThrowsInvalidOperationExceptionAsync": "provider/a2aprovider.TestRunWithContinuationTokenAndMessages",
         "RunAsync_WithContinuationToken_CallsGetTaskAsyncAsync": "provider/a2aprovider.TestRunWithContinuationToken",
-        "RunAsync_WithDefaultOptions_SetsBlockingToTrueAsync": null,
+        "RunAsync_WithDefaultOptions_SetsBlockingToTrueAsync": "provider/a2aprovider.TestRunWithDefaultOptionsSetsBlockingConfig",
         "RunAsync_WithExistingSession_SetConversationIdToMessageAsync": "provider/a2aprovider.TestRunWithExistingSession",
         "RunAsync_WithHostedFileContent_ConvertsToFilePartAsync": "provider/a2aprovider.TestRunWithHostedFileContent",
-        "RunAsync_WithInputRequiredTaskState_SetsTaskIdOnMessageAsync": null,
+        "RunAsync_WithInputRequiredTaskState_SetsTaskIdOnMessageAsync": "provider/a2aprovider.TestRunWithPreconfiguredInputRequiredTask",
         "RunAsync_WithInvalidSessionType_ThrowsInvalidOperationExceptionAsync": null,
         "RunAsync_WithNewSession_UpdatesSessionConversationIdAsync": "provider/a2aprovider.TestRunWithCreateSession",
-        "RunAsync_WithNullAdditionalProperties_DoesNotSetMetadataAsync": null,
-        "RunAsync_WithNullOptions_SetsReturnImmediatelyToFalseAsync": null,
+        "RunAsync_WithNullAdditionalProperties_DoesNotSetMetadataAsync": "provider/a2aprovider.TestRunWithNilRequestMetadata",
+        "RunAsync_WithNullOptions_SetsReturnImmediatelyToFalseAsync": "provider/a2aprovider.TestRunWithNilOptionsSetsBlockingConfig",
         "RunAsync_WithSessionHavingDifferentContextId_ThrowsInvalidOperationExceptionAsync": "provider/a2aprovider.TestRunWithSessionHavingDifferentContextID",
         "RunAsync_WithTaskInSessionAndMessage_AddTaskAsReferencesToMessageAsync": "provider/a2aprovider.TestRunWithTaskInSessionAndMessage",
         "RunAsync_WithValidUserMessage_RunsSuccessfullyAsync": "provider/a2aprovider.TestRunWithValidUserMessage",
         "RunAsync_WithVariousTaskStates_ReturnsCorrectTokenAsync": "provider/a2aprovider.TestRunWithVariousTaskStates",
         "RunStreamingAsync_AllowsNonUserRoleMessagesAsync": "provider/a2aprovider.TestRunStreamingAllowsNonUserRoleMessages",
-        "RunStreamingAsync_SendMessageRequest_DoesNotSetReturnImmediatelyConfigurationAsync": null,
-        "RunStreamingAsync_WithAdditionalProperties_PropagatesThemAsMetadataToSendMessageRequestAsync": null,
+        "RunStreamingAsync_SendMessageRequest_DoesNotSetReturnImmediatelyConfigurationAsync": "provider/a2aprovider.TestRunStreamingOmitsSendConfig",
+        "RunStreamingAsync_WithAdditionalProperties_PropagatesThemAsMetadataToSendMessageRequestAsync": "provider/a2aprovider.TestRunStreamingForwardsRequestMetadata",
         "RunStreamingAsync_WithAgentMessage_YieldsResponseUpdateAsync": "provider/a2aprovider.TestRunStreamingWithAgentMessage",
         "RunStreamingAsync_WithAgentTask_UpdatesSessionTaskIdAsync": "provider/a2aprovider.TestRunStreamingWithAgentTaskUpdatesSession",
         "RunStreamingAsync_WithAgentTask_YieldsResponseUpdateAsync": "provider/a2aprovider.TestRunStreamingWithAgentTaskYieldsUpdate",
-        "RunStreamingAsync_WithAllowBackgroundResponsesAndNoSession_ThrowsInvalidOperationExceptionAsync": null,
+        "RunStreamingAsync_WithAllowBackgroundResponsesAndNoSession_ThrowsInvalidOperationExceptionAsync": "provider/a2aprovider.TestRunStreamingWithBackgroundResponsesRequiresSession",
         "RunStreamingAsync_WithContinuationTokenAndMessages_ThrowsInvalidOperationExceptionAsync": "provider/a2aprovider.TestRunStreamingWithContinuationTokenAndMessages",
         "RunStreamingAsync_WithContinuationToken_PassesCorrectTaskIdAsync": "provider/a2aprovider.TestRunStreamingWithContinuationToken_PassesCorrectTaskID",
-        "RunStreamingAsync_WithContinuationToken_UsesSubscribeToTaskMethodAsync": null,
-        "RunStreamingAsync_WithContinuationToken_WhenSubscribeAndGetTaskBothFail_PropagatesExceptionAsync": null,
-        "RunStreamingAsync_WithContinuationToken_WhenSubscribeFailsWithNonUnsupportedError_PropagatesWithoutFallbackAsync": null,
-        "RunStreamingAsync_WithContinuationToken_WhenSubscribeFailsWithUnsupportedOperation_FallsBackToGetTaskAsync": null,
+        "RunStreamingAsync_WithContinuationToken_UsesSubscribeToTaskMethodAsync": "provider/a2aprovider.TestRunStreamingWithContinuationToken_UsesSubscribeToTask",
+        "RunStreamingAsync_WithContinuationToken_WhenSubscribeAndGetTaskBothFail_PropagatesExceptionAsync": "provider/a2aprovider.TestRunStreamingWithContinuationTokenWhenSubscribeAndGetTaskBothFailPropagatesError",
+        "RunStreamingAsync_WithContinuationToken_WhenSubscribeFailsWithNonUnsupportedError_PropagatesWithoutFallbackAsync": "provider/a2aprovider.TestRunStreamingWithContinuationTokenWhenSubscribeFailsWithNonUnsupportedErrorPropagatesWithoutFallback",
+        "RunStreamingAsync_WithContinuationToken_WhenSubscribeFailsWithUnsupportedOperation_FallsBackToGetTaskAsync": "provider/a2aprovider.TestRunStreamingWithContinuationTokenWhenSubscribeFailsWithUnsupportedOperationFallsBackToGetTask",
         "RunStreamingAsync_WithContinuationToken_WhenSubscribeFailsWithUnsupportedOperation_UpdatesSessionAsync": "provider/a2aprovider.TestRunStreamingWithContinuationTokenWhenSubscribeFailsWithUnsupportedOperationUpdatesSession",
         "RunStreamingAsync_WithExistingSession_SetConversationIdToMessageAsync": "provider/a2aprovider.TestRunStreamingWithExistingSession",
-        "RunStreamingAsync_WithInputRequiredStatusUpdate_YieldsStatusContentsAsync": null,
-        "RunStreamingAsync_WithInputRequiredTaskState_SetsTaskIdOnMessageAsync": null,
+        "RunStreamingAsync_WithInputRequiredStatusUpdate_YieldsStatusContentsAsync": "provider/a2aprovider.TestRunStreamingWithInputRequiredStatusContents",
+        "RunStreamingAsync_WithInputRequiredTaskState_SetsTaskIdOnMessageAsync": "provider/a2aprovider.TestRunStreamingWithPreconfiguredInputRequiredTask",
         "RunStreamingAsync_WithInvalidSessionType_ThrowsInvalidOperationExceptionAsync": null,
-        "RunStreamingAsync_WithNullAdditionalProperties_DoesNotSetMetadataAsync": null,
+        "RunStreamingAsync_WithNullAdditionalProperties_DoesNotSetMetadataAsync": "provider/a2aprovider.TestRunStreamingWithNilRequestMetadata",
         "RunStreamingAsync_WithSessionHavingDifferentContextId_ThrowsInvalidOperationExceptionAsync": "provider/a2aprovider.TestRunStreamingWithSessionHavingDifferentContextID",
         "RunStreamingAsync_WithSession_UpdatesSessionConversationIdAsync": "provider/a2aprovider.TestRunStreamingWithSession",
         "RunStreamingAsync_WithTaskArtifactUpdateEvent_YieldsResponseUpdateAsync": "provider/a2aprovider.TestRunStreamingWithTaskArtifactUpdateEvent",
@@ -702,23 +723,23 @@
         "RunStreamingAsync_WithValidUserMessage_YieldsAgentResponseUpdatesAsync": "provider/a2aprovider.TestRunStreamingWithValidUserMessage"
       },
       "Microsoft.Agents.AI.A2A.UnitTests.A2AArtifactExtensionsTests": {
-        "ToAIContents_WithEmptyParts_ReturnsEmptyList": null,
-        "ToAIContents_WithMultipleParts_ReturnsCorrectList": null,
-        "ToChatMessage_WithMultiplePartsMetadataAndRawRepresentation_ReturnsCorrectChatMessage": null
+        "ToAIContents_WithEmptyParts_ReturnsEmptyList": "provider/a2aprovider.TestArtifactPartsToContentsEmpty",
+        "ToAIContents_WithMultipleParts_ReturnsCorrectList": "provider/a2aprovider.TestArtifactPartsToContentsMultiple",
+        "ToChatMessage_WithMultiplePartsMetadataAndRawRepresentation_ReturnsCorrectChatMessage": "provider/a2aprovider.TestArtifactToMessagePartsMetadataAndRaw"
       },
       "Microsoft.Agents.AI.A2A.UnitTests.A2ACardResolverExtensionsTests": {
-        "GetAIAgentAsync_WithAgentOptions_FallsBackToCardValuesAsync": null,
-        "GetAIAgentAsync_WithAgentOptions_OverridesCardValuesAsync": null,
-        "GetAIAgentAsync_WithOptions_PassesOptionsToFactoryAsync": null,
-        "GetAIAgentAsync_WithValidAgentCard_ReturnsAIAgentAsync": null,
-        "RunIAgentAsync_WithUrlFromAgentCard_SendsRequestToTheUrlAsync": null
+        "GetAIAgentAsync_WithAgentOptions_FallsBackToCardValuesAsync": "provider/a2aprovider.TestNewAgentFromResolverWithConfigFallsBackToCardValues",
+        "GetAIAgentAsync_WithAgentOptions_OverridesCardValuesAsync": "provider/a2aprovider.TestNewAgentFromResolverWithConfigOverridesCardValues",
+        "GetAIAgentAsync_WithOptions_PassesOptionsToFactoryAsync": "provider/a2aprovider.TestNewAgentFromResolverWithOptionsPassesOptionsToFactory",
+        "GetAIAgentAsync_WithValidAgentCard_ReturnsAIAgentAsync": "provider/a2aprovider.TestNewAgentFromResolverWithValidCardReturnsAgent",
+        "RunIAgentAsync_WithUrlFromAgentCard_SendsRequestToTheUrlAsync": "provider/a2aprovider.TestNewAgentFromResolverSendsRequestToCardURL"
       },
       "Microsoft.Agents.AI.A2A.UnitTests.A2AClientExtensionsTests": {
-        "AsAIAgent_WithAllParameters_ReturnsA2AAgentWithSpecifiedProperties": null,
-        "AsAIAgent_WithEmptyOptions_ReturnsA2AAgentWithDefaultProperties": null,
+        "AsAIAgent_WithAllParameters_ReturnsA2AAgentWithSpecifiedProperties": "provider/a2aprovider.TestNewAgentFromClientWithProperties",
+        "AsAIAgent_WithEmptyOptions_ReturnsA2AAgentWithDefaultProperties": "provider/a2aprovider.TestNewAgentFromClientWithEmptyConfig",
         "AsAIAgent_WithIA2AClient_ExposesClientViaGetService": null,
         "AsAIAgent_WithIA2AClient_ReturnsA2AAgentWithSpecifiedProperties": null,
-        "AsAIAgent_WithOptions_ReturnsA2AAgentWithSpecifiedProperties": null
+        "AsAIAgent_WithOptions_ReturnsA2AAgentWithSpecifiedProperties": "provider/a2aprovider.TestNewAgentFromClientWithConfig"
       },
       "Microsoft.Agents.AI.A2A.UnitTests.A2AContinuationTokenTests": {
         "Constructor_WithValidTaskId_InitializesTaskIdProperty": null,
@@ -732,15 +753,15 @@
         "ToBytes_WithValidToken_SerializesToJsonBytes": null
       },
       "Microsoft.Agents.AI.A2A.UnitTests.AgentTaskStatusExtensionsTests": {
-        "GetUserInputRequests_WithEmptyMessageParts_ReturnsNull": null,
-        "GetUserInputRequests_WithInputRequiredStateAndMultipleRequests_ReturnsAIContentList": null,
-        "GetUserInputRequests_WithNotInputRequiredState_ReturnsNull": null,
-        "GetUserInputRequests_WithNullMessage_ReturnsNull": null,
-        "GetUserInputRequests_WithTextParts_SetsRawRepresentationAndAdditionalPropertiesCorrectly": null
+        "GetUserInputRequests_WithEmptyMessageParts_ReturnsNull": "provider/a2aprovider.TestStatusInputContentsEmptyParts",
+        "GetUserInputRequests_WithInputRequiredStateAndMultipleRequests_ReturnsAIContentList": "provider/a2aprovider.TestStatusInputContentsMultipleRequests",
+        "GetUserInputRequests_WithNotInputRequiredState_ReturnsNull": "provider/a2aprovider.TestStatusInputContentsOtherState",
+        "GetUserInputRequests_WithNullMessage_ReturnsNull": "provider/a2aprovider.TestStatusInputContentsNilMessage",
+        "GetUserInputRequests_WithTextParts_SetsRawRepresentationAndAdditionalPropertiesCorrectly": "provider/a2aprovider.TestStatusInputContentsRawAndMetadata"
       },
       "Microsoft.Agents.AI.A2A.UnitTests.ChatMessageExtensionsTests": {
-        "ToA2AMessage_WithMessageContainingMultipleContents_AddsAllContentsAsParts": null,
-        "ToA2AMessage_WithMixedMessages_AddsAllContentsAsParts": null
+        "ToA2AMessage_WithMessageContainingMultipleContents_AddsAllContentsAsParts": "provider/a2aprovider.TestMessagesToA2AMessageMultipleContents",
+        "ToA2AMessage_WithMixedMessages_AddsAllContentsAsParts": "provider/a2aprovider.TestMessagesToA2AMessageMixedMessages"
       },
       "Microsoft.Agents.AI.A2A.UnitTests.FeatureUsageActivationTests": {
         "RunAsync_ActivatesA2AAsync": null,
@@ -2637,72 +2658,72 @@
     },
     "Microsoft.Agents.AI.Hosting.A2A.UnitTests": {
       "Microsoft.Agents.AI.Hosting.A2A.UnitTests.A2AAgentHandlerTests": {
-        "CancelAsync_EmitsCanceledStatusAsync": null,
-        "ExecuteAsync_DynamicMode_CancellationTokenIsPropagatedToCallbackAsync": null,
-        "ExecuteAsync_DynamicMode_DelegateReceivesRequestContextAsync": null,
-        "ExecuteAsync_DynamicMode_WhenCallbackThrows_PropagatesExceptionAsync": null,
-        "ExecuteAsync_DynamicMode_WithFalseCallback_ReturnsMessageAsync": null,
-        "ExecuteAsync_DynamicMode_WithTrueCallback_ReturnsTaskAsync": null,
-        "ExecuteAsync_NonStreaming_SavesSessionWithUncancelledTokenAsync": null,
-        "ExecuteAsync_NonStreaming_WhenRunStreamingAsyncThrows_SavesSessionWithUncancelledTokenAsync": null,
-        "ExecuteAsync_OnContinuation_DoesNotInvokeDynamicModeCallbackAsync": null,
-        "ExecuteAsync_OnContinuation_SavesSessionWithUncancelledTokenAsync": null,
-        "ExecuteAsync_OnContinuation_WhenAgentThrowsWithCancelledToken_StillEmitsFailedStatusAsync": null,
-        "ExecuteAsync_OnContinuation_WhenAgentThrows_EmitsFailedStatusAsync": null,
-        "ExecuteAsync_OnContinuation_WhenComplete_EmitsArtifactAndCompletedAsync": null,
-        "ExecuteAsync_OnContinuation_WhenOperationCancelled_DoesNotEmitFailedAsync": null,
-        "ExecuteAsync_OnContinuation_WhenRunAsyncThrows_SavesSessionWithUncancelledTokenAsync": null,
-        "ExecuteAsync_Streaming_CancellationTokenIsPropagatedToRunStreamingAsync": null,
-        "ExecuteAsync_Streaming_EnqueuesSingleAggregatedMessageAsync": null,
-        "ExecuteAsync_Streaming_ResponseIdIsUsedAsMessageIdAsync": null,
-        "ExecuteAsync_Streaming_SavesSessionAfterProcessingAsync": null,
-        "ExecuteAsync_Streaming_SavesSessionWithUncancelledTokenAsync": null,
-        "ExecuteAsync_Streaming_UsesProvidedContextIdAsync": null,
-        "ExecuteAsync_Streaming_WhenAgentThrowsOperationCanceledWithoutCancellation_FailsTaskAsync": null,
-        "ExecuteAsync_Streaming_WhenAgentThrows_FailsTaskAsync": null,
-        "ExecuteAsync_Streaming_WhenCancellationRequested_CancelsTaskAsync": null,
-        "ExecuteAsync_Streaming_WhenContentlessUpdateChangesMessageId_FinalizesPreviousArtifactAsync": null,
-        "ExecuteAsync_Streaming_WhenContextIdIsNull_GeneratesContextIdAsync": null,
-        "ExecuteAsync_Streaming_WhenMessageIdChanges_FinalizesPreviousArtifactImmediatelyAsync": null,
-        "ExecuteAsync_Streaming_WhenMessageIdReappears_UsesDistinctArtifactIdAsync": null,
+        "CancelAsync_EmitsCanceledStatusAsync": "provider/a2aprovider.TestExecutor_CancelEmitsStatus",
+        "ExecuteAsync_DynamicMode_CancellationTokenIsPropagatedToCallbackAsync": "provider/a2aprovider.TestResponseMode_DynamicReceivesCallerContext",
+        "ExecuteAsync_DynamicMode_DelegateReceivesRequestContextAsync": "provider/a2aprovider.TestResponseMode_DynamicReceivesExecutorContext",
+        "ExecuteAsync_DynamicMode_WhenCallbackThrows_PropagatesExceptionAsync": "provider/a2aprovider.TestResponseMode_DynamicErrorDoesNotInvokeAgent",
+        "ExecuteAsync_DynamicMode_WithFalseCallback_ReturnsMessageAsync": "provider/a2aprovider.TestResponseMode_DynamicMessage",
+        "ExecuteAsync_DynamicMode_WithTrueCallback_ReturnsTaskAsync": "provider/a2aprovider.TestResponseMode_DynamicTask",
+        "ExecuteAsync_NonStreaming_SavesSessionWithUncancelledTokenAsync": "provider/a2aprovider.TestExecutor_NonStreamingSavesSessionWithoutCancellation",
+        "ExecuteAsync_NonStreaming_WhenRunStreamingAsyncThrows_SavesSessionWithUncancelledTokenAsync": "provider/a2aprovider.TestExecutor_NonStreamingFailureSavesSessionWithoutCancellation",
+        "ExecuteAsync_OnContinuation_DoesNotInvokeDynamicModeCallbackAsync": "provider/a2aprovider.TestResponseMode_ContinuationSkipsDynamicCallback",
+        "ExecuteAsync_OnContinuation_SavesSessionWithUncancelledTokenAsync": "provider/a2aprovider.TestExecutor_ContinuationSavesSessionWithoutCancellation",
+        "ExecuteAsync_OnContinuation_WhenAgentThrowsWithCancelledToken_StillEmitsFailedStatusAsync": "provider/a2aprovider.TestExecutor_ContinuationFailureWithCanceledContext",
+        "ExecuteAsync_OnContinuation_WhenAgentThrows_EmitsFailedStatusAsync": "provider/a2aprovider.TestExecutor_ContinuationFailureEmitsStatus",
+        "ExecuteAsync_OnContinuation_WhenComplete_EmitsArtifactAndCompletedAsync": "provider/a2aprovider.TestExecutor_ContinuationCompletes",
+        "ExecuteAsync_OnContinuation_WhenOperationCancelled_DoesNotEmitFailedAsync": "provider/a2aprovider.TestExecutor_ContinuationCancellationDoesNotEmitStatus",
+        "ExecuteAsync_OnContinuation_WhenRunAsyncThrows_SavesSessionWithUncancelledTokenAsync": "provider/a2aprovider.TestExecutor_ContinuationFailureSavesSessionWithoutCancellation",
+        "ExecuteAsync_Streaming_CancellationTokenIsPropagatedToRunStreamingAsync": "provider/a2aprovider.TestExecutor_StreamPropagatesCancellation",
+        "ExecuteAsync_Streaming_EnqueuesSingleAggregatedMessageAsync": "provider/a2aprovider.TestResponseMode_MessageStreamAggregatesAllUpdates",
+        "ExecuteAsync_Streaming_ResponseIdIsUsedAsMessageIdAsync": "provider/a2aprovider.TestResponseMode_MessageResponseID",
+        "ExecuteAsync_Streaming_SavesSessionAfterProcessingAsync": "provider/a2aprovider.TestExecutor_StreamSavesSessionAfterProcessing",
+        "ExecuteAsync_Streaming_SavesSessionWithUncancelledTokenAsync": "provider/a2aprovider.TestExecutor_StreamSavesSessionWithoutCancellation",
+        "ExecuteAsync_Streaming_UsesProvidedContextIdAsync": "provider/a2aprovider.TestResponseMode_MessageStreamProvidedContextID",
+        "ExecuteAsync_Streaming_WhenAgentThrowsOperationCanceledWithoutCancellation_FailsTaskAsync": "provider/a2aprovider.TestResponseMode_TaskStreamAgentCancellationIsFailure",
+        "ExecuteAsync_Streaming_WhenAgentThrows_FailsTaskAsync": "provider/a2aprovider.TestResponseMode_TaskStreamFailure",
+        "ExecuteAsync_Streaming_WhenCancellationRequested_CancelsTaskAsync": "provider/a2aprovider.TestResponseMode_TaskStreamCancellation",
+        "ExecuteAsync_Streaming_WhenContentlessUpdateChangesMessageId_FinalizesPreviousArtifactAsync": "provider/a2aprovider.TestExecutor_StreamContentlessMessageBoundary",
+        "ExecuteAsync_Streaming_WhenContextIdIsNull_GeneratesContextIdAsync": "provider/a2aprovider.TestResponseMode_MessageStreamGeneratesContextID",
+        "ExecuteAsync_Streaming_WhenMessageIdChanges_FinalizesPreviousArtifactImmediatelyAsync": "provider/a2aprovider.TestResponseMode_TaskStreamBoundaryBeforeFailure",
+        "ExecuteAsync_Streaming_WhenMessageIdReappears_UsesDistinctArtifactIdAsync": "provider/a2aprovider.TestExecutor_StreamReappearingMessageID",
         "ExecuteAsync_Streaming_WhenMessageIsNull_SucceedsWithEmptyMessagesAsync": null,
-        "ExecuteAsync_Streaming_WhenNoUpdates_EnqueuesEmptyMessageAndSavesSessionAsync": null,
-        "ExecuteAsync_Streaming_WhenResponseIdIsNull_GeneratesMessageIdAsync": null,
-        "ExecuteAsync_Streaming_WhenReturnTaskMode_StreamsTaskUpdatesAsync": null,
-        "ExecuteAsync_Streaming_WhenRunStreamingAsyncThrows_SavesSessionWithUncancelledTokenAsync": null,
+        "ExecuteAsync_Streaming_WhenNoUpdates_EnqueuesEmptyMessageAndSavesSessionAsync": "provider/a2aprovider.TestExecutor_StreamNoUpdatesEmitsEmptyMessageAndSavesSession",
+        "ExecuteAsync_Streaming_WhenResponseIdIsNull_GeneratesMessageIdAsync": "provider/a2aprovider.TestResponseMode_MessageGeneratesID",
+        "ExecuteAsync_Streaming_WhenReturnTaskMode_StreamsTaskUpdatesAsync": "provider/a2aprovider.TestResponseMode_TaskStream",
+        "ExecuteAsync_Streaming_WhenRunStreamingAsyncThrows_SavesSessionWithUncancelledTokenAsync": "provider/a2aprovider.TestExecutor_StreamFailureSavesSessionWithoutCancellation",
         "ExecuteAsync_Streaming_WithConfiguration_PassesOptionsWithConfigurationAsync": null,
-        "ExecuteAsync_Streaming_WithEmptyMessageIds_StreamsSingleArtifactAsync": null,
-        "ExecuteAsync_Streaming_WithMetadata_PassesOptionsWithAdditionalPropertiesAsync": null,
-        "ExecuteAsync_Streaming_WithNoUpdates_CompletesTaskAsync": null,
-        "ExecuteAsync_Streaming_WithNullAdditionalProperties_ReturnsMessageWithNullMetadataAsync": null,
+        "ExecuteAsync_Streaming_WithEmptyMessageIds_StreamsSingleArtifactAsync": "provider/a2aprovider.TestExecutor_StreamEmptyMessageIDs",
+        "ExecuteAsync_Streaming_WithMetadata_PassesOptionsWithAdditionalPropertiesAsync": "provider/a2aprovider.TestExecutor_StreamRequestMetadata",
+        "ExecuteAsync_Streaming_WithNoUpdates_CompletesTaskAsync": "provider/a2aprovider.TestExecutor_StreamNoUpdatesCompletes",
+        "ExecuteAsync_Streaming_WithNullAdditionalProperties_ReturnsMessageWithNullMetadataAsync": "provider/a2aprovider.TestResponseMode_MessageStreamNullMetadata",
         "ExecuteAsync_Streaming_WithNullMetadata_PassesEmptyOptionsAsync": null,
-        "ExecuteAsync_Streaming_WithOnlyContentlessUpdates_CompletesTaskWithoutArtifactsAsync": null,
-        "ExecuteAsync_Streaming_WithReferenceTaskIds_ThrowsNotSupportedExceptionAsync": null,
-        "ExecuteAsync_Streaming_WithResponseAdditionalProperties_ReturnsMessageWithMetadataAsync": null,
-        "ExecuteAsync_Streaming_WithoutMessageId_ContinuesCurrentArtifactAsync": null,
-        "ExecuteAsync_Streaming_WithoutMessageIds_StreamsSingleArtifactAsync": null,
+        "ExecuteAsync_Streaming_WithOnlyContentlessUpdates_CompletesTaskWithoutArtifactsAsync": "provider/a2aprovider.TestExecutor_StreamContentlessUpdatesComplete",
+        "ExecuteAsync_Streaming_WithReferenceTaskIds_ThrowsNotSupportedExceptionAsync": "provider/a2aprovider.TestExecutor_StreamReferenceTasksRejected",
+        "ExecuteAsync_Streaming_WithResponseAdditionalProperties_ReturnsMessageWithMetadataAsync": "provider/a2aprovider.TestResponseMode_MessageStreamMetadata",
+        "ExecuteAsync_Streaming_WithoutMessageId_ContinuesCurrentArtifactAsync": "provider/a2aprovider.TestExecutor_StreamMissingMessageIDContinuesArtifact",
+        "ExecuteAsync_Streaming_WithoutMessageIds_StreamsSingleArtifactAsync": "provider/a2aprovider.TestExecutor_StreamWithoutMessageIDs",
         "ExecuteAsync_WhenAggregatedTaskEmissionFails_FailsTaskAsync": null,
         "ExecuteAsync_WhenAggregatedTaskEmissionIsCanceled_CancelsTaskAsync": null,
         "ExecuteAsync_WhenAggregatingTaskUpdates_PreservesArtifactMetadataAsync": null,
         "ExecuteAsync_WhenConfigurationAndMetadataAreProvided_ForwardsBothToRunAsync": null,
         "ExecuteAsync_WhenConfigurationIsProvided_ForwardsConfigurationToRunAsync": null,
         "ExecuteAsync_WhenConfigurationRequestsImmediateReturn_DoesNotSetAllowBackgroundResponsesAsync": null,
-        "ExecuteAsync_WhenContextIdIsNull_GeneratesContextIdAsync": null,
-        "ExecuteAsync_WhenMessageHasContextId_UsesProvidedContextIdAsync": null,
-        "ExecuteAsync_WhenMessageIsNull_SucceedsWithEmptyMessagesAsync": null,
+        "ExecuteAsync_WhenContextIdIsNull_GeneratesContextIdAsync": "provider/a2aprovider.TestExecutor_MissingContextIDGeneratesID",
+        "ExecuteAsync_WhenMessageHasContextId_UsesProvidedContextIdAsync": "provider/a2aprovider.TestExecutor_ProvidedContextID",
+        "ExecuteAsync_WhenMessageIsNull_SucceedsWithEmptyMessagesAsync": "provider/a2aprovider.TestExecutor_NilMessageUsesEmptyInput",
         "ExecuteAsync_WhenMetadataIsNonEmpty_PassesOptionsWithAdditionalPropertiesToRunAsync": null,
         "ExecuteAsync_WhenMetadataIsNull_PassesEmptyOptionsToRunStreamingAsync": null,
-        "ExecuteAsync_WhenResponseHasAdditionalProperties_ReturnsMessageWithMetadataAsync": null,
-        "ExecuteAsync_WhenResponseHasEmptyAdditionalProperties_ReturnsMessageWithNullMetadataAsync": null,
-        "ExecuteAsync_WhenResponseHasNullAdditionalProperties_ReturnsMessageWithNullMetadataAsync": null,
+        "ExecuteAsync_WhenResponseHasAdditionalProperties_ReturnsMessageWithMetadataAsync": "provider/a2aprovider.TestExecutor_ResponseMetadata",
+        "ExecuteAsync_WhenResponseHasEmptyAdditionalProperties_ReturnsMessageWithNullMetadataAsync": "provider/a2aprovider.TestExecutor_EmptyResponseMetadata",
+        "ExecuteAsync_WhenResponseHasNullAdditionalProperties_ReturnsMessageWithNullMetadataAsync": "provider/a2aprovider.TestExecutor_NilResponseMetadata",
         "ExecuteAsync_WhenReturnMessageModeAndReturnImmediatelyFalse_ReturnsMessageAsync": null,
         "ExecuteAsync_WhenReturnMessageModeAndReturnImmediatelyTrue_ReturnsMessageAsync": null,
         "ExecuteAsync_WhenReturnTaskModeAndReturnImmediatelyFalse_ReturnsCompletedTaskAsync": null,
         "ExecuteAsync_WhenReturnTaskModeAndReturnImmediatelyTrue_StreamsTaskUpdatesAsync": null,
-        "ExecuteAsync_WithReferenceTaskIds_ThrowsNotSupportedExceptionAsync": null,
-        "Handler_WithCustomSessionStore_UsesProvidedSessionStoreAsync": null,
-        "Handler_WithNullSessionStore_SessionIsPersistedAcrossCallsAsync": null,
-        "Handler_WithNullSessionStore_UsesInMemorySessionStoreAndExecutesSuccessfullyAsync": null
+        "ExecuteAsync_WithReferenceTaskIds_ThrowsNotSupportedExceptionAsync": "provider/a2aprovider.TestExecutor_ReferenceTasksRejected",
+        "Handler_WithCustomSessionStore_UsesProvidedSessionStoreAsync": "provider/a2aprovider.TestExecutor_CustomSessionStore",
+        "Handler_WithNullSessionStore_SessionIsPersistedAcrossCallsAsync": "provider/a2aprovider.TestExecutor_NilSessionStorePersistsAcrossCalls",
+        "Handler_WithNullSessionStore_UsesInMemorySessionStoreAndExecutesSuccessfullyAsync": "provider/a2aprovider.TestExecutor_NilSessionStoreExecutesSuccessfully"
       },
       "Microsoft.Agents.AI.Hosting.A2A.UnitTests.A2AEndpointRouteBuilderExtensionsTests": {
         "AddA2AServer_EmptyAgentName_ThrowsArgumentException": null,
@@ -2767,37 +2788,37 @@
         "Equals_ReturnTaskWhen_SameDelegate_AreEqual": null,
         "Equals_ReturnTask_AreEqual": null,
         "Equals_WithObjectParameter_WorksCorrectly": null,
-        "ReturnTaskWhen_NullDelegate_ThrowsArgumentNullException": null,
-        "ToString_ReturnsExpectedValues": null
+        "ReturnTaskWhen_NullDelegate_ThrowsArgumentNullException": "provider/a2aprovider.TestAgentRunModeReturnTaskWhenNil",
+        "ToString_ReturnsExpectedValues": "provider/a2aprovider.TestAgentRunModeString"
       },
       "Microsoft.Agents.AI.Hosting.A2A.UnitTests.Converters.MessageConverterTests": {
         "ToChatMessages_SendMessageRequest_Null_ReturnsEmptyCollection": null,
-        "ToChatMessages_SendMessageRequest_WithMessageWithoutParts_ReturnsEmptyCollection": null,
-        "ToChatMessages_SendMessageRequest_WithNullMessage_ReturnsEmptyCollection": null,
-        "ToChatMessages_SendMessageRequest_WithValidTextMessage_ReturnsCorrectChatMessage": null,
-        "ToParts_AgentResponseUpdate_WithMultipleContents_ReturnsAllParts": null,
-        "ToParts_AgentResponseUpdate_WithNoContents_ReturnsEmptyList": null,
-        "ToParts_AgentResponseUpdate_WithTextContent_ReturnsTextPart": null,
-        "ToParts_AgentResponseUpdate_WithUnsupportedContent_FiltersOutNulls": null,
-        "ToParts_EmptyList_ReturnsEmptyList": null,
-        "ToParts_NullList_ReturnsEmptyList": null,
-        "ToParts_WithMultipleMessages_ReturnsAllParts": null,
-        "ToParts_WithTextContent_ReturnsTextPart": null
+        "ToChatMessages_SendMessageRequest_WithMessageWithoutParts_ReturnsEmptyCollection": "provider/a2aprovider.TestBuildNewMessageInputsNilParts",
+        "ToChatMessages_SendMessageRequest_WithNullMessage_ReturnsEmptyCollection": "provider/a2aprovider.TestBuildNewMessageInputsNilMessage",
+        "ToChatMessages_SendMessageRequest_WithValidTextMessage_ReturnsCorrectChatMessage": "provider/a2aprovider.TestBuildNewMessageInputsText",
+        "ToParts_AgentResponseUpdate_WithMultipleContents_ReturnsAllParts": "provider/a2aprovider.TestContentsToPartsMultipleResponseUpdate",
+        "ToParts_AgentResponseUpdate_WithNoContents_ReturnsEmptyList": "provider/a2aprovider.TestContentsToPartsEmptyResponseUpdate",
+        "ToParts_AgentResponseUpdate_WithTextContent_ReturnsTextPart": "provider/a2aprovider.TestContentsToPartsTextResponseUpdate",
+        "ToParts_AgentResponseUpdate_WithUnsupportedContent_FiltersOutNulls": "provider/a2aprovider.TestContentsToPartsUnsupportedResponseUpdate",
+        "ToParts_EmptyList_ReturnsEmptyList": "provider/a2aprovider.TestMessagesToPartsEmptyList",
+        "ToParts_NullList_ReturnsEmptyList": "provider/a2aprovider.TestMessagesToPartsNilList",
+        "ToParts_WithMultipleMessages_ReturnsAllParts": "provider/a2aprovider.TestMessagesToPartsMultipleMessages",
+        "ToParts_WithTextContent_ReturnsTextPart": "provider/a2aprovider.TestMessagesToPartsTextContent"
       },
       "Microsoft.Agents.AI.Hosting.A2A.UnitTests.IsolationKeyScopedTaskStoreTests": {
-        "Constructor_NullInnerStore_ThrowsArgumentNullException": null,
+        "Constructor_NullInnerStore_ThrowsArgumentNullException": "provider/a2aprovider.TestIsolationKeyTaskStoreNilInner",
         "DeleteTaskAsync_ScopesTaskIdWithIsolationKeyAsync": null,
         "GetTaskAsync_DifferentTenantsGetDifferentScopedIdsAsync": null,
-        "GetTaskAsync_EscapesBackslashesInIsolationKeyAsync": null,
-        "GetTaskAsync_EscapesColonsInIsolationKeyAsync": null,
-        "GetTaskAsync_NoKeyProvider_NonStrict_PassesThroughAsync": null,
-        "GetTaskAsync_NonStrictMode_NullKey_PassesThroughAsync": null,
-        "GetTaskAsync_ScopesTaskIdWithIsolationKeyAsync": null,
-        "GetTaskAsync_StrictMode_NullKey_ThrowsAsync": null,
+        "GetTaskAsync_EscapesBackslashesInIsolationKeyAsync": "provider/a2aprovider.TestIsolationKeyTaskStoreEscapesBackslashes",
+        "GetTaskAsync_EscapesColonsInIsolationKeyAsync": "provider/a2aprovider.TestIsolationKeyTaskStoreEscapesColons",
+        "GetTaskAsync_NoKeyProvider_NonStrict_PassesThroughAsync": "provider/a2aprovider.TestIsolationKeyTaskStoreUnscopedNoResolver",
+        "GetTaskAsync_NonStrictMode_NullKey_PassesThroughAsync": "provider/a2aprovider.TestIsolationKeyTaskStoreUnscopedMissingKey",
+        "GetTaskAsync_ScopesTaskIdWithIsolationKeyAsync": "provider/a2aprovider.TestIsolationKeyTaskStoreGetScopesTaskID",
+        "GetTaskAsync_StrictMode_NullKey_ThrowsAsync": "provider/a2aprovider.TestIsolationKeyTaskStoreStrictMissingKey",
         "GetTaskAsync_UnscopesContextIdOnReadAsync": null,
         "ListTasksAsync_NoContextIdFilter_ExcludesOtherTenantsTasksAsync": null,
-        "ListTasksAsync_NullContextId_DoesNotScopeFilterAsync": null,
-        "ListTasksAsync_ScopesContextIdFilterAsync": null,
+        "ListTasksAsync_NullContextId_DoesNotScopeFilterAsync": "provider/a2aprovider.TestIsolationKeyTaskStoreListLeavesEmptyContextFilter",
+        "ListTasksAsync_ScopesContextIdFilterAsync": "provider/a2aprovider.TestIsolationKeyTaskStoreListScopesContextFilter",
         "ListTasksAsync_WithContextIdFilter_ReturnsOwnTasksAsync": null,
         "SaveTaskAsync_ScopesTaskIdAndContextIdWithIsolationKeyAsync": null
       }
@@ -8143,33 +8164,74 @@
       "A2AAgentCardExtensions": {
         "area": "providers",
         "assembly": "Microsoft.Agents.AI.A2A",
+        "mapping": {
+          "go": "a2aprovider.NewAgentFromCard(ctx, card, a2aprovider.AgentConfig{})",
+          "go_symbols": [
+            "provider/a2aprovider.NewAgentFromCard"
+          ],
+          "status": "adapted",
+          "note": "Static extension container becomes package-level card factory functions."
+        },
         "methods": {
           "AsAIAgent(AgentCard, A2AAgentOptions, HttpClient?, A2AClientOptions?, ILoggerFactory?) -> AIAgent": {
-            "go": "client, _ := a2aclient.NewFromCard(ctx, card); if agentConfig.Name == \"\" { agentConfig.Name = card.Name }; if agentConfig.Description == \"\" { agentConfig.Description = card.Description }; a2aprovider.NewAgent(client, agentConfig)",
+            "go": "a2aprovider.NewAgentFromCard(ctx, card, config, clientOptions...)",
             "go_symbols": [
               "provider/a2aprovider.AgentConfig",
-              "provider/a2aprovider.NewAgent",
-              "agent.Config.Name",
-              "agent.Config.Description"
+              "provider/a2aprovider.NewAgentFromCard"
             ],
-            "status": "adapted",
-            "note": "Create the external A2A client and merge card metadata explicitly before NewAgent. Go does not automatically apply the C# null-only Name/Description fallback; its string fields do not distinguish null from explicit empty."
+            "status": "mapped",
+            "note": "Empty Name/Description fields use card values; Go strings do not distinguish unset from explicit empty as nullable .NET options do."
           },
-          "AsAIAgent(AgentCard, HttpClient?, A2AClientOptions?, ILoggerFactory?) -> AIAgent": {
-            "go": "client, _ := a2aclient.NewFromCard(ctx, card); a2aprovider.NewAgent(client, a2aprovider.AgentConfig{Config: agent.Config{Name: card.Name, Description: card.Description}})",
+          "AsAIAgent(AgentCard, HttpClient, A2AClientOptions, ILoggerFactory) -> AIAgent": {
+            "go": "a2aprovider.NewAgentFromCard(ctx, card, a2aprovider.AgentConfig{}, clientOptions...)",
             "go_symbols": [
-              "provider/a2aprovider.NewAgent",
-              "agent.Config.Name",
-              "agent.Config.Description"
+              "provider/a2aprovider.NewAgentFromCard"
             ],
-            "status": "adapted",
-            "note": "Create the client from the card with the external A2A SDK, then call NewAgent and copy the card's Name/Description into Config. HTTP and transport options belong to that client; Go has no card-to-agent wrapper."
+            "status": "mapped"
+          }
+        }
+      },
+      "A2ACardResolverExtensions": {
+        "area": "unclassified",
+        "assembly": "Microsoft.Agents.AI.A2A",
+        "mapping": {
+          "go": "a2aprovider.NewAgentFromResolver(ctx, resolver, baseURL, a2aprovider.AgentConfig{})",
+          "go_symbols": [
+            "provider/a2aprovider.NewAgentFromResolver"
+          ],
+          "status": "adapted",
+          "note": "Static extension container becomes a package-level resolver factory."
+        },
+        "methods": {
+          "GetAIAgentAsync(A2ACardResolver, A2AAgentOptions, HttpClient, A2AClientOptions, ILoggerFactory, CancellationToken) -> Task<AIAgent>": {
+            "go": "a2aprovider.NewAgentFromResolver(ctx, resolver, baseURL, config, clientOptions...)",
+            "go_symbols": [
+              "provider/a2aprovider.AgentConfig",
+              "provider/a2aprovider.NewAgentFromResolver"
+            ],
+            "status": "mapped",
+            "note": "Empty Name/Description fields use card values; Go strings do not distinguish unset from explicit empty as nullable .NET options do."
+          },
+          "GetAIAgentAsync(A2ACardResolver, HttpClient, A2AClientOptions, ILoggerFactory, CancellationToken) -> Task<AIAgent>": {
+            "go": "a2aprovider.NewAgentFromResolver(ctx, resolver, baseURL, a2aprovider.AgentConfig{}, clientOptions...)",
+            "go_symbols": [
+              "provider/a2aprovider.NewAgentFromResolver"
+            ],
+            "status": "mapped"
           }
         }
       },
       "A2AClientExtensions": {
         "area": "providers",
         "assembly": "Microsoft.Agents.AI.A2A",
+        "mapping": {
+          "go": "a2aprovider.NewAgent(client, a2aprovider.AgentConfig{})",
+          "go_symbols": [
+            "provider/a2aprovider.NewAgent"
+          ],
+          "status": "adapted",
+          "note": "Static extension container becomes the package-level NewAgent factory."
+        },
         "methods": {
           "AsAIAgent(IA2AClient, A2AAgentOptions, ILoggerFactory?) -> AIAgent": {
             "go": "a2aprovider.NewAgent(client, config)",
@@ -8177,8 +8239,8 @@
               "provider/a2aprovider.AgentConfig",
               "provider/a2aprovider.NewAgent"
             ],
-            "status": "adapted",
-            "note": "Options-based extension becomes NewAgent with a value AgentConfig; the Go factory returns the shared agent.Agent rather than a provider-specific subclass."
+            "status": "mapped",
+            "note": "Go accepts *a2aclient.Client, not arbitrary IA2AClient implementations."
           },
           "AsAIAgent(IA2AClient, string?, string?, string?, ILoggerFactory?) -> AIAgent": {
             "go": "a2aprovider.NewAgent(client, a2aprovider.AgentConfig{Config: agent.Config{ID: \"assistant\", Name: \"Assistant\", Description: \"Remote assistant\"}})",
@@ -8186,8 +8248,8 @@
               "provider/a2aprovider.AgentConfig",
               "provider/a2aprovider.NewAgent"
             ],
-            "status": "adapted",
-            "note": "Client extension becomes NewAgent; identity and logging move into AgentConfig's embedded agent.Config. The external A2A client must already be constructed."
+            "status": "mapped",
+            "note": "Go accepts *a2aclient.Client, not arbitrary IA2AClient implementations; identity and logging are configured through AgentConfig."
           }
         }
       }
@@ -8236,6 +8298,23 @@
       }
     },
     "Microsoft.Agents.AI": {
+      "A2AJsonUtilities": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI.A2A",
+        "mapping": {
+          "go": "",
+          "go_symbols": [],
+          "status": "unmapped",
+          "note": "No exported A2A agent JSON-options utility exists in Go."
+        },
+        "properties": {
+          "DefaultOptions": {
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "Go exposes no shared A2A session serializer options or type-resolver chain."
+          }
+        }
+      },
       "AIAgent": {
         "area": "agents",
         "assembly": "Microsoft.Agents.AI.Abstractions",
@@ -15686,7 +15765,39 @@
       "A2AAgent": {
         "area": "providers",
         "assembly": "Microsoft.Agents.AI.A2A",
+        "mapping": {
+          "go": "a2aprovider.NewAgent(client, a2aprovider.AgentConfig{})",
+          "go_symbols": [
+            "agent.Agent",
+            "provider/a2aprovider.NewAgent"
+          ],
+          "status": "adapted",
+          "note": "Remote A2A agents use the shared agent.Agent, not an exported provider-specific subclass."
+        },
+        "properties": {
+          "Description": {
+            "go_symbols": [
+              "agent.Agent.Description"
+            ],
+            "status": "mapped"
+          },
+          "Name": {
+            "go_symbols": [
+              "agent.Agent.Name"
+            ],
+            "status": "mapped"
+          }
+        },
         "methods": {
+          "CreateSessionAsync(string) -> ValueTask<AgentSession>": {
+            "go": "a.CreateSession(ctx, agent.WithServiceID(contextID))",
+            "go_symbols": [
+              "agent.Agent.CreateSession",
+              "agent.WithServiceID"
+            ],
+            "status": "adapted",
+            "note": "Pass the existing context ID as a WithServiceID option to CreateSession."
+          },
           "CreateSessionAsync(string, string) -> ValueTask<AgentSession>": {
             "go": "a.CreateSession(ctx, agent.WithServiceID(contextID), a2aprovider.WithTaskID(taskID))",
             "go_symbols": [
@@ -15696,6 +15807,12 @@
             ],
             "status": "adapted",
             "note": "Context and task identities become WithServiceID and WithTaskID options passed to CreateSession."
+          },
+          "GetService(Type, object) -> object": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "Go exports no keyed service lookup or accessor for the underlying A2A client."
           }
         },
         "constructors": {
@@ -15704,8 +15821,17 @@
             "go_symbols": [
               "provider/a2aprovider.NewAgent"
             ],
-            "status": "adapted",
-            "note": "Constructor becomes a client/config factory returning the shared agent.Agent type; logging is configured through AgentConfig."
+            "status": "mapped",
+            "note": "Go accepts *a2aclient.Client, not arbitrary IA2AClient implementations."
+          },
+          "A2AAgent(IA2AClient, string, string, string, ILoggerFactory)": {
+            "go": "a2aprovider.NewAgent(client, a2aprovider.AgentConfig{Config: agent.Config{ID: id, Name: name, Description: description, Logger: logger}})",
+            "go_symbols": [
+              "provider/a2aprovider.AgentConfig",
+              "provider/a2aprovider.NewAgent"
+            ],
+            "status": "mapped",
+            "note": "Go accepts *a2aclient.Client, not arbitrary IA2AClient implementations; identity and logging are configured through AgentConfig."
           }
         }
       },
@@ -15738,6 +15864,25 @@
             ],
             "status": "mapped"
           }
+        },
+        "methods": {
+          "Clone() -> A2AAgentOptions": {
+            "go": "cloned := config; _ = cloned",
+            "go_symbols": [
+              "provider/a2aprovider.AgentConfig"
+            ],
+            "status": "adapted",
+            "note": "Value-copy AgentConfig for its identity fields; referenced runtime configuration is not deep-cloned."
+          }
+        },
+        "constructors": {
+          "A2AAgentOptions()": {
+            "go": "a2aprovider.AgentConfig{}",
+            "go_symbols": [
+              "provider/a2aprovider.AgentConfig"
+            ],
+            "status": "mapped"
+          }
         }
       },
       "A2AAgentSession": {
@@ -15763,6 +15908,13 @@
               "provider/a2aprovider.TaskIDFromSession"
             ],
             "status": "mapped"
+          },
+          "TaskState": {
+            "go_symbols": [
+              "provider/a2aprovider.TaskStateFromSession"
+            ],
+            "status": "adapted",
+            "note": "Returns the last task state from the shared session; absent state uses a2a.TaskStateUnspecified instead of a nullable enum."
           }
         }
       }
@@ -16782,58 +16934,210 @@
       }
     },
     "Microsoft.Agents.AI.Hosting.A2A": {
+      "A2AHostingJsonUtilities": {
+        "area": "unclassified",
+        "assembly": "Microsoft.Agents.AI.Hosting.A2A",
+        "mapping": {
+          "go": "",
+          "go_symbols": [],
+          "status": "unmapped",
+          "note": "No exported A2A hosting JSON-options utility exists in Go."
+        },
+        "properties": {
+          "DefaultOptions": {
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "Go exposes no shared hosting serializer options combining agent and A2A protocol type resolvers."
+          }
+        }
+      },
+      "A2ARunDecisionContext": {
+        "area": "unclassified",
+        "assembly": "Microsoft.Agents.AI.Hosting.A2A",
+        "mapping": {
+          "go": "a2aprovider.ReturnTaskWhen(decide)",
+          "go_symbols": [
+            "provider/a2aprovider.ReturnTaskWhen"
+          ],
+          "status": "adapted",
+          "note": "The response-shape callback receives native *a2asrv.ExecutorContext directly instead of a decision-context wrapper."
+        },
+        "properties": {
+          "RequestContext": {
+            "go_symbols": [
+              "provider/a2aprovider.ReturnTaskWhen"
+            ],
+            "status": "adapted",
+            "note": "The callback's *a2asrv.ExecutorContext argument supplies request data without a RequestContext wrapper property."
+          }
+        }
+      },
       "A2AServerRegistrationOptions": {
         "area": "hosting",
         "assembly": "Microsoft.Agents.AI.Hosting.A2A",
+        "experimental": "MEAI001",
+        "mapping": {
+          "go": "a2aprovider.NewHandler(a, a2aprovider.ExecutorConfig{}, serverOptions...)",
+          "go_symbols": [
+            "provider/a2aprovider.ExecutorConfig",
+            "provider/a2aprovider.NewHandler"
+          ],
+          "status": "adapted",
+          "note": "Go splits response-mode configuration from native handler options and uses a direct constructor instead of DI registration."
+        },
         "properties": {
           "AgentRunMode": {
             "go_symbols": [
-              "provider/a2aprovider.ExecutorConfig.AllowBackgroundResponses",
-              "provider/a2aprovider.ExecutorConfig.AllowBackgroundResponsesWhen"
+              "provider/a2aprovider.ExecutorConfig.AgentRunMode"
             ],
             "status": "adapted",
-            "note": "Experimental upstream. Background-mode configuration is supplied to NewExecutor rather than server registration; Go's false/nil zero configuration corresponds to the C# null default of DisallowBackground."
+            "note": "One AgentRunMode value contains either a static response choice or a dynamic callback; the zero value selects message mode instead of a nullable registration property."
+          },
+          "ServerOptions": {
+            "go_symbols": [
+              "provider/a2aprovider.NewHandler"
+            ],
+            "status": "adapted",
+            "note": "Pass native a2asrv.RequestHandlerOption values to NewHandler instead of a ServerOptions property."
+          }
+        },
+        "constructors": {
+          "A2AServerRegistrationOptions()": {
+            "go": "a2aprovider.NewHandler(a, a2aprovider.ExecutorConfig{})",
+            "go_symbols": [
+              "provider/a2aprovider.ExecutorConfig",
+              "provider/a2aprovider.NewHandler"
+            ],
+            "status": "adapted",
+            "note": "Use zero-value ExecutorConfig and native handler defaults rather than a DI registration-options object."
           }
         }
       },
       "AgentRunMode": {
         "area": "hosting",
         "assembly": "Microsoft.Agents.AI.Hosting.A2A",
+        "experimental": "MEAI001",
         "mapping": {
-          "go": "a2aprovider.ExecutorConfig{AllowBackgroundResponses: allow, AllowBackgroundResponsesWhen: decide}",
+          "go": "a2aprovider.ExecutorConfig{AgentRunMode: a2aprovider.ReturnMessage()}",
           "go_symbols": [
-            "provider/a2aprovider.ExecutorConfig.AllowBackgroundResponses",
-            "provider/a2aprovider.ExecutorConfig.AllowBackgroundResponsesWhen"
+            "provider/a2aprovider.AgentRunMode"
           ],
-          "status": "adapted",
-          "note": "Experimental upstream mode object becomes a boolean and an optional per-request callback in ExecutorConfig; no separate mode object or equality API is exported."
+          "status": "mapped"
         },
         "properties": {
-          "AllowBackgroundIfSupported": {
+          "ReturnMessage": {
             "go_symbols": [
-              "provider/a2aprovider.ExecutorConfig.AllowBackgroundResponses",
-              "provider/a2aprovider.ExecutorConfig.AllowBackgroundResponsesWhen"
+              "provider/a2aprovider.ReturnMessage"
             ],
-            "status": "adapted",
-            "note": "Experimental upstream. Use true with a nil callback to request background responses; actual support remains agent/provider-dependent."
+            "status": "mapped"
           },
-          "DisallowBackground": {
+          "ReturnTask": {
             "go_symbols": [
-              "provider/a2aprovider.ExecutorConfig.AllowBackgroundResponses",
-              "provider/a2aprovider.ExecutorConfig.AllowBackgroundResponsesWhen"
+              "provider/a2aprovider.ReturnTask"
             ],
-            "status": "adapted",
-            "note": "Experimental upstream. Use false with a nil callback; a non-nil callback takes precedence over the Go boolean."
+            "status": "mapped"
           }
         },
         "methods": {
-          "AllowBackgroundWhen(Func<A2ARunDecisionContext, CancellationToken, ValueTask<bool>>) -> AgentRunMode": {
-            "go": "a2aprovider.ExecutorConfig{AllowBackgroundResponsesWhen: decide}",
+          "Equals(AgentRunMode) -> bool": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "AgentRunMode has no equality method; Go function values do not support delegate-identity comparison."
+          },
+          "Equals(object) -> bool": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "AgentRunMode has no object-based equality method."
+          },
+          "GetHashCode() -> int": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "Go exports no response-mode hash API."
+          },
+          "ReturnTaskWhen(Func<A2ARunDecisionContext, CancellationToken, ValueTask<bool>>) -> AgentRunMode": {
+            "go": "a2aprovider.ReturnTaskWhen(decide)",
             "go_symbols": [
-              "provider/a2aprovider.ExecutorConfig.AllowBackgroundResponsesWhen"
+              "provider/a2aprovider.ReturnTaskWhen"
             ],
-            "status": "adapted",
-            "note": "Experimental upstream factory becomes a function field taking context.Context and the external A2A ExecutorContext, returning bool/error. It overrides the static boolean when configured."
+            "status": "mapped"
+          },
+          "ToString() -> string": {
+            "go": "mode.String()",
+            "go_symbols": [
+              "provider/a2aprovider.AgentRunMode.String"
+            ],
+            "status": "mapped"
+          },
+          "op_Equality(AgentRunMode, AgentRunMode) -> bool": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "AgentRunMode contains a function value and is not Go-comparable; no equivalent delegate-identity equality operator is provided."
+          },
+          "op_Inequality(AgentRunMode, AgentRunMode) -> bool": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "AgentRunMode contains a function value and is not Go-comparable; no equivalent delegate-identity inequality operator is provided."
+          }
+        }
+      },
+      "IsolationKeyScopedTaskStore": {
+        "area": "unclassified",
+        "assembly": "Microsoft.Agents.AI.Hosting.A2A",
+        "mapping": {
+          "go": "a2aprovider.NewIsolationKeyScopedTaskStore(inner, config)",
+          "go_symbols": [
+            "provider/a2aprovider.NewIsolationKeyScopedTaskStore",
+            "provider/a2aprovider.IsolationKeyScopedTaskStoreConfig"
+          ],
+          "status": "partial",
+          "note": "Native task-store composition provides isolation for Create, Update, Get and List. It has no deletion or single separate-key Save operation; empty-key, identifier-restoration and pagination behavior differ from the .NET wrapper."
+        },
+        "methods": {
+          "DeleteTaskAsync(string, CancellationToken) -> Task": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "The native Go taskstore.Store interface exposes Create, Update, Get and List but no deletion operation, so the wrapper cannot provide scoped task deletion."
+          },
+          "GetTaskAsync(string, CancellationToken) -> Task<AgentTask>": {
+            "go": "a2aprovider.NewIsolationKeyScopedTaskStore(inner, config).Get(ctx, taskID)",
+            "go_symbols": [
+              "provider/a2aprovider.NewIsolationKeyScopedTaskStore"
+            ],
+            "status": "partial",
+            "note": "Scopes native lookup and returns a copied StoredTask with restored identifiers. Unlike .NET, it rejects results whose task ID or context ID is outside the partition and restores task and nested message identifiers as well as the context ID."
+          },
+          "ListTasksAsync(ListTasksRequest, CancellationToken) -> Task<ListTasksResponse>": {
+            "go": "a2aprovider.NewIsolationKeyScopedTaskStore(inner, config).List(ctx, request)",
+            "go_symbols": [
+              "provider/a2aprovider.NewIsolationKeyScopedTaskStore"
+            ],
+            "status": "partial",
+            "note": "Scopes nonempty context filters, filters partition-local tasks and restores identifiers without mutating inner results. Go fills visible pages and computes partition-local TotalSize across native pages; .NET filters one returned page and retains the inner total and continuation token."
+          },
+          "SaveTaskAsync(string, AgentTask, CancellationToken) -> Task": {
+            "go": "store := a2aprovider.NewIsolationKeyScopedTaskStore(inner, config)\nstore.Create(ctx, task)\nstore.Update(ctx, update)",
+            "go_symbols": [
+              "provider/a2aprovider.NewIsolationKeyScopedTaskStore"
+            ],
+            "status": "partial",
+            "note": "Native Create and Update scope copied tasks and preserve native versions and errors. They are distinct operations, not a single Save replacement. Storage uses the scoped task ID rather than an independent key argument, and nested identifiers are also scoped."
+          }
+        },
+        "constructors": {
+          "IsolationKeyScopedTaskStore(ITaskStore, AgentIsolationKeyProvider, bool)": {
+            "go": "a2aprovider.NewIsolationKeyScopedTaskStore(inner, a2aprovider.IsolationKeyScopedTaskStoreConfig{ResolveKey: resolveKey, AllowUnscoped: !strict})",
+            "go_symbols": [
+              "provider/a2aprovider.NewIsolationKeyScopedTaskStore",
+              "provider/a2aprovider.IsolationKeyScopedTaskStoreConfig"
+            ],
+            "status": "partial",
+            "note": "Configuration supplies a context-based resolver and inverse strict-mode flag; a nil inner store panics. Go treats an empty resolved key as unavailable, while .NET accepts an empty string as present and treats only null as unavailable."
           }
         }
       }
@@ -23952,22 +24256,55 @@
       "A2AEndpointRouteBuilderExtensions": {
         "area": "hosting",
         "assembly": "Microsoft.Agents.AI.Hosting.A2A.AspNetCore",
+        "experimental": "MEAI001",
+        "mapping": {
+          "go": "handler := a2aprovider.NewHandler(a, a2aprovider.ExecutorConfig{}); mux.Handle(pattern, a2asrv.NewRESTHandler(handler))",
+          "go_symbols": [
+            "provider/a2aprovider.NewHandler"
+          ],
+          "status": "adapted",
+          "note": "Compose the SDK NewHandler with native A2A HTTP handlers and Go routing to preserve configuration forwarding and terminal-response handling; keyed DI and hosted-builder overloads have no counterpart."
+        },
         "methods": {
           "MapA2AHttpJson(IEndpointRouteBuilder, AIAgent, string) -> IEndpointConventionBuilder": {
-            "go": "handler := a2asrv.NewHandler(a2aprovider.NewExecutor(a, a2aprovider.ExecutorConfig{})); mux.Handle(pattern, a2asrv.NewRESTHandler(handler))",
+            "go": "handler := a2aprovider.NewHandler(a, a2aprovider.ExecutorConfig{}); mux.Handle(pattern, a2asrv.NewRESTHandler(handler))",
             "go_symbols": [
-              "provider/a2aprovider.NewExecutor"
+              "provider/a2aprovider.NewHandler"
             ],
             "status": "adapted",
-            "note": "Experimental upstream. Compose NewExecutor with the external A2A SDK's NewHandler and NewRESTHandler, then register the HTTP route. Go has no keyed-service endpoint extension; NewExecutor alone is not an HTTP handler."
+            "note": "Compose the SDK NewHandler with native NewRESTHandler and register the route; the SDK handler retains request configuration and terminal-response handling, while Go does not expose ASP.NET endpoint conventions."
+          },
+          "MapA2AHttpJson(IEndpointRouteBuilder, IHostedAgentBuilder, string) -> IEndpointConventionBuilder": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "Go has no hosted-agent builder or keyed A2A server registry for this overload."
+          },
+          "MapA2AHttpJson(IEndpointRouteBuilder, string, string) -> IEndpointConventionBuilder": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "Go has no agent-name-based keyed A2A server lookup for route registration."
           },
           "MapA2AJsonRpc(IEndpointRouteBuilder, AIAgent, string) -> IEndpointConventionBuilder": {
-            "go": "handler := a2asrv.NewHandler(a2aprovider.NewExecutor(a, a2aprovider.ExecutorConfig{})); mux.Handle(pattern, a2asrv.NewJSONRPCHandler(handler))",
+            "go": "handler := a2aprovider.NewHandler(a, a2aprovider.ExecutorConfig{}); mux.Handle(pattern, a2asrv.NewJSONRPCHandler(handler))",
             "go_symbols": [
-              "provider/a2aprovider.NewExecutor"
+              "provider/a2aprovider.NewHandler"
             ],
             "status": "adapted",
-            "note": "Experimental upstream. Compose NewExecutor with the external A2A SDK's NewHandler and NewJSONRPCHandler, then register the route; this replaces ASP.NET keyed-server lookup rather than exposing a Go MapA2A method."
+            "note": "Compose the SDK NewHandler with native NewJSONRPCHandler and register the route; the SDK handler retains request configuration and terminal-response handling, while Go does not expose ASP.NET endpoint conventions."
+          },
+          "MapA2AJsonRpc(IEndpointRouteBuilder, IHostedAgentBuilder, string) -> IEndpointConventionBuilder": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "Go has no hosted-agent builder or keyed A2A server registry for this overload."
+          },
+          "MapA2AJsonRpc(IEndpointRouteBuilder, string, string) -> IEndpointConventionBuilder": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "Go has no agent-name-based keyed A2A server lookup for route registration."
           }
         }
       }
@@ -24067,6 +24404,51 @@
             "go_symbols": [],
             "status": "unmapped",
             "unreviewed": true
+          }
+        }
+      }
+    },
+    "Microsoft.Extensions.DependencyInjection": {
+      "A2AServerServiceCollectionExtensions": {
+        "area": "unclassified",
+        "assembly": "Microsoft.Agents.AI.Hosting.A2A",
+        "experimental": "MEAI001",
+        "mapping": {
+          "go": "",
+          "go_symbols": [],
+          "status": "unmapped",
+          "note": "Go has no keyed DI A2A server registration or automatic isolation-scoped session/task-store wiring."
+        },
+        "methods": {
+          "AddA2AServer(IHostApplicationBuilder, AIAgent, Action<A2AServerRegistrationOptions>) -> IHostApplicationBuilder": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "Go has no host-application builder that registers an agent's A2A server in keyed DI."
+          },
+          "AddA2AServer(IHostApplicationBuilder, string, Action<A2AServerRegistrationOptions>) -> IHostApplicationBuilder": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "Go has no host-application builder or keyed agent-name lookup for A2A server registration."
+          },
+          "AddA2AServer(IHostedAgentBuilder, Action<A2AServerRegistrationOptions>) -> IHostedAgentBuilder": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "Go has no hosted-agent builder with keyed A2A server registration."
+          },
+          "AddA2AServer(IServiceCollection, AIAgent, Action<A2AServerRegistrationOptions>) -> IServiceCollection": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "NewExecutor/native handler composition does not provide keyed DI registration or automatic isolation-store wrapping."
+          },
+          "AddA2AServer(IServiceCollection, string, Action<A2AServerRegistrationOptions>) -> IServiceCollection": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "note": "Go has no keyed service collection resolving an agent by name and registering its A2A server."
           }
         }
       }

@@ -47,8 +47,8 @@ func TestArtifactStreamWriter_MissingMessageIDFallsBackToResponseID(t *testing.T
 	if evt == nil {
 		t.Fatal("expected a flushed artifact event")
 	}
-	if evt.Artifact.ID != "resp-1" {
-		t.Fatalf("artifact id = %q, want %q", evt.Artifact.ID, "resp-1")
+	if evt.Artifact.ID == "" || evt.Artifact.ID == "resp-1" {
+		t.Fatalf("artifact id = %q, want generated ID independent of response ID", evt.Artifact.ID)
 	}
 }
 

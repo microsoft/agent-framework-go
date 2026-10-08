@@ -3,8 +3,6 @@
 package a2aprovider
 
 import (
-	"cmp"
-
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/microsoft/agent-framework-go/agent"
 )
@@ -32,7 +30,7 @@ func (w *artifactStreamWriter) Write(update *agent.ResponseUpdate) ([]*a2a.TaskA
 
 	events := make([]*a2a.TaskArtifactUpdateEvent, 0, 2)
 	if w.currentArtifactID == "" {
-		w.startArtifact(update.MessageID, update.ResponseID)
+		w.startArtifact(update.MessageID)
 	} else if w.isNewMessage(update.MessageID) {
 		evt, err := w.flushBuffered(true)
 		if err != nil {
@@ -41,10 +39,10 @@ func (w *artifactStreamWriter) Write(update *agent.ResponseUpdate) ([]*a2a.TaskA
 		if evt != nil {
 			events = append(events, evt)
 		}
-		w.startArtifact(update.MessageID, update.ResponseID)
+		w.startArtifact(update.MessageID)
 	}
 
-	parts, err := contentsToParts(update.Contents, nil)
+	parts, err := responseUpdateToParts(update)
 	if err != nil {
 		if flushEvt, flushErr := w.flushBuffered(true); flushErr == nil && flushEvt != nil {
 			events = append(events, flushEvt)
@@ -95,15 +93,13 @@ func (w *artifactStreamWriter) isNewMessage(messageID string) bool {
 	return messageID != "" && messageID != w.currentMessageID
 }
 
-func (w *artifactStreamWriter) startArtifact(messageID, responseID string) {
+func (w *artifactStreamWriter) startArtifact(messageID string) {
+	if messageID == "" {
+		messageID = string(a2a.NewArtifactID())
+	}
 	w.currentMessageID = messageID
 
-	idSource := cmp.Or(messageID, responseID)
-	if idSource == "" {
-		idSource = string(a2a.NewArtifactID())
-	}
-
-	artifactID := a2a.ArtifactID(idSource)
+	artifactID := a2a.ArtifactID(messageID)
 	if _, used := w.usedArtifactIDs[artifactID]; !used {
 		w.currentArtifactID = artifactID
 		w.usedArtifactIDs[artifactID] = struct{}{}

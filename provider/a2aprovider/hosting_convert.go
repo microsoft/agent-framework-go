@@ -42,13 +42,9 @@ func responseToMessage(infoProvider a2a.TaskInfoProvider, resp *agent.Response) 
 		return a2a.NewMessageForTask(a2a.MessageRoleAgent, infoProvider), nil
 	}
 
-	parts := make(a2a.ContentParts, 0)
-	for _, msg := range resp.Messages {
-		converted, err := contentsToParts(msg.Contents, nil)
-		if err != nil {
-			return nil, err
-		}
-		parts = append(parts, converted...)
+	parts, err := messagesToParts(resp.Messages)
+	if err != nil {
+		return nil, err
 	}
 
 	out := a2a.NewMessageForTask(a2a.MessageRoleAgent, infoProvider, parts...)
@@ -68,7 +64,7 @@ func responseUpdateToMessage(infoProvider a2a.TaskInfoProvider, update *agent.Re
 		return out, nil
 	}
 
-	parts, err := contentsToParts(update.Contents, nil)
+	parts, err := responseUpdateToParts(update)
 	if err != nil {
 		return nil, err
 	}
@@ -134,12 +130,10 @@ func responseUpdateToArtifactEvent(infoProvider a2a.TaskInfoProvider, artifactID
 func responseToArtifactEvent(infoProvider a2a.TaskInfoProvider, resp *agent.Response) (*a2a.TaskArtifactUpdateEvent, error) {
 	parts := make(a2a.ContentParts, 0)
 	if resp != nil {
-		for _, msg := range resp.Messages {
-			converted, err := contentsToParts(msg.Contents, nil)
-			if err != nil {
-				return nil, err
-			}
-			parts = append(parts, converted...)
+		var err error
+		parts, err = messagesToParts(resp.Messages)
+		if err != nil {
+			return nil, err
 		}
 	}
 	evt := a2a.NewArtifactEvent(infoProvider, parts...)
@@ -161,7 +155,7 @@ func responseUpdateToArtifactEventWithOptions(
 		return nil, nil
 	}
 
-	parts, err := contentsToParts(update.Contents, nil)
+	parts, err := responseUpdateToParts(update)
 	if err != nil {
 		return nil, err
 	}
@@ -178,6 +172,43 @@ func responseUpdateToArtifactEventWithOptions(
 	evt.LastChunk = lastChunk
 	evt.Metadata = cloneMetadata(update.AdditionalProperties)
 	return evt, nil
+}
+
+func messagesToParts(messages []*message.Message) (a2a.ContentParts, error) {
+	parts := make(a2a.ContentParts, 0)
+	for _, msg := range messages {
+		var err error
+		parts, err = hostedContentsToParts(msg.Contents, parts)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return parts, nil
+}
+
+func responseUpdateToParts(update *agent.ResponseUpdate) (a2a.ContentParts, error) {
+	parts := make(a2a.ContentParts, 0)
+	if update == nil {
+		return parts, nil
+	}
+	return hostedContentsToParts(update.Contents, parts)
+}
+
+// Hosted output filters local function calls/results rather than exposing their
+// framework JSON as remote-agent text. Client input conversion remains separate.
+func hostedContentsToParts(contents message.Contents, parts a2a.ContentParts) (a2a.ContentParts, error) {
+	for _, content := range contents {
+		switch content.(type) {
+		case *message.FunctionCallContent, *message.FunctionResultContent:
+			continue
+		}
+		var err error
+		parts, err = contentsToParts(message.Contents{content}, parts)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return parts, nil
 }
 
 func cloneMetadata(metadata map[string]any) map[string]any {

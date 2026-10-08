@@ -7,7 +7,6 @@ import (
 	"context"
 	"os"
 
-	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
@@ -30,21 +29,17 @@ func main() {
 		demo.Panicf("failed to resolve agent card: %v", err)
 	}
 
-	client, err := a2aclient.NewFromCard(ctx, card)
-	if err != nil {
-		demo.Panicf("failed to create A2A client: %v", err)
-	}
-
-	remoteAgent := a2aprovider.NewAgent(
-		client,
+	remoteAgent, err := a2aprovider.NewAgentFromCard(
+		ctx, card,
 		a2aprovider.AgentConfig{
 			Config: agent.Config{
-				Name:        cmp.Or(card.Name, "RemoteA2AAgent"),
-				Description: card.Description,
 				Middlewares: []agent.Middleware{logger},
 			},
 		},
 	)
+	if err != nil {
+		demo.Panicf("failed to create A2A agent: %v", err)
+	}
 
 	session, err := remoteAgent.CreateSession(ctx)
 	if err != nil {
@@ -53,38 +48,45 @@ func main() {
 
 	query := "Conduct a comprehensive analysis of quantum computing applications in cryptography, including recent breakthroughs, implementation challenges, and future roadmap. Please include diagrams and visual representations to illustrate complex concepts."
 
-	var continuationToken string
+	var continuationToken, continuationContextID string
 	for update, err := range remoteAgent.RunText(ctx, query, agent.WithSession(session), agent.Stream(true)) {
 		if err != nil {
 			demo.Panic(err)
 		}
 		if update != nil {
-			demo.Response(update, nil)
 			if update.ContinuationToken != "" {
 				continuationToken = update.ContinuationToken
-				demo.Assistantf("Captured continuation token %s. Simulating a stream interruption before completion.", continuationToken)
-				break
+			}
+			if update.ConversationID != nil {
+				continuationContextID = *update.ConversationID
 			}
 		}
+		break
 	}
 
 	if continuationToken == "" {
-		demo.Assistant("The agent completed without issuing a continuation token. Stream reconnection is not applicable.")
+		demo.Assistant("The first update did not include a continuation token. Stream reconnection is not applicable.")
 		return
 	}
 
 	demo.Assistantf("Reconnecting to task %s...", continuationToken)
-	for update, err := range remoteAgent.Run(
-		ctx,
-		nil,
+	options := []agent.Option{
 		agent.WithSession(session),
 		agent.WithContinuationToken(continuationToken),
 		agent.Stream(true),
+	}
+	if continuationContextID != "" {
+		options = append(options, agent.WithServiceID(continuationContextID))
+	}
+	for update, err := range remoteAgent.Run(
+		ctx,
+		nil,
+		options...,
 	) {
 		if err != nil {
 			demo.Panic(err)
 		}
-		if update != nil {
+		if update != nil && update.String() != "" {
 			demo.Response(update, nil)
 		}
 	}
