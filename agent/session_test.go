@@ -231,6 +231,34 @@ func TestSession_UnmarshalJSON_IntoCreatedSession(t *testing.T) {
 	}
 }
 
+func TestSession_UnmarshalJSON_NullStateValueRoundtripsAndCanBeOverwritten(t *testing.T) {
+	source := agenttest.CreateSession()
+	var original *nullablePerson
+	source.Set("nullKey", original)
+	data, err := json.Marshal(source)
+	if err != nil {
+		t.Fatalf("unexpected marshal error: %v", err)
+	}
+
+	var session agent.Session
+	if err := json.Unmarshal(data, &session); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var value *nullablePerson
+	ok, err := session.Get("nullKey", &value)
+	if err != nil || !ok || value != nil {
+		t.Fatalf("session.Get(nullKey) = ok %v, value %#v, err %v; want true, nil, nil", ok, value, err)
+	}
+
+	session.Set("nullKey", "replacement")
+	var replacement string
+	ok, err = session.Get("nullKey", &replacement)
+	if err != nil || !ok || replacement != "replacement" {
+		t.Fatalf("session.Get(nullKey) after overwrite = ok %v, value %q, err %v; want true, replacement, nil", ok, replacement, err)
+	}
+}
+
 func TestSession_UnmarshalJSON_IntoZeroValueSession(t *testing.T) {
 	var session agent.Session
 	err := json.Unmarshal([]byte(`{"ServiceID":"service-123","State":{"key1":"value1"}}`), &session)

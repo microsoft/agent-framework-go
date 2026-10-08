@@ -4,6 +4,7 @@ package agent
 
 import (
 	"encoding/json"
+	"slices"
 )
 
 // Session contains the state of a specific conversation with an agent which may include:
@@ -106,15 +107,20 @@ func (s Session) MarshalJSON() ([]byte, error) {
 }
 
 func (s *Session) UnmarshalJSON(data []byte) error {
-	var tmp sessionData
+	var tmp struct {
+		State     map[string]json.RawMessage
+		ServiceID string
+	}
 	if err := json.Unmarshal(data, &tmp); err != nil {
 		return err
 	}
-	if tmp.State == nil {
-		tmp.State = make(map[string]*stateValue)
+
+	state := make(map[string]*stateValue, len(tmp.State))
+	for key, raw := range tmp.State {
+		state[key] = &stateValue{raw: slices.Clone(raw)}
 	}
 	s.serviceID = tmp.ServiceID
-	s.state = tmp.State
+	s.state = state
 	return nil
 }
 
