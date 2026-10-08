@@ -477,8 +477,14 @@ func TestIsolationKeyTaskStoreListNativeCursors(t *testing.T) {
 		pageSize int
 		filter   string
 	}{
-		{0, ""}, {1, ""}, {2, ""}, {3, ""},
-		{0, "context"}, {1, "context"}, {2, "context"}, {3, "context"},
+		{0, ""},
+		{1, ""},
+		{2, ""},
+		{3, ""},
+		{0, "context"},
+		{1, "context"},
+		{2, "context"},
+		{3, "context"},
 	} {
 		t.Run(fmt.Sprintf("filter=%s/size%d", tc.filter, tc.pageSize), func(t *testing.T) {
 			historyLength := 0
@@ -661,7 +667,8 @@ func TestIsolationKeyTaskStoreResolutionFailures(t *testing.T) {
 	for name, operation := range isolationOperations(isolationTask("task", "context")) {
 		t.Run(name, func(t *testing.T) {
 			for _, cfg := range []a2aprovider.IsolationKeyScopedTaskStoreConfig{
-				{}, isolationConfig(""),
+				{},
+				isolationConfig(""),
 				{AllowUnscoped: true, ResolveKey: func(context.Context) (string, error) { return "", resolverError }},
 			} {
 				store := a2aprovider.NewIsolationKeyScopedTaskStore(isolationStoreStub{}, cfg)
@@ -860,9 +867,10 @@ func TestIsolationKeyTaskStoreListCountFailures(t *testing.T) {
 				before := *req
 				response, err := a2aprovider.NewIsolationKeyScopedTaskStore(inner, isolationConfig("alice")).List(ctx, req)
 				want, wantCalls := failure, 3
-				if name == "cancel-between-pages" {
+				switch name {
+				case "cancel-between-pages":
 					want, wantCalls = context.Canceled, 2
-				} else if name == "nil-response" {
+				case "nil-response":
 					want = nil
 				}
 				if response != nil || err != want || calls != wantCalls || *req != before {

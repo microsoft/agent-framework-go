@@ -108,6 +108,11 @@ func (e *executor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContext)
 		state := &executionState{session: session}
 		ctx = context.WithValue(ctx, executionStateKey{}, state)
 		stopped := false
+		saved := false
+		saveSession := func() error {
+			saved = true
+			return e.cfg.SessionStore.Save(context.WithoutCancel(ctx), execCtx.ContextID, session)
+		}
 		forward := func(event a2a.Event, err error) bool {
 			if err != nil {
 				state.err = err
@@ -115,11 +120,29 @@ func (e *executor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContext)
 			if stopped {
 				return false
 			}
+			if err == nil && !saved {
+				var taskState a2a.TaskState
+				switch event := event.(type) {
+				case *a2a.Task:
+					taskState = event.Status.State
+				case *a2a.TaskStatusUpdateEvent:
+					taskState = event.Status.State
+				}
+				if taskState == a2a.TaskStateCompleted {
+					if saveErr := saveSession(); saveErr != nil {
+						event, err = nil, saveErr
+						state.err = saveErr
+					}
+				}
+			}
 			stopped = !yield(event, err)
 			return !stopped
 		}
 		defer func() {
-			if saveErr := e.cfg.SessionStore.Save(context.WithoutCancel(ctx), execCtx.ContextID, session); saveErr != nil && state.err == nil && !stopped {
+			if saved {
+				return
+			}
+			if saveErr := saveSession(); saveErr != nil && state.err == nil && !stopped {
 				forward(nil, saveErr)
 			}
 		}()

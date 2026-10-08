@@ -756,22 +756,6 @@ type assertErr string
 
 func (e assertErr) Error() string { return string(e) }
 
-func collectFirstStreamingTask(t *testing.T, stream iter.Seq2[a2a.Event, error]) *a2a.Task {
-	t.Helper()
-
-	for evt, err := range stream {
-		if err != nil {
-			t.Fatalf("stream returned error: %v", err)
-		}
-		task, ok := evt.(*a2a.Task)
-		if ok {
-			return task
-		}
-	}
-	t.Fatal("expected task event")
-	return nil
-}
-
 func collectStreamingEvents(t *testing.T, stream iter.Seq2[a2a.Event, error]) []a2a.Event {
 	t.Helper()
 	events, err := collectStreamingEventsAndError(stream)
@@ -1828,6 +1812,101 @@ func TestExecutor_SessionSaveFailureIsReturned(t *testing.T) {
 		t.Errorf("error = %v, want %v", err, wantErr)
 	}
 	assertHostedSessionSaved(t, store, "ctx", true)
+}
+
+func TestRequestHandler_TaskSessionSaveFailureIsReturned(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			wantErr := assertErr("save failed")
+			store := &hostedSessionStore{session: new(agent.Session), saveErr: wantErr}
+			h := a2aprovider.NewHandler(responseModeAgent([]*agent.ResponseUpdate{hostedUpdate("m1", "Reply")}, nil), a2aprovider.ExecutorConfig{
+				AgentRunMode: a2aprovider.ReturnTask(), SessionStore: store,
+			})
+			request := &a2a.SendMessageRequest{Message: hostedExecutorContext("", "ctx").Message}
+			request.Message.ContextID = "ctx"
+			var err error
+			var failedTask bool
+			if stream {
+				var events []a2a.Event
+				events, err = collectStreamingEventsAndError(h.SendStreamingMessage(t.Context(), request))
+				for _, task := range collectStreamingTasks(events) {
+					failedTask = failedTask || task.Status.State == a2a.TaskStateFailed
+					if task.Status.State == a2a.TaskStateCompleted {
+						t.Error("failed session save published a completed task")
+					}
+				}
+				for _, status := range collectStreamingStatuses(events) {
+					failedTask = failedTask || status.Status.State == a2a.TaskStateFailed
+					if status.Status.State == a2a.TaskStateCompleted {
+						t.Error("failed session save published successful completion")
+					}
+				}
+			} else {
+				var result a2a.SendMessageResult
+				result, err = h.SendMessage(t.Context(), request)
+				if result != nil {
+					t.Errorf("result = %#v, want no success after failed session save", result)
+				}
+			}
+			if stream && err == nil {
+				if !failedTask {
+					t.Error("failed session save was not observable as a failed task")
+				}
+			} else if !errors.Is(err, wantErr) {
+				t.Errorf("error = %v, want session save error %v", err, wantErr)
+			}
+			assertHostedSessionSaved(t, store, "ctx", true)
+		})
+	}
+}
+
+func TestExecutor_TaskCompletionPersistsSessionBeforeEvent(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			store := a2aprovider.NewInMemorySessionStore()
+			a := newHostedTestAgent(func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				return func(yield func(*agent.ResponseUpdate, error) bool) {
+					session, _ := agent.GetOption(options, agent.WithSession)
+					session.Set("progress", "retained")
+					yield(hostedUpdate("m1", "Reply"), nil)
+				}
+			})
+			e := a2aprovider.NewExecutor(a, a2aprovider.ExecutorConfig{AgentRunMode: a2aprovider.ReturnTask(), SessionStore: store})
+			request := hostedExecutorContext("", "ctx")
+			seq := e.Execute(t.Context(), request)
+			if stream {
+				seq = directExecutorStream(t.Context(), e, request)
+			}
+			var completed bool
+			for event, err := range seq {
+				if err != nil {
+					t.Fatal(err)
+				}
+				var state a2a.TaskState
+				switch event := event.(type) {
+				case *a2a.Task:
+					state = event.Status.State
+				case *a2a.TaskStatusUpdateEvent:
+					state = event.Status.State
+				}
+				if state != a2a.TaskStateCompleted {
+					continue
+				}
+				completed = true
+				saved, err := store.Get(t.Context(), "ctx")
+				if err != nil || saved == nil {
+					t.Fatalf("session at completion = (%v, %v), want persisted session", saved, err)
+				}
+				var progress string
+				if ok, err := saved.Get("progress", &progress); !ok || err != nil || progress != "retained" {
+					t.Errorf("persisted progress = (%q, %t, %v), want retained", progress, ok, err)
+				}
+			}
+			if !completed {
+				t.Fatal("no completed task event")
+			}
+		})
+	}
 }
 
 func TestExecutor_CanceledRunSavesSessionWithContextValues(t *testing.T) {

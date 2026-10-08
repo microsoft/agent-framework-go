@@ -107,11 +107,11 @@ func (s *isolationKeyScopedTaskStore) Update(ctx context.Context, req *taskstore
 	}
 	if prefix != "" {
 		mapID := scopeIsolationID(prefix)
-		copy := *req
-		copy.Task = mapIsolationTask(req.Task, mapID)
-		copy.PrevTask = mapIsolationTask(req.PrevTask, mapID)
-		copy.Event = mapIsolationEvent(req.Event, mapID)
-		req = &copy
+		cloned := *req
+		cloned.Task = mapIsolationTask(req.Task, mapID)
+		cloned.PrevTask = mapIsolationTask(req.PrevTask, mapID)
+		cloned.Event = mapIsolationEvent(req.Event, mapID)
+		req = &cloned
 	}
 	return s.inner.Update(ctx, req)
 }
@@ -128,9 +128,9 @@ func (s *isolationKeyScopedTaskStore) Get(ctx context.Context, id a2a.TaskID) (*
 	if !isolationTaskInScope(stored.Task, prefix) {
 		return nil, a2a.ErrTaskNotFound
 	}
-	copy := *stored
-	copy.Task = mapIsolationTask(stored.Task, unscopeIsolationID(prefix))
-	return &copy, nil
+	cloned := *stored
+	cloned.Task = mapIsolationTask(stored.Task, unscopeIsolationID(prefix))
+	return &cloned, nil
 }
 
 func (s *isolationKeyScopedTaskStore) List(ctx context.Context, req *a2a.ListTasksRequest) (*a2a.ListTasksResponse, error) {
@@ -149,10 +149,10 @@ func (s *isolationKeyScopedTaskStore) List(ctx context.Context, req *a2a.ListTas
 	if err != nil || response == nil || prefix == "" {
 		return response, err
 	}
-	copy := *response
-	copy.Tasks = make([]*a2a.Task, 0, len(response.Tasks))
-	copy.TotalSize = 0
-	copy.NextPageToken = ""
+	cloned := *response
+	cloned.Tasks = make([]*a2a.Task, 0, len(response.Tasks))
+	cloned.TotalSize = 0
+	cloned.NextPageToken = ""
 	limit := request.PageSize
 	if limit == 0 {
 		limit = response.PageSize
@@ -166,24 +166,24 @@ func (s *isolationKeyScopedTaskStore) List(ctx context.Context, req *a2a.ListTas
 				continue
 			}
 			if countFromStart {
-				copy.TotalSize++
+				cloned.TotalSize++
 			}
-			if len(copy.Tasks) == limit {
+			if len(cloned.Tasks) == limit {
 				// This one-task lookahead belongs to the next visible page. Keep
 				// the cursor from before it so the next call retrieves it again.
 				if !pageComplete {
-					copy.NextPageToken = request.PageToken
+					cloned.NextPageToken = request.PageToken
 					pageComplete = true
 				}
 				continue
 			}
-			copy.Tasks = append(copy.Tasks, mapIsolationTask(task, mapID))
+			cloned.Tasks = append(cloned.Tasks, mapIsolationTask(task, mapID))
 		}
 		if response.NextPageToken == "" || (pageComplete && !countFromStart) {
 			break
 		}
 		request.PageToken = response.NextPageToken
-		request.PageSize = max(1, limit-len(copy.Tasks))
+		request.PageSize = max(1, limit-len(cloned.Tasks))
 		if pageComplete {
 			request.PageSize = max(1, limit)
 		}
@@ -211,7 +211,7 @@ func (s *isolationKeyScopedTaskStore) List(ctx context.Context, req *a2a.ListTas
 			}
 			for _, task := range response.Tasks {
 				if isolationTaskInScope(task, prefix) {
-					copy.TotalSize++
+					cloned.TotalSize++
 				}
 			}
 			if response.NextPageToken == "" {
@@ -220,8 +220,8 @@ func (s *isolationKeyScopedTaskStore) List(ctx context.Context, req *a2a.ListTas
 			request.PageToken = response.NextPageToken
 		}
 	}
-	copy.PageSize = len(copy.Tasks)
-	return &copy, nil
+	cloned.PageSize = len(cloned.Tasks)
+	return &cloned, nil
 }
 
 func isolationTaskInScope(task *a2a.Task, prefix string) bool {
@@ -241,33 +241,33 @@ func mapIsolationTask(task *a2a.Task, mapID func(string) string) *a2a.Task {
 	if task == nil {
 		return nil
 	}
-	copy := *task
-	copy.ID = a2a.TaskID(mapID(string(task.ID)))
-	copy.ContextID = mapID(task.ContextID)
-	copy.Status.Message = mapIsolationMessage(task.Status.Message, mapID)
-	copy.History = slices.Clone(task.History)
-	for i, msg := range copy.History {
-		copy.History[i] = mapIsolationMessage(msg, mapID)
+	cloned := *task
+	cloned.ID = a2a.TaskID(mapID(string(task.ID)))
+	cloned.ContextID = mapID(task.ContextID)
+	cloned.Status.Message = mapIsolationMessage(task.Status.Message, mapID)
+	cloned.History = slices.Clone(task.History)
+	for i, msg := range cloned.History {
+		cloned.History[i] = mapIsolationMessage(msg, mapID)
 	}
-	return &copy
+	return &cloned
 }
 
 func mapIsolationMessage(msg *a2a.Message, mapID func(string) string) *a2a.Message {
 	if msg == nil {
 		return nil
 	}
-	copy := *msg
+	cloned := *msg
 	if msg.TaskID != "" {
-		copy.TaskID = a2a.TaskID(mapID(string(msg.TaskID)))
+		cloned.TaskID = a2a.TaskID(mapID(string(msg.TaskID)))
 	}
 	if msg.ContextID != "" {
-		copy.ContextID = mapID(msg.ContextID)
+		cloned.ContextID = mapID(msg.ContextID)
 	}
-	copy.ReferenceTasks = slices.Clone(msg.ReferenceTasks)
-	for i, id := range copy.ReferenceTasks {
-		copy.ReferenceTasks[i] = a2a.TaskID(mapID(string(id)))
+	cloned.ReferenceTasks = slices.Clone(msg.ReferenceTasks)
+	for i, id := range cloned.ReferenceTasks {
+		cloned.ReferenceTasks[i] = a2a.TaskID(mapID(string(id)))
 	}
-	return &copy
+	return &cloned
 }
 
 func mapIsolationEvent(event a2a.Event, mapID func(string) string) a2a.Event {
@@ -280,19 +280,19 @@ func mapIsolationEvent(event a2a.Event, mapID func(string) string) a2a.Event {
 		if event == nil {
 			return event
 		}
-		copy := *event
-		copy.TaskID = a2a.TaskID(mapID(string(event.TaskID)))
-		copy.ContextID = mapID(event.ContextID)
-		copy.Status.Message = mapIsolationMessage(event.Status.Message, mapID)
-		return &copy
+		cloned := *event
+		cloned.TaskID = a2a.TaskID(mapID(string(event.TaskID)))
+		cloned.ContextID = mapID(event.ContextID)
+		cloned.Status.Message = mapIsolationMessage(event.Status.Message, mapID)
+		return &cloned
 	case *a2a.TaskArtifactUpdateEvent:
 		if event == nil {
 			return event
 		}
-		copy := *event
-		copy.TaskID = a2a.TaskID(mapID(string(event.TaskID)))
-		copy.ContextID = mapID(event.ContextID)
-		return &copy
+		cloned := *event
+		cloned.TaskID = a2a.TaskID(mapID(string(event.TaskID)))
+		cloned.ContextID = mapID(event.ContextID)
+		return &cloned
 	default:
 		return event
 	}

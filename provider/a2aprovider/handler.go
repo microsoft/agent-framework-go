@@ -12,8 +12,10 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 )
 
-type configurationKey struct{}
-type configurationOpt struct{ value *a2a.SendMessageConfig }
+type (
+	configurationKey struct{}
+	configurationOpt struct{ value *a2a.SendMessageConfig }
+)
 
 func (o configurationOpt) MAFValue() any { return o.value }
 
