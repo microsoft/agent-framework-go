@@ -17,6 +17,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -92,6 +93,7 @@ func (a *a2aProvider) createSession(ctx context.Context, session *agent.Session,
 
 func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		telemetry.MarkUsed(telemetry.FeatureA2A)
 		session, _ := agent.GetOption(options, agent.WithSession)
 		stream, _ := agent.GetOption(options, agent.Stream)
 		contextID, ok := agent.GetOption(options, agent.WithServiceID)

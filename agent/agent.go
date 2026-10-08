@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/internal/agentopts"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/internal/toolmiddleware"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -317,6 +318,7 @@ func errorResponseStream(err error) ResponseStream {
 
 func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
 	return func(yield func(*ResponseUpdate, error) bool) {
+		telemetry.MarkUsed(telemetry.FeatureAgent)
 		session, _ := GetOption(options, WithSession)
 		// Resolve the current session on every invocation, including re-entry
 		// from agent middleware. Request options never seed an existing session.

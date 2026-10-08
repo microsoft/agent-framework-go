@@ -14,6 +14,7 @@ import (
 	aguiTypes "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/types"
 	aguiSSE "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/encoding/sse"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 )
 
 // HandlerConfig contains configuration for [NewJSONHTTPHandler].
@@ -35,6 +36,7 @@ func NewJSONHTTPHandler(hostedAgent *agent.Agent, cfg HandlerConfig) http.Handle
 	writer := aguiSSE.NewSSEWriter().WithLogger(cfg.Logger)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		telemetry.MarkUsed(telemetry.FeatureHostingAGUI)
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return

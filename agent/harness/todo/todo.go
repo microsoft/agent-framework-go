@@ -20,6 +20,7 @@ import (
 	"weak"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -202,6 +203,7 @@ func (p *Provider) getSessionLock(session *agent.Session) *sync.Mutex {
 }
 
 func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	telemetry.MarkUsed(telemetry.FeatureTodoProvider)
 	opts := invoking.Options
 	session, _ := agent.GetOption(opts, agent.WithSession)
 	tools := p.createTools(session)

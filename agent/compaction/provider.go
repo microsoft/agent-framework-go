@@ -8,6 +8,7 @@ import (
 	"log/slog"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -68,6 +69,7 @@ func NewContextProvider(cfg ContextProviderConfig) agent.ContextProvider {
 }
 
 func (p *contextProvider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	telemetry.MarkUsed(telemetry.FeatureCompactionProvider)
 	messages := invoking.Messages
 	options := invoking.Options
 	session, _ := agent.GetOption(options, agent.WithSession)

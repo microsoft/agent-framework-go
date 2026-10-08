@@ -15,6 +15,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -246,10 +247,12 @@ func newSkillSliceSource(skills ...*Skill) *skillSliceSource {
 }
 
 func (s *skillSliceSource) Skills(context.Context) ([]*Skill, error) {
+	telemetry.MarkUsed(telemetry.FeatureInMemorySkillsSource)
 	return s.skills, nil
 }
 
 func (p *providerState) provide(ctx context.Context, invoking agent.InvokingContext) (outMessages []*message.Message, outOptions []agent.Option, err error) {
+	telemetry.MarkUsed(telemetry.FeatureSkillsProvider)
 	if p.options.DisableCaching {
 		result, err := p.buildContextSafely(ctx)
 		if err != nil {

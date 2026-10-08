@@ -11,6 +11,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -68,6 +69,7 @@ func (e *executor) Execute(ctx context.Context, execCtx *a2asrv.ExecutorContext)
 			yield(nil, errors.New("executor context is required"))
 			return
 		}
+		telemetry.MarkUsed(telemetry.FeatureHostingA2A)
 		if execCtx.Message != nil && len(execCtx.Message.ReferenceTasks) > 0 {
 			// An agent does not support resuming from arbitrary prior tasks.
 			// Return an error explicitly so the client gets a clear error rather than a response
@@ -188,6 +190,7 @@ func (e *executor) executeTaskUpdate(ctx context.Context, execCtx *a2asrv.Execut
 
 func (e *executor) Cancel(_ context.Context, execCtx *a2asrv.ExecutorContext) iter.Seq2[a2a.Event, error] {
 	return func(yield func(a2a.Event, error) bool) {
+		telemetry.MarkUsed(telemetry.FeatureHostingA2A)
 		if execCtx == nil || execCtx.StoredTask == nil {
 			yield(nil, a2a.ErrTaskNotFound)
 			return

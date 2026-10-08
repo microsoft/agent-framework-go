@@ -12,6 +12,7 @@ import (
 	"weak"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messagefilter"
 )
@@ -120,6 +121,7 @@ func NewHistoryProvider(cfg HistoryProviderConfig) agent.HistoryProvider {
 }
 
 func (p *historyProvider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, error) {
+	telemetry.MarkUsed(telemetry.FeatureCompactionProvider)
 	mu := p.locks.forOptions(invoking.Options)
 	mu.Lock()
 	defer mu.Unlock()
@@ -178,6 +180,7 @@ func (p *historyProvider) Invoked(ctx context.Context, invoked agent.InvokedCont
 	if invoked.Err != nil {
 		return nil
 	}
+	telemetry.MarkUsed(telemetry.FeatureCompactionProvider)
 
 	requestFilter := p.config.StoreInputRequestMessageFilter
 	if requestFilter == nil {

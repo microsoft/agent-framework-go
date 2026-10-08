@@ -15,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/microsoft/agent-framework-go/agent/skills"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 )
 
 const (
@@ -190,6 +191,7 @@ func NewSourceOptions(opts SourceOptions, filesystems ...fs.FS) *Source {
 // Skills discovers and loads valid skills from the configured filesystems.
 // Each skill retains the instruction text read during discovery.
 func (s *Source) Skills(ctx context.Context) ([]*skills.Skill, error) {
+	telemetry.MarkUsed(telemetry.FeatureFileSkillsSource)
 	directories := discoverSkillDirectories(s.filesystems, s.logger)
 	s.logger.Info("Discovered potential skills", "count", len(directories))
 

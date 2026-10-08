@@ -18,6 +18,7 @@ import (
 	"weak"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -268,6 +269,7 @@ func (p *Provider) saveState(opts []agent.Option, s *state) {
 }
 
 func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	telemetry.MarkUsed(telemetry.FeatureAgentModeProvider)
 	opts := invoking.Options
 
 	var outMessages []*message.Message

@@ -11,6 +11,7 @@ import (
 	"sync"
 	"weak"
 
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messagefilter"
 )
@@ -238,6 +239,7 @@ func NewInMemoryHistoryProvider(config InMemoryHistoryProviderConfig) HistoryPro
 		StoreInputRequestMessageFilter:  config.StoreInputRequestMessageFilter,
 		StoreInputResponseMessageFilter: config.StoreInputResponseMessageFilter,
 		Provide: func(_ context.Context, invoking InvokingContext) ([]*message.Message, error) {
+			telemetry.MarkUsed(telemetry.FeatureInMemoryHistoryProvider)
 			mu := locks.forOptions(invoking.Options)
 			mu.Lock()
 			defer mu.Unlock()
@@ -255,6 +257,7 @@ func NewInMemoryHistoryProvider(config InMemoryHistoryProviderConfig) HistoryPro
 			return slices.Clone(state.Messages), nil
 		},
 		Store: func(_ context.Context, invoked InvokedContext) error {
+			telemetry.MarkUsed(telemetry.FeatureInMemoryHistoryProvider)
 			mu := locks.forOptions(invoked.Options)
 			mu.Lock()
 			defer mu.Unlock()

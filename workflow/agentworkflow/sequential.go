@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messageworkflow"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -110,7 +111,11 @@ func (b *SequentialWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	if err != nil {
 		return nil, err
 	}
-	return bld.Build()
+	wf, err := bld.Build()
+	if err == nil {
+		telemetry.MarkUsed(telemetry.FeatureSequentialOrchestration)
+	}
+	return wf, err
 }
 
 func newOutputMessagesBinding() workflow.ExecutorBinding {

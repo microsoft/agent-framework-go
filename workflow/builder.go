@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 
+	frameworktelemetry "github.com/microsoft/agent-framework-go/internal/telemetry"
 	internalobservability "github.com/microsoft/agent-framework-go/workflow/internal/observability"
 	workflowobservability "github.com/microsoft/agent-framework-go/workflow/observability"
 )
@@ -266,6 +267,7 @@ func (wb *Builder) build(validateOrphans bool) (*Workflow, error) {
 	}
 	internalobservability.SetBuildWorkflowAttributes(activity, observabilityMetadata(wf, ""), workflowTelemetryDefinitionFrom(wf))
 	activity.AddEvent(internalobservability.EventBuildCompleted)
+	frameworktelemetry.MarkUsed(frameworktelemetry.FeatureWorkflow)
 	return wf, nil
 }
 

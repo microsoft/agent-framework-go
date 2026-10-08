@@ -23,6 +23,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
@@ -92,6 +93,7 @@ func (a *client) unmarshal(f agent.ResponseFormat, data []byte, v any) error {
 }
 
 func (a *client) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	telemetry.MarkUsed(telemetry.FeatureAnthropic)
 	params, err := a.buildMessageParams(messages, options)
 	if err != nil {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -138,8 +140,10 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		var finishReason string
 		var usage message.UsageDetails
 		var accumulated anthropic.Message
+		receivedEvent := false
 
 		for stream.Next() {
+			receivedEvent = true
 			event := stream.Current()
 			if err := accumulated.Accumulate(event); err != nil {
 				yield(nil, err)
@@ -221,6 +225,9 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		}
 		if err := stream.Err(); err != nil {
 			yield(nil, err)
+			return
+		}
+		if !receivedEvent {
 			return
 		}
 		if !yield(&agent.ResponseUpdate{

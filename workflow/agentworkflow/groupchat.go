@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messageworkflow"
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -248,7 +249,11 @@ func (b *GroupChatWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	if err != nil {
 		return nil, err
 	}
-	return builder.Build()
+	wf, err := builder.Build()
+	if err == nil {
+		telemetry.MarkUsed(telemetry.FeatureGroupChatOrchestration)
+	}
+	return wf, err
 }
 
 type groupChatHostExecutor struct {

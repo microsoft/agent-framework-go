@@ -194,7 +194,11 @@ For environment variable configuration specific to each sample, refer to the REA
 
 ### Telemetry and data collection
 
-This repository does not configure Microsoft telemetry collection by default. Some packages and samples include optional OpenTelemetry instrumentation or connect to Microsoft-hosted services. To turn off framework instrumentation, do not configure OpenTelemetry exporters or telemetry middleware in your application. Service telemetry, if any, is governed by the services you choose to call.
+This repository does not configure a Microsoft telemetry exporter. The OpenAI/Foundry adapters include SDK identity/version in their User-Agent and append a process-wide feature-usage bitmask only on approved HTTPS Azure/Foundry destinations. The mask records which framework capabilities were exercised, not invocation counts, prompts, arguments, or user data. It is not sent to third-party destinations or added to OpenTelemetry.
+
+Set `AGENT_FRAMEWORK_FEATURE_MASK_DISABLED=true` or `1` before first use to disable feature tracking and emission while retaining the base SDK User-Agent. Set `AGENT_FRAMEWORK_USER_AGENT_DISABLED=true` or `1` to suppress the framework's entire User-Agent contribution, including the feature mask. See the [feature-usage registry and emission policy](./docs/feature-usage-telemetry.md).
+
+Some packages and samples include optional OpenTelemetry instrumentation or connect to Microsoft-hosted services. To turn off that instrumentation, do not configure OpenTelemetry exporters or telemetry middleware in your application. Service telemetry, if any, is governed by the services you choose to call.
 
 ### Preview status
 

@@ -764,8 +764,8 @@
         "ToA2AMessage_WithMixedMessages_AddsAllContentsAsParts": "provider/a2aprovider.TestMessagesToA2AMessageMixedMessages"
       },
       "Microsoft.Agents.AI.A2A.UnitTests.FeatureUsageActivationTests": {
-        "RunAsync_ActivatesA2AAsync": null,
-        "RunStreamingAsync_IsColdAndActivatesA2AAsync": null
+        "RunAsync_ActivatesA2AAsync": "provider/a2aprovider.TestFeatureUsageRunActivatesA2A",
+        "RunStreamingAsync_IsColdAndActivatesA2AAsync": "provider/a2aprovider.TestFeatureUsageStreamingIsColdAndActivatesA2A"
       }
     },
     "Microsoft.Agents.AI.Abstractions.UnitTests": {
@@ -1219,22 +1219,22 @@
         "RunStreamingAsyncDefaultsToInnerAgentAsync": null
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.FeatureUsageTests": {
-        "ApplyToUserAgent_Excluded_StripsOnlyValidFeatureComments": null,
-        "ApplyToUserAgent_NoToken_PreservesHeaderWithoutValidFeatureCommentByteForByte": null,
+        "ApplyToUserAgent_Excluded_StripsOnlyValidFeatureComments": "internal/telemetry.TestApplyToUserAgentExcludedStripsFeatureComments",
+        "ApplyToUserAgent_NoToken_PreservesHeaderWithoutValidFeatureCommentByteForByte": "internal/telemetry.TestApplyToUserAgentNoTokenPreservesHeader",
         "ApplyToUserAgent_NullUserAgent_ThrowsArgumentNullException": null,
-        "ApplyToUserAgent_RefreshesStaleComment_PreservesUnrelatedBytes_AndIsIdempotent": null,
-        "Configuration_IsCachedUntilRefreshedForTests": null,
-        "GetToken_BitsInBothLanes_PadsLowLane": null,
-        "GetToken_EmptyMask_ReturnsNull": null,
-        "GetToken_UnchangedMask_ReturnsCachedTokenInstance": null,
-        "GetToken_UsesLowercaseVersionedHexFormat": null,
-        "InMemoryChatHistoryProvider_ActivatesOnlyWhenParticipatingAsync": null,
-        "MarkUsed_AllBitsConcurrently_AccumulatesEveryBit": null,
-        "MarkUsed_BoundaryIndex_ProducesExpectedToken": null,
-        "MarkUsed_Disabled_DoesNotAccumulate": null,
-        "MarkUsed_Disabled_DoesNotValidateIndex": null,
-        "MarkUsed_DuplicateIndex_DoesNotChangeToken": null,
-        "MarkUsed_InvalidIndex_ThrowsArgumentOutOfRangeException": null,
+        "ApplyToUserAgent_RefreshesStaleComment_PreservesUnrelatedBytes_AndIsIdempotent": "internal/telemetry.TestApplyToUserAgentRefreshesFeatureComments",
+        "Configuration_IsCachedUntilRefreshedForTests": "internal/telemetry.TestFeatureUsageConfigurationCached",
+        "GetToken_BitsInBothLanes_PadsLowLane": "internal/telemetry.TestFeatureUsagePadsLowLane",
+        "GetToken_EmptyMask_ReturnsNull": "internal/telemetry.TestFeatureUsageEmptyMaskReturnsNoToken",
+        "GetToken_UnchangedMask_ReturnsCachedTokenInstance": "internal/telemetry.TestFeatureUsageTokenCache",
+        "GetToken_UsesLowercaseVersionedHexFormat": "internal/telemetry.TestFeatureUsageLowercaseVersionedHex",
+        "InMemoryChatHistoryProvider_ActivatesOnlyWhenParticipatingAsync": "internal/telemetry.TestInMemoryHistoryFeatureUsageActivation",
+        "MarkUsed_AllBitsConcurrently_AccumulatesEveryBit": "internal/telemetry.TestFeatureUsageConcurrentAccumulation",
+        "MarkUsed_BoundaryIndex_ProducesExpectedToken": "internal/telemetry.TestFeatureUsageBoundaryIndexes",
+        "MarkUsed_Disabled_DoesNotAccumulate": "internal/telemetry.TestFeatureUsageDisabledDoesNotAccumulate",
+        "MarkUsed_Disabled_DoesNotValidateIndex": "internal/telemetry.TestFeatureUsageDisabledDoesNotValidateIndex",
+        "MarkUsed_DuplicateIndex_DoesNotChangeToken": "internal/telemetry.TestFeatureUsageDuplicateIndexKeepsTokenCache",
+        "MarkUsed_InvalidIndex_ThrowsArgumentOutOfRangeException": "internal/telemetry.TestFeatureUsageInvalidIndexes",
         "PublicSurface_IsHiddenAndExperimental": null
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.InMemoryChatHistoryProviderTests": {
@@ -1416,8 +1416,8 @@
         "CreateAIAgent_WithoutClientFactory_WorksNormally": null
       },
       "Microsoft.Agents.AI.Anthropic.UnitTests.FeatureUsageActivationTests": {
-        "NonStreamingExecution_MarksAnthropicFeatureUsageAsync": null,
-        "StreamingExecution_IsColdAndMarksAnthropicFeatureUsageAsync": null
+        "NonStreamingExecution_MarksAnthropicFeatureUsageAsync": "internal/telemetry.TestAnthropicFeatureUsageNonStreaming",
+        "StreamingExecution_IsColdAndMarksAnthropicFeatureUsageAsync": "internal/telemetry.TestAnthropicFeatureUsageStreamingIsCold"
       }
     },
     "Microsoft.Agents.AI.AzureAI.Persistent.UnitTests": {
@@ -2196,11 +2196,11 @@
         "WithClientHeaders_AllOrNothing_OnInvalidKey": null
       },
       "Microsoft.Agents.AI.Foundry.UnitTests.FeatureUsageUserAgentPolicyTests": {
-        "IsApprovedOrigin_AcceptsExactAndDotSubdomainHttpsFoundryOrigins": null,
-        "IsApprovedOrigin_RejectsHttpCustomLookalikeAndUnrelatedOrigins": null,
-        "Policy_EmptyToken_PreservesBaseHeaderByteForByteAsync": null,
-        "Policy_IneligibleOrigin_RemovesStaleCommentWithoutChangingBaseHeaderAsync": null,
-        "Policy_RefreshesLiveTokenOnEveryEligibleRequestAsync": null,
+        "IsApprovedOrigin_AcceptsExactAndDotSubdomainHttpsFoundryOrigins": "internal/telemetry.TestFoundryFeatureUsageApprovedOrigins",
+        "IsApprovedOrigin_RejectsHttpCustomLookalikeAndUnrelatedOrigins": "internal/telemetry.TestFoundryFeatureUsageRejectedOrigins",
+        "Policy_EmptyToken_PreservesBaseHeaderByteForByteAsync": "internal/telemetry.TestFoundryFeatureUsagePolicyEmptyTokenPreservesHeader",
+        "Policy_IneligibleOrigin_RemovesStaleCommentWithoutChangingBaseHeaderAsync": "internal/telemetry.TestFoundryFeatureUsagePolicyIneligibleRemovesComment",
+        "Policy_RefreshesLiveTokenOnEveryEligibleRequestAsync": "internal/telemetry.TestFoundryFeatureUsagePolicyLiveToken",
         "Registration_IsAtMostOnceUnderConcurrency": null,
         "Registration_UsesConditionalWeakTableToRegisterAtMostOnce": null
       },
@@ -2393,10 +2393,10 @@
       },
       "Microsoft.Agents.AI.Foundry.UnitTests.FoundryFeatureUsageActivationTests": {
         "ConstructorsAndFactories_DoNotMarkFeatures": null,
-        "FoundryAgent_ExecutionMarksAgentAndChatClientOnCurrentRequestAsync": null,
-        "FoundryChatClient_StreamingMarksAtEnumerationAsync": null,
+        "FoundryAgent_ExecutionMarksAgentAndChatClientOnCurrentRequestAsync": "internal/telemetry.TestFoundryFeatureUsageServerRequestMarksAgentAndClient",
+        "FoundryChatClient_StreamingMarksAtEnumerationAsync": "internal/telemetry.TestFoundryFeatureUsageModelStreamingIsCold",
         "FoundryEvals_FirstEvaluationMarksFeatureAsync": null,
-        "FoundryMemory_FirstProviderHookMarksFeatureAsync": null,
+        "FoundryMemory_FirstProviderHookMarksFeatureAsync": "internal/telemetry.TestFoundryMemoryFeatureUsageFirstHook",
         "FoundryToolbox_MarksOnlyWhenMarkerParticipatesInOutgoingRequestAsync": null
       },
       "Microsoft.Agents.AI.Foundry.UnitTests.FoundryHostedRequestTests": {
@@ -2515,8 +2515,8 @@
         "AsAIAgent_WithTools_ReturnsAgentWithTools": null
       },
       "Microsoft.Agents.AI.GitHub.Copilot.UnitTests.FeatureUsageActivationTests": {
-        "RunAsync_WhenCancelled_ActivatesGitHubCopilotAsync": null,
-        "RunStreamingAsync_IsColdAndActivatesGitHubCopilotAsync": null
+        "RunAsync_WhenCancelled_ActivatesGitHubCopilotAsync": "internal/telemetry.TestCopilotFeatureUsageCancelledRun",
+        "RunStreamingAsync_IsColdAndActivatesGitHubCopilotAsync": "internal/telemetry.TestCopilotFeatureUsageStreamingIsCold"
       },
       "Microsoft.Agents.AI.GitHub.Copilot.UnitTests.GitHubCopilotAgentTests": {
         "Constructor_WithApprovalRequiredToolInSessionConfig_InstallsAskPreToolUseHookAsync": null,
@@ -3926,8 +3926,8 @@
         "CreateAIAgent_WithoutClientFactory_WorksNormally": null
       },
       "Microsoft.Agents.AI.OpenAI.UnitTests.FeatureUsageActivationTests": {
-        "NonStreamingExecution_MarksOpenAIFeatureUsageAsync": null,
-        "StreamingExecution_IsColdAndMarksOpenAIFeatureUsageAsync": null
+        "NonStreamingExecution_MarksOpenAIFeatureUsageAsync": "internal/telemetry.TestOpenAIFeatureUsageNonStreaming",
+        "StreamingExecution_IsColdAndMarksOpenAIFeatureUsageAsync": "internal/telemetry.TestOpenAIFeatureUsageStreamingIsCold"
       },
       "Microsoft.Agents.AI.OpenAI.UnitTests.UserAgentPolicyTests": {
         "AzureOpenAIChatAgent_DisabledMaskEmitsOnlyBaseUserAgentAsync": null,
@@ -4053,7 +4053,7 @@
         "ShellExecutor_DockerShellTool_ImplementsInterfaceAsync": null
       },
       "Microsoft.Agents.AI.Tools.Shell.UnitTests.FeatureUsageActivationTests": {
-        "RunAsync_MarksFeatureUsageAsync": null
+        "RunAsync_MarksFeatureUsageAsync": "internal/telemetry.TestShellFeatureUsageRun"
       },
       "Microsoft.Agents.AI.Tools.Shell.UnitTests.HeadTailBufferTests": {
         "Append_BelowCap_RoundTripsExactInput": null,
@@ -5711,12 +5711,12 @@
         "ToolCallsPresent_PassesWhenConversationHasToolCalls": null
       },
       "Microsoft.Agents.AI.UnitTests.FeatureUsageActivationTests": {
-        "ChatClientAgent_NonStreamingExecution_ActivatesCoreAgentAsync": null,
-        "ChatClientAgent_StreamingExecution_IsColdUntilFirstEnumerationAsync": null,
+        "ChatClientAgent_NonStreamingExecution_ActivatesCoreAgentAsync": "internal/telemetry.TestCoreAgentFeatureUsageNonStreaming",
+        "ChatClientAgent_StreamingExecution_IsColdUntilFirstEnumerationAsync": "internal/telemetry.TestCoreAgentFeatureUsageStreamingIsCold",
         "Construction_DoesNotActivateCoreFeatures": null,
         "CoreProviders_ActivateTheirAssignedFeaturesAsync": null,
         "SkillSourcesAndProgrammaticSkills_ActivateOnLoadOrUseAsync": null,
-        "ToolApprovalAgent_Execution_ActivatesOnlyToolApprovalAsync": null
+        "ToolApprovalAgent_Execution_ActivatesOnlyToolApprovalAsync": "internal/telemetry.TestToolApprovalFeatureUsageOnlyApproval"
       },
       "Microsoft.Agents.AI.UnitTests.FunctionInvocationDelegatingAgentTests": {
         "AIAgentBuilder_Use_FunctionInvocationMiddleware_WorksCorrectlyAsync": null,
@@ -8070,7 +8070,7 @@
       },
       "Microsoft.Agents.AI.Workflows.UnitTests.WorkflowFeatureUsageTests": {
         "Build_MarksOnlyTheActivatedWorkflowFeature": null,
-        "Build_WhenValidationFails_DoesNotMarkCoreWorkflow": null
+        "Build_WhenValidationFails_DoesNotMarkCoreWorkflow": "internal/telemetry.TestWorkflowFeatureUsageInvalidBuild"
       },
       "Microsoft.Agents.AI.Workflows.UnitTests.WorkflowHostSmokeTests": {
         "Test_AsAgent_ErrorContentStreamedOutAsync": null,

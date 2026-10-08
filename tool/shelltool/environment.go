@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
@@ -178,6 +179,7 @@ func (p *EnvironmentProvider) CurrentSnapshot() (ShellEnvironmentSnapshot, bool)
 
 // Refresh forces a re-probe and stores the new snapshot.
 func (p *EnvironmentProvider) Refresh(ctx context.Context) (ShellEnvironmentSnapshot, error) {
+	telemetry.MarkUsed(telemetry.FeatureShell)
 	snapshot, err := p.probe(ctx)
 	if err != nil {
 		return ShellEnvironmentSnapshot{}, err
@@ -194,6 +196,7 @@ func (p *EnvironmentProvider) Refresh(ctx context.Context) (ShellEnvironmentSnap
 }
 
 func (p *EnvironmentProvider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	telemetry.MarkUsed(telemetry.FeatureShell)
 	snapshot, err := p.snapshot(ctx)
 	if err != nil {
 		return nil, nil, err

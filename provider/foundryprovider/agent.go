@@ -72,6 +72,7 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 		panic("credential is required")
 	}
 	var baseURL, model string
+	var serverAgent bool
 	var targetOptions []option.RequestOption
 	instructions := config.Instructions
 	switch target := target.(type) {
@@ -86,6 +87,7 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 		// reject the api-version query added by azure.WithEndpoint.
 		targetOptions = append(targetOptions, option.WithQueryDel("api-version"))
 	case ServerAgent:
+		serverAgent = true
 		projectEndpoint := normalizeAbsoluteEndpoint(endpoint)
 		agentName := strings.TrimSpace(string(target))
 		if agentName == "" {
@@ -137,7 +139,7 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 	openAIOptions = append(openAIOptions, hostedAgentSessionRequestOption())
 	openAIOptions = append(openAIOptions, servedModelRequestOption())
 	config.Middlewares = append([]agent.Middleware{
-		clientHeadersMiddleware{},
+		clientHeadersMiddleware{serverAgent: serverAgent},
 		hostedAgentUserIdentityMiddleware{},
 		hostedAgentSessionMiddleware{},
 		servedModelMiddleware{},

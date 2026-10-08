@@ -10,6 +10,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 )
 
 type (
@@ -57,6 +58,7 @@ func (*configurationInterceptor) After(context.Context, *a2asrv.CallContext, *a2
 }
 
 func (*configurationInterceptor) Before(ctx context.Context, _ *a2asrv.CallContext, request *a2asrv.Request) (context.Context, any, error) {
+	telemetry.MarkUsed(telemetry.FeatureHostingA2A)
 	if request != nil {
 		if send, ok := request.Payload.(*a2a.SendMessageRequest); ok && send.Config != nil {
 			configuration, _ := agent.GetOption([]agent.Option{WithConfiguration(send.Config)}, WithConfiguration)

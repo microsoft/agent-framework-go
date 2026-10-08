@@ -26,10 +26,16 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-var telemetryRequestOption = option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-	req.Header = telemetry.PrependAgentFrameworkToHTTPHeader(req.Header)
-	return next(req)
-})
+func telemetryRequestOption(providerName string) option.RequestOption {
+	apply := telemetry.ApplyToHTTPRequest
+	if providerName == "microsoft.foundry" {
+		apply = telemetry.ApplyToFoundryHTTPRequest
+	}
+	return option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		apply(req)
+		return next(req)
+	})
+}
 
 type chatClient struct {
 	client openai.Client
@@ -110,6 +116,8 @@ func (a *chatClient) unmarshal(format agent.ResponseFormat, data []byte, v any) 
 }
 
 func (a *chatClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	telemetry.MarkUsed(telemetry.FeatureOpenAI)
+	telemetryOption := telemetryRequestOption(a.config.ProviderName)
 	body, err := buildCompletionParams(a.config.Model, messages, options)
 	if err != nil {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -117,7 +125,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		}
 	}
 	if stream, _ := agent.GetOption(options, agent.Stream); !stream {
-		resp, err := a.client.Chat.Completions.New(ctx, body, telemetryRequestOption)
+		resp, err := a.client.Chat.Completions.New(ctx, body, telemetryOption)
 		if err != nil {
 			return func(yield func(*agent.ResponseUpdate, error) bool) {
 				yield(nil, err)
@@ -177,7 +185,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		body.StreamOptions.IncludeUsage = openai.Bool(true)
 	}
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
-		stream := a.client.Chat.Completions.NewStreaming(ctx, body, telemetryRequestOption)
+		stream := a.client.Chat.Completions.NewStreaming(ctx, body, telemetryOption)
 		defer func() { _ = stream.Close() }()
 		var acc openai.ChatCompletionAccumulator
 		for stream.Next() {

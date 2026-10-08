@@ -18,6 +18,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -41,6 +42,7 @@ func AddTool(src *mcp.Server, tl tool.FuncTool) {
 		InputSchema:  tl.Schema(),
 		OutputSchema: outputSchema,
 	}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		telemetry.MarkUsed(telemetry.FeatureMCP)
 		result, err := tl.Call(ctx, string(req.Params.Arguments))
 		if err != nil {
 			callResult := &mcp.CallToolResult{}
@@ -74,6 +76,7 @@ func AddTool(src *mcp.Server, tl tool.FuncTool) {
 
 // Connect dials an MCP server over the given transport and returns a client session.
 func Connect(ctx context.Context, transport mcp.Transport) (*mcp.ClientSession, error) {
+	telemetry.MarkUsed(telemetry.FeatureMCP)
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    "agent-framework-go-mcp-client",
 		Version: "1.0.0",
@@ -83,6 +86,7 @@ func Connect(ctx context.Context, transport mcp.Transport) (*mcp.ClientSession, 
 
 // ListTools enumerates all pages of the remote server's tools and wraps each as a tool.Tool.
 func ListTools(ctx context.Context, session *mcp.ClientSession) ([]tool.Tool, error) {
+	telemetry.MarkUsed(telemetry.FeatureMCP)
 	// Create agent.Tool instances for each MCP tool.
 	//
 	// Normalization (normalizeMCPName) can map distinct remote names onto the
@@ -603,6 +607,7 @@ func (w *mcpWrapper) ReturnSchema() any {
 
 // Call implements the Func-like calling pattern for MCP tools.
 func (w *mcpWrapper) Call(ctx context.Context, args string) (any, error) {
+	telemetry.MarkUsed(telemetry.FeatureMCP)
 	result, err := w.session.CallTool(ctx, &mcp.CallToolParams{
 		Name:      w.tool.Name,
 		Arguments: json.RawMessage(args),

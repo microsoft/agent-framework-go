@@ -7,7 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"math/big"
+	"os"
+	"os/exec"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -16,6 +20,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	a2a1 "github.com/microsoft/agent-framework-go/provider/a2aprovider"
 )
@@ -28,6 +33,7 @@ type mockA2ATransport struct {
 	responseToReturn           a2a.SendMessageResult
 	streamingResponseToReturn  a2a.Event
 	streamingResponsesToReturn []a2a.Event
+	emptyStreamingResponse     bool
 	subscribeResponseToReturn  a2a.Event
 	subscribeErrToReturn       error
 	getTaskErrToReturn         error
@@ -65,6 +71,9 @@ func (m *mockA2ATransport) SendStreamingMessage(ctx context.Context, _ a2aclient
 	m.sendStreamingMessageCalled = true
 	m.sendStreamingCallCount++
 	m.capturedMessageSendParams = params
+	if m.emptyStreamingResponse {
+		return func(func(a2a.Event, error) bool) {}
+	}
 	if len(m.streamingResponsesToReturn) > 0 {
 		for _, response := range m.streamingResponsesToReturn {
 			switch response := response.(type) {
@@ -260,6 +269,84 @@ func newTestAgent(transport a2aclient.Transport, config agent.Config) *agent.Age
 
 func latestTaskID(session *agent.Session) string {
 	return a2a1.TaskIDFromSession(session)
+}
+
+func TestFeatureUsageRunActivatesA2A(t *testing.T) {
+	if runFeatureUsageSubprocess(t) {
+		return
+	}
+	a := newTestAgent(&mockA2ATransport{
+		responseToReturn:       &a2a.Message{ID: "response", Role: a2a.MessageRoleAgent},
+		emptyStreamingResponse: true,
+	}, agent.Config{})
+
+	if _, err := a.RunText(t.Context(), "hello").Collect(); err != nil {
+		t.Fatal(err)
+	}
+
+	assertA2AFeatureMarked(t)
+}
+
+func TestFeatureUsageStreamingIsColdAndActivatesA2A(t *testing.T) {
+	if runFeatureUsageSubprocess(t) {
+		return
+	}
+	a := newTestAgent(&mockA2ATransport{
+		responseToReturn:       &a2a.Message{ID: "response", Role: a2a.MessageRoleAgent},
+		emptyStreamingResponse: true,
+	}, agent.Config{})
+
+	stream := a.RunText(t.Context(), "hello", agent.Stream(true))
+
+	if got := telemetry.ApplyToUserAgent("", true); got != "" {
+		t.Fatalf("unconsumed stream marked features: %s", got)
+	}
+	for update, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Fatalf("empty stream yielded an update: %#v", update)
+	}
+	assertA2AFeatureMarked(t)
+}
+
+func runFeatureUsageSubprocess(t *testing.T) bool {
+	t.Helper()
+	const helperEnv = "AGENT_FRAMEWORK_A2A_FEATURE_USAGE_TEST"
+	if os.Getenv(helperEnv) == t.Name() {
+		return false
+	}
+	// The accumulator is process-global and must not inherit other tests' bits.
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^"+regexp.QuoteMeta(t.Name())+"$")
+	cmd.Env = append(os.Environ(),
+		helperEnv+"="+t.Name(),
+		"AGENT_FRAMEWORK_FEATURE_MASK_DISABLED=",
+		"AGENT_FRAMEWORK_USER_AGENT_DISABLED=",
+	)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("isolated feature-usage test failed: %v\n%s", err, output)
+	}
+	return true
+}
+
+func assertA2AFeatureMarked(t *testing.T) {
+	t.Helper()
+	userAgent := telemetry.ApplyToUserAgent("", true)
+	const prefix = "(feat=v1."
+	if !strings.HasPrefix(userAgent, prefix) || !strings.HasSuffix(userAgent, ")") {
+		t.Fatalf("feature comment = %q, want version-1 mask", userAgent)
+	}
+	mask, ok := new(big.Int).SetString(userAgent[len(prefix):len(userAgent)-1], 16)
+	if !ok {
+		t.Fatalf("feature comment has invalid mask: %q", userAgent)
+	}
+	if mask.Bit(62) != 1 {
+		t.Fatalf("A2A feature bit 62 is not set: %q", userAgent)
+	}
 }
 
 // TestConstructorWithNilClient tests that nil client is handled

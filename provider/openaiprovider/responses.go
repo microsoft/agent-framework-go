@@ -21,6 +21,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
@@ -108,6 +109,8 @@ func (a *responsesClient) unmarshal(format agent.ResponseFormat, data []byte, v 
 
 func (a *responsesClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		telemetry.MarkUsed(telemetry.FeatureOpenAI)
+		telemetryOption := telemetryRequestOption(a.config.ProviderName)
 		stream, _ := agent.GetOption(options, agent.Stream)
 
 		body, err := responsesBuildCompletionParams(a.config, messages, options)
@@ -139,7 +142,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 				// Get streaming response
 				streamResp := a.client.Responses.GetStreaming(ctx, ct.ResponseID, responses.ResponseGetParams{
 					StartingAfter: openai.Int(ct.SequenceNumber),
-				}, telemetryRequestOption)
+				}, telemetryOption)
 				defer func() { _ = streamResp.Close() }()
 				streamState := &responsesStreamState{}
 				storeDisabled := disableStoreOutput
@@ -170,7 +173,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 				}
 			} else {
 				// Get complete response
-				resp, err := a.client.Responses.Get(ctx, ct.ResponseID, responses.ResponseGetParams{}, telemetryRequestOption)
+				resp, err := a.client.Responses.Get(ctx, ct.ResponseID, responses.ResponseGetParams{}, telemetryOption)
 				if err != nil {
 					yield(nil, err)
 					return
@@ -188,7 +191,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 
 		if stream {
 			// Create streaming response
-			streamResp := a.client.Responses.NewStreaming(ctx, body, telemetryRequestOption)
+			streamResp := a.client.Responses.NewStreaming(ctx, body, telemetryOption)
 			defer func() { _ = streamResp.Close() }()
 			responseID := ""
 			createdAt := time.Time{}
@@ -233,7 +236,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 			}
 		} else {
 			// Create complete response
-			resp, err := a.client.Responses.New(ctx, body, telemetryRequestOption)
+			resp, err := a.client.Responses.New(ctx, body, telemetryOption)
 			if err != nil {
 				yield(nil, err)
 				return

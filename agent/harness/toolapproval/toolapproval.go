@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -143,6 +144,7 @@ type Config struct {
 
 func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		telemetry.MarkUsed(telemetry.FeatureToolApproval)
 		maxAutoApprovalIterations := DefaultMaxAutoApprovalIterations
 		if cfg.MaxAutoApprovalIterations != nil {
 			maxAutoApprovalIterations = *cfg.MaxAutoApprovalIterations

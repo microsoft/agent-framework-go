@@ -19,6 +19,7 @@ import (
 
 	copilot "github.com/github/copilot-sdk/go"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -73,6 +74,11 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		if p.client == nil {
 			yield(nil, errors.New("copilotprovider: client cannot be nil"))
+			return
+		}
+		telemetry.MarkUsed(telemetry.FeatureGitHubCopilot)
+		if err := ctx.Err(); err != nil {
+			yield(nil, err)
 			return
 		}
 
