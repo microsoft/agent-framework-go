@@ -8,6 +8,8 @@ represent invocation counts. Construction alone does not mark a feature.
 The mask contains no identifiers, prompts, arguments, payloads, or user data.
 Tracking is independent of the provider; a feature used with a third-party
 provider can appear in a later request to an approved Azure destination.
+Specialized workflow builders mark only their orchestration bit; bit 2 is
+reserved for custom workflow graphs.
 
 ## Encoding and emission
 

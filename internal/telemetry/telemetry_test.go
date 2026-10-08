@@ -262,6 +262,10 @@ func TestApplyToUserAgentExcludedStripsFeatureComments(t *testing.T) {
 		{"app/1.0 (feat=v2.AB)", "app/1.0"},
 		{"app/1.0 (feat=v1.1) (feat=v2.2)", "app/1.0"},
 		{"app/1.0  (feat=v1.1)", "app/1.0 "},
+		{"app/1.0 (custom=a (feat=v1.1) custom=b)", "app/1.0 (custom=a (feat=v1.1) custom=b)"},
+		{`app/1.0 (custom=a \(feat=v1.1\) custom=b)`, `app/1.0 (custom=a \(feat=v1.1\) custom=b)`},
+		{`app/1.0 (custom=a \) still=b) (feat=v1.1)`, `app/1.0 (custom=a \) still=b)`},
+		{"app/1.0 (custom=a (feat=v1.1) custom=b) (feat=v2.2)", "app/1.0 (custom=a (feat=v1.1) custom=b)"},
 	} {
 		t.Run(tc.input, func(t *testing.T) {
 			got := runHelperOutput(t, "feature-excluded", featureUserAgentEnvVar+"="+tc.input)
@@ -292,6 +296,10 @@ func TestApplyToUserAgentFeatureComments(t *testing.T) {
 		{"app/1.0 (feat=v2.AB)", "app/1.0"},
 		{"app/1.0 (feat=v1.1) (feat=v2.2)", "app/1.0"},
 		{"app/1.0  (feat=v1.1)", "app/1.0 "},
+		{"app/1.0 (custom=a (feat=v1.1) custom=b)", "app/1.0 (custom=a (feat=v1.1) custom=b)"},
+		{`app/1.0 (custom=a \(feat=v1.1\) custom=b)`, `app/1.0 (custom=a \(feat=v1.1\) custom=b)`},
+		{`app/1.0 (custom=a \) still=b) (feat=v1.1)`, `app/1.0 (custom=a \) still=b)`},
+		{"app/1.0 (custom=a (feat=v1.1) custom=b) (feat=v2.2)", "app/1.0 (custom=a (feat=v1.1) custom=b)"},
 		{"app/1.0\t(feat=v1.1)\t(custom=a)", "app/1.0\t(custom=a)"},
 		{"(feat=v1.1)\u2003app/1.0", "app/1.0"},
 		{"app/1.0\u2003(feat=v1.1)\u2003(custom=a)", "app/1.0\u2003(custom=a)"},

@@ -16,6 +16,7 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messageworkflow"
 	"github.com/microsoft/agent-framework-go/workflow"
+	workflowfeature "github.com/microsoft/agent-framework-go/workflow/internal/featureusage"
 )
 
 const (
@@ -238,7 +239,9 @@ func (b *GroupChatWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	}
 
 	host := newGroupChatHostBinding(participants, participantBindings, bindingsByAgent, bindingsByAgentID, b.managerFactory)
-	builder := applyBuilderMetadata(workflow.NewBuilder(host), b.name, b.description)
+	selectedHost := host
+	selectedHost.RawValue = workflowfeature.Tag(selectedHost.RawValue, telemetry.FeatureGroupChatOrchestration)
+	builder := applyBuilderMetadata(workflow.NewBuilder(selectedHost), b.name, b.description)
 	for _, participant := range participantBindings {
 		builder = builder.AddEdge(host, participant).AddEdge(participant, host)
 	}
@@ -249,11 +252,7 @@ func (b *GroupChatWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	if err != nil {
 		return nil, err
 	}
-	wf, err := builder.Build()
-	if err == nil {
-		telemetry.MarkUsed(telemetry.FeatureGroupChatOrchestration)
-	}
-	return wf, err
+	return builder.Build()
 }
 
 type groupChatHostExecutor struct {

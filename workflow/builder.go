@@ -12,6 +12,7 @@ import (
 	"slices"
 
 	frameworktelemetry "github.com/microsoft/agent-framework-go/internal/telemetry"
+	workflowfeature "github.com/microsoft/agent-framework-go/workflow/internal/featureusage"
 	internalobservability "github.com/microsoft/agent-framework-go/workflow/internal/observability"
 	workflowobservability "github.com/microsoft/agent-framework-go/workflow/observability"
 )
@@ -33,14 +34,21 @@ type Builder struct {
 	inputPorts               map[string]RequestPort
 	outputExecutors          map[string]map[OutputTag]struct{}
 	telemetry                *internalobservability.Context
+	featureIndex             int
 }
 
 // NewBuilder returns a Builder rooted at the given start executor binding,
 // which becomes the workflow entry point.
 func NewBuilder(start ExecutorBinding) *Builder {
+	featureIndex := frameworktelemetry.FeatureWorkflow
+	if rawValue, selectedFeature, ok := workflowfeature.Unwrap(start.RawValue); ok {
+		start.RawValue = rawValue
+		featureIndex = selectedFeature
+	}
 	bld := &Builder{
 		startExecutorId: start.ID,
 		edges:           make(map[string][]Edge),
+		featureIndex:    featureIndex,
 	}
 	// Always track the start binding so even single-node workflows have a
 	// proper ExecutorBindings entry. Without this, Workflow.DescribeProtocol
@@ -267,7 +275,7 @@ func (wb *Builder) build(validateOrphans bool) (*Workflow, error) {
 	}
 	internalobservability.SetBuildWorkflowAttributes(activity, observabilityMetadata(wf, ""), workflowTelemetryDefinitionFrom(wf))
 	activity.AddEvent(internalobservability.EventBuildCompleted)
-	frameworktelemetry.MarkUsed(frameworktelemetry.FeatureWorkflow)
+	frameworktelemetry.MarkUsed(wb.featureIndex)
 	return wf, nil
 }
 

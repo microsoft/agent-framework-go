@@ -12,6 +12,7 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messageworkflow"
 	"github.com/microsoft/agent-framework-go/workflow"
+	workflowfeature "github.com/microsoft/agent-framework-go/workflow/internal/featureusage"
 )
 
 const (
@@ -96,7 +97,9 @@ func (b *SequentialWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	cfg := Config{ForwardIncomingMessages: new(!b.chainOnlyAgentResponses)}
 	bindings, bindingsByAgent := newAgentBindings(b.agents, cfg)
 
-	bld := applyBuilderMetadata(workflow.NewBuilder(bindings[0]), b.name, b.description)
+	start := bindings[0]
+	start.RawValue = workflowfeature.Tag(start.RawValue, telemetry.FeatureSequentialOrchestration)
+	bld := applyBuilderMetadata(workflow.NewBuilder(start), b.name, b.description)
 	previous := bindings[0]
 	for _, next := range bindings[1:] {
 		bld = bld.AddEdge(previous, next)
@@ -111,11 +114,7 @@ func (b *SequentialWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	if err != nil {
 		return nil, err
 	}
-	wf, err := bld.Build()
-	if err == nil {
-		telemetry.MarkUsed(telemetry.FeatureSequentialOrchestration)
-	}
-	return wf, err
+	return bld.Build()
 }
 
 func newOutputMessagesBinding() workflow.ExecutorBinding {

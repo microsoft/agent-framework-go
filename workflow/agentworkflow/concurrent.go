@@ -13,6 +13,7 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messageworkflow"
 	"github.com/microsoft/agent-framework-go/workflow"
+	workflowfeature "github.com/microsoft/agent-framework-go/workflow/internal/featureusage"
 )
 
 const (
@@ -105,7 +106,9 @@ func (b *ConcurrentWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	}
 	end := newConcurrentEndBinding(len(bindings), b.aggregator)
 
-	bld := applyBuilderMetadata(workflow.NewBuilder(start), b.name, b.description)
+	selectedStart := start
+	selectedStart.RawValue = workflowfeature.Tag(selectedStart.RawValue, telemetry.FeatureConcurrentOrchestration)
+	bld := applyBuilderMetadata(workflow.NewBuilder(selectedStart), b.name, b.description)
 	bld = bld.AddFanOutEdge(start, bindings)
 	for i, binding := range bindings {
 		bld = bld.AddEdge(binding, accumulators[i])
@@ -121,11 +124,7 @@ func (b *ConcurrentWorkflowBuilder) Build() (*workflow.Workflow, error) {
 	if err != nil {
 		return nil, err
 	}
-	wf, err := bld.Build()
-	if err == nil {
-		telemetry.MarkUsed(telemetry.FeatureConcurrentOrchestration)
-	}
-	return wf, err
+	return bld.Build()
 }
 
 func newMessageForwardingBinding(id string) workflow.ExecutorBinding {

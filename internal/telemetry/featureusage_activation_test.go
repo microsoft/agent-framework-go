@@ -88,10 +88,10 @@ var featureActivationCases = []struct {
 	{"loop-invalid", nil, nil},
 	{"workflow", []int{2}, nil},
 	{"workflow-invalid", nil, nil},
-	{"sequential", []int{2, 32}, nil},
+	{"sequential", []int{32}, nil},
 	{"sequential-invalid", nil, nil},
-	{"concurrent", []int{2, 33}, nil},
-	{"group-chat", []int{2, 34}, nil},
+	{"concurrent", []int{33}, nil},
+	{"group-chat", []int{34}, nil},
 	{"mcp", []int{14}, nil},
 	{"shell", []int{69}, nil},
 	{"foundry-memory", []int{50}, nil},
@@ -174,6 +174,22 @@ func TestToolApprovalFeatureUsageOnlyApproval(t *testing.T) {
 
 func TestWorkflowFeatureUsageInvalidBuild(t *testing.T) {
 	assertFeatureUsagePort(t, "workflow-unbound-invalid")
+}
+
+func TestWorkflowFeatureUsageBuildMarksOnlySelectedFeature(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		feature int
+	}{
+		{"workflow", 2},
+		{"sequential", 32},
+		{"concurrent", 33},
+		{"group-chat", 34},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertFeatureUsagePort(t, tc.name, tc.feature)
+		})
+	}
 }
 
 func TestFoundryFeatureUsageServerRequestMarksAgentAndClient(t *testing.T) {

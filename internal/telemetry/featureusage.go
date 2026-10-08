@@ -59,7 +59,7 @@ var (
 	featureLow   atomic.Uint64
 	featureHigh  atomic.Uint64
 	cachedToken  atomic.Pointer[featureToken]
-	featureRegex = regexp.MustCompile(`\(feat=v[0-9]+\.[0-9a-fA-F]+\)`)
+	featureRegex = regexp.MustCompile(`^\(feat=v[0-9]+\.[0-9a-fA-F]+\)\z`)
 )
 
 type featureToken struct {
@@ -132,13 +132,10 @@ func currentFeatureToken() string {
 func removeFeatureComments(userAgent string) string {
 	var result strings.Builder
 	copyFrom := 0
-	for _, match := range featureRegex.FindAllStringIndex(userAgent, -1) {
-		start, end := match[0], match[1]
+	for _, comment := range topLevelFeatureComments(userAgent) {
+		start, end := comment[0], comment[1]
 		before, beforeSize := utf8.DecodeLastRuneInString(userAgent[:start])
 		after, afterSize := utf8.DecodeRuneInString(userAgent[end:])
-		if start > 0 && !unicode.IsSpace(before) || end < len(userAgent) && !unicode.IsSpace(after) {
-			continue
-		}
 		if copyFrom == 0 {
 			result.Grow(len(userAgent))
 		}
@@ -156,6 +153,43 @@ func removeFeatureComments(userAgent string) string {
 	}
 	result.WriteString(userAgent[copyFrom:])
 	return result.String()
+}
+
+func topLevelFeatureComments(userAgent string) [][2]int {
+	var comments [][2]int
+	depth := 0
+	start := -1
+	for i := 0; i < len(userAgent); i++ {
+		switch userAgent[i] {
+		case '\\':
+			if depth > 0 && i+1 < len(userAgent) {
+				i++
+			}
+		case '(':
+			if depth == 0 {
+				start = i
+			}
+			depth++
+		case ')':
+			if depth == 0 {
+				continue
+			}
+			depth--
+			if depth != 0 {
+				continue
+			}
+			end := i + 1
+			before, _ := utf8.DecodeLastRuneInString(userAgent[:start])
+			after, _ := utf8.DecodeRuneInString(userAgent[end:])
+			if (start == 0 || unicode.IsSpace(before)) &&
+				(end == len(userAgent) || unicode.IsSpace(after)) &&
+				featureRegex.MatchString(userAgent[start:end]) {
+				comments = append(comments, [2]int{start, end})
+			}
+			start = -1
+		}
+	}
+	return comments
 }
 
 // ApplyToHTTPRequest adds the framework identity and refreshes the feature comment
