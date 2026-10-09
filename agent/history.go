@@ -4,6 +4,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"iter"
 	"runtime"
@@ -175,7 +176,7 @@ type InMemoryHistoryProviderConfig struct {
 	SourceID string
 
 	// StateKey identifies where provider state is stored in the session.
-	// When empty, SourceID is used.
+	// When empty, SourceID is used. Whitespace-only keys are invalid.
 	StateKey string
 
 	// StateInitializer returns initial messages on first use.
@@ -196,7 +197,59 @@ type InMemoryHistoryProviderConfig struct {
 }
 
 type inMemoryHistoryProviderState struct {
-	Messages []*message.Message `json:"messages,omitempty"`
+	Messages []*message.Message `json:"messages"`
+}
+
+func (s inMemoryHistoryProviderState) MarshalJSON() ([]byte, error) {
+	var state struct {
+		Messages *[]*message.Message `json:"messages,omitempty"`
+	}
+	if s.Messages != nil {
+		state.Messages = &s.Messages
+	}
+	return json.Marshal(state)
+}
+
+// InMemoryHistory returns the messages stored by [NewInMemoryHistoryProvider]
+// under stateKey. A nil result means history is missing or its messages are nil;
+// an empty, non-nil slice means an empty history is stored. An empty stateKey
+// selects the default in-memory history key; whitespace-only keys panic.
+// A nil session returns an error.
+// The returned slice and messages are borrowed from the session. To edit history,
+// build a replacement slice with any modified messages and call
+// [Session.SetInMemoryHistory]. In-place edits may not survive serialization of
+// a deserialized session, and appending does not update the stored slice length.
+// Do not modify session history while an agent run uses the session.
+func (s *Session) InMemoryHistory(stateKey string) ([]*message.Message, error) {
+	if s == nil {
+		return nil, errors.New("session must not be nil")
+	}
+	if stateKey == "" {
+		stateKey = defaultInMemoryHistorySourceID
+	}
+	var state inMemoryHistoryProviderState
+	ok, err := s.Get(stateKey, &state)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return state.Messages, nil
+}
+
+// SetInMemoryHistory replaces the messages stored by [NewInMemoryHistoryProvider]
+// under stateKey. An empty stateKey selects the default in-memory history key;
+// whitespace-only keys panic.
+// A nil session returns an error. The session retains the supplied slice;
+// call SetInMemoryHistory again after subsequent edits so they survive session
+// serialization. Do not modify it while an agent run uses the session.
+func (s *Session) SetInMemoryHistory(stateKey string, messages []*message.Message) error {
+	if s == nil {
+		return errors.New("session must not be nil")
+	}
+	if stateKey == "" {
+		stateKey = defaultInMemoryHistorySourceID
+	}
+	s.Set(stateKey, inMemoryHistoryProviderState{Messages: messages})
+	return nil
 }
 
 type historySessionLocks struct {
@@ -223,6 +276,7 @@ func (l *historySessionLocks) forOptions(options []Option) *sync.Mutex {
 }
 
 // NewInMemoryHistoryProvider creates a history provider that stores conversation history in the session.
+// It panics if the resolved StateKey is blank.
 func NewInMemoryHistoryProvider(config InMemoryHistoryProviderConfig) HistoryProvider {
 	locks := new(historySessionLocks)
 	sourceID := config.SourceID
@@ -233,6 +287,7 @@ func NewInMemoryHistoryProvider(config InMemoryHistoryProviderConfig) HistoryPro
 	if stateKey == "" {
 		stateKey = sourceID
 	}
+	validateSessionStateKey(stateKey)
 	historyConfig := HistoryProviderConfig{
 		SourceID:                        sourceID,
 		ProvideOutputMessageFilter:      config.ProvideOutputMessageFilter,

@@ -42,14 +42,15 @@ type ProviderConfig struct {
 	// retained originals. The provider remains responsible for execution and approvals.
 	ManagesToolExecution bool
 
-	// Format creates a provider response format for a structured output value.
+	// Format creates a provider response format for the structured output value.
 	Format func(v any) (ResponseFormat, error)
 
 	// Unmarshal decodes provider structured output into v using format.
 	Unmarshal func(format ResponseFormat, data []byte, v any) error
 
-	// CreateSession configures a provider-specific session. Implementations must
-	// treat options as read-only and clone the slice before making changes.
+	// CreateSession configures a provider-specific session. The session is initialized
+	// and supports concurrent state access. Implementations must treat options as
+	// read-only and clone the slice before making changes.
 	CreateSession func(ctx context.Context, session *Session, options ...Option) error
 }
 
@@ -628,6 +629,7 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 		// A per-run ID belongs to the request until returned by the provider.
 		// Only an explicit CreateSession call seeds a service ID on a session.
 		session := &Session{}
+		session.initState()
 		if a.provider.CreateSession != nil {
 			if err := a.provider.CreateSession(ctx, session, options...); err != nil {
 				return nil, nil, nil, err
@@ -642,6 +644,8 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 		if a.hasDefaultHistoryProvider && !a.perServiceCallHistoryPersistence {
 			options = append(options, agentopts.SessionlessHistory{})
 		}
+	} else {
+		session.initState()
 	}
 
 	continuationToken, _ := GetOption(options, WithContinuationToken)

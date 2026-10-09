@@ -104,7 +104,11 @@ func NewChatCompletionsAgent(oclient openai.Client, config AgentConfig) *agent.A
 }
 
 func (a *chatClient) formatOf(v any) (agent.ResponseFormat, error) {
-	return jsonformat.ForType(reflect.TypeOf(v))
+	format, err := jsonformat.ForType(reflect.TypeOf(v))
+	if err != nil {
+		return agent.ResponseFormat{}, err
+	}
+	return jsonformat.WrapNonObjectSchema(format)
 }
 
 func (a *chatClient) unmarshal(format agent.ResponseFormat, data []byte, v any) error {
@@ -112,7 +116,7 @@ func (a *chatClient) unmarshal(format agent.ResponseFormat, data []byte, v any) 
 	if err != nil {
 		return err
 	}
-	return jsonFormat.Unmarshal(data, v)
+	return jsonFormat.UnmarshalStructuredOutput(data, v)
 }
 
 func (a *chatClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {

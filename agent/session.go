@@ -4,7 +4,10 @@ package agent
 
 import (
 	"encoding/json"
+	"maps"
 	"slices"
+	"strings"
+	"sync"
 )
 
 // Session contains the state of a specific conversation with an agent which may include:
@@ -14,19 +17,44 @@ import (
 //   - Any other state that the agent needs to persist across runs for a conversation.
 //
 // Agent behaviors such as history and context providers live on the agent and store their state in the Session.
-// The zero value is ready to use. [Agent.CreateSession] can be used when a provider needs to configure
+// The zero value is ready for sequential use. [Agent.CreateSession] can be used when a provider needs to configure
 // provider-specific session state before the first run.
 //
 // Because provider-specific state can be associated with the agent that created it, a Session may not be reusable across
 // different agents.
 //
-// To support conversations that may need to survive application restarts or separate service requests,
-// a Session can be serialized and deserialized directly with encoding/json, so that it can be saved in a
-// persistent store.
+// Sessions support encoding/json, including marshaling by value. Use the same
+// *Session throughout a conversation; copies are only for marshaling.
+//
+// Methods support concurrent use after initialization by [Agent.CreateSession],
+// [Agent.Run], [Session.Set], [Session.SetServiceID], or successful JSON decoding.
+// Initialize before sharing; read-modify-write sequences need separate synchronization.
+//
+// Marshaling takes a shallow snapshot; successful decoding replaces the state
+// and service ID together. Stored values are not cloned. Synchronize mutations
+// and use [Session.Set] to persist edits to restored values.
 type Session struct {
-	serviceID string
+	// state is initialized before concurrent use and never replaced.
+	state *sessionState
+}
 
-	state map[string]*stateValue
+type sessionState struct {
+	mu        sync.RWMutex
+	serviceID string
+	values    map[string]*stateValue
+}
+
+func (s *Session) initState() *sessionState {
+	if s.state == nil {
+		s.state = new(sessionState)
+	}
+	return s.state
+}
+
+func validateSessionStateKey(key string) {
+	if strings.TrimSpace(key) == "" {
+		panic("session state key cannot be blank")
+	}
 }
 
 // Get attempts to read the value associated with key into value.
@@ -36,11 +64,16 @@ type Session struct {
 // requested type.
 //
 // value must be a non-nil pointer to the desired destination type.
+// It panics if key is empty or whitespace.
 func (s *Session) Get(key string, value any) (bool, error) {
-	if s == nil {
+	validateSessionStateKey(key)
+	if s == nil || s.state == nil {
 		return false, nil
 	}
-	wrapped, ok := s.state[key]
+	state := s.state
+	state.mu.RLock()
+	wrapped, ok := state.values[key]
+	state.mu.RUnlock()
 	if !ok {
 		return false, nil
 	}
@@ -49,7 +82,9 @@ func (s *Session) Get(key string, value any) (bool, error) {
 
 // Set stores a value in the session state under the given key.
 // If the key already exists, its value is overwritten.
+// It panics if key is empty or whitespace.
 func (s *Session) Set(key string, value any) {
+	validateSessionStateKey(key)
 	if s == nil {
 		return
 	}
@@ -58,21 +93,27 @@ func (s *Session) Set(key string, value any) {
 		wrapped = newStateValue(value)
 	}
 
-	if s.state == nil {
-		s.state = make(map[string]*stateValue)
+	state := s.initState()
+	state.mu.Lock()
+	if state.values == nil {
+		state.values = make(map[string]*stateValue)
 	}
-	s.state[key] = wrapped
+	state.values[key] = wrapped
+	state.mu.Unlock()
 }
 
 // Delete removes the value with the given key and reports whether it existed.
+// It panics if key is empty or whitespace.
 func (s *Session) Delete(key string) bool {
-	if s == nil {
+	validateSessionStateKey(key)
+	if s == nil || s.state == nil {
 		return false
 	}
-	_, ok := s.state[key]
-	if ok {
-		delete(s.state, key)
-	}
+	state := s.state
+	state.mu.Lock()
+	_, ok := state.values[key]
+	delete(state.values, key)
+	state.mu.Unlock()
 	return ok
 }
 
@@ -80,10 +121,14 @@ func (s *Session) Delete(key string) bool {
 // When [Config.RequirePerServiceCallHistoryPersistence] is enabled, it may instead
 // identify history managed locally by the agent.
 func (s *Session) ServiceID() string {
-	if s == nil {
+	if s == nil || s.state == nil {
 		return ""
 	}
-	return s.serviceID
+	state := s.state
+	state.mu.RLock()
+	id := state.serviceID
+	state.mu.RUnlock()
+	return id
 }
 
 // SetServiceID sets the provider-specific identifier associated with the session.
@@ -91,17 +136,22 @@ func (s *Session) SetServiceID(id string) {
 	if s == nil {
 		return
 	}
-	s.serviceID = id
+	state := s.initState()
+	state.mu.Lock()
+	state.serviceID = id
+	state.mu.Unlock()
 }
 
 func (s Session) MarshalJSON() ([]byte, error) {
-	tmp := sessionData{
-		ServiceID: s.serviceID,
+	var tmp sessionData
+	if state := s.state; state != nil {
+		state.mu.RLock()
+		tmp.ServiceID = state.serviceID
+		tmp.State = maps.Clone(state.values)
+		state.mu.RUnlock()
 	}
-	if s.state == nil {
+	if tmp.State == nil {
 		tmp.State = make(map[string]*stateValue)
-	} else {
-		tmp.State = s.state
 	}
 	return json.Marshal(tmp)
 }
@@ -115,12 +165,15 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	state := make(map[string]*stateValue, len(tmp.State))
+	values := make(map[string]*stateValue, len(tmp.State))
 	for key, raw := range tmp.State {
-		state[key] = &stateValue{raw: slices.Clone(raw)}
+		values[key] = &stateValue{raw: slices.Clone(raw)}
 	}
-	s.serviceID = tmp.ServiceID
-	s.state = state
+	state := s.initState()
+	state.mu.Lock()
+	state.serviceID = tmp.ServiceID
+	state.values = values
+	state.mu.Unlock()
 	return nil
 }
 

@@ -62,6 +62,60 @@ func TestMessage_WithSource_ClonesWhenSourceChanges(t *testing.T) {
 	}
 }
 
+func TestMessage_WithSource_ClonesWhenFirstAssigned(t *testing.T) {
+	original := message.NewText("Hello")
+	source := message.Source{Type: message.SourceTypeExternal, ID: "TestSourceId"}
+
+	got := original.WithSource(source)
+	if got == original || got.Source != source {
+		t.Fatalf("WithSource() = %+v, want a clone with source %+v", got, source)
+	}
+	if original.Source != (message.Source{}) {
+		t.Fatalf("original source = %+v, want unchanged", original.Source)
+	}
+}
+
+func TestMessage_WithSource_ClonesWhenSourceTypeChanges(t *testing.T) {
+	original := message.NewText("Hello")
+	original.Source = message.Source{Type: message.SourceTypeExternal, ID: "SourceId"}
+	source := message.Source{Type: "context-provider", ID: "SourceId"}
+
+	got := original.WithSource(source)
+	if got == original || got.Source != source {
+		t.Fatalf("WithSource() = %+v, want a clone with source %+v", got, source)
+	}
+	if original.Source.Type != message.SourceTypeExternal {
+		t.Fatalf("original source = %+v, want external SourceId", original.Source)
+	}
+}
+
+func TestMessage_WithSource_ClonesWhenSourceIDChanges(t *testing.T) {
+	original := message.NewText("Hello")
+	original.Source = message.Source{Type: message.SourceTypeExternal, ID: "OriginalId"}
+	source := message.Source{Type: message.SourceTypeExternal, ID: "NewId"}
+
+	got := original.WithSource(source)
+	if got == original || got.Source != source {
+		t.Fatalf("WithSource() = %+v, want a clone with source %+v", got, source)
+	}
+	if original.Source.ID != "OriginalId" {
+		t.Fatalf("original source = %+v, want OriginalId", original.Source)
+	}
+}
+
+func TestMessage_WithSource_ClonesWithSourceTypeAndNoID(t *testing.T) {
+	original := message.NewText("Hello")
+	source := message.Source{Type: "history-provider"}
+
+	got := original.WithSource(source)
+	if got == original || got.Source != source || got.Source.ID != "" {
+		t.Fatalf("WithSource() = %+v, want a clone with history source and no ID", got)
+	}
+	if original.Source != (message.Source{}) {
+		t.Fatalf("original source = %+v, want unchanged", original.Source)
+	}
+}
+
 func TestMessage_WithSource_ReturnsOriginalWhenUnchanged(t *testing.T) {
 	original := message.NewText("hello")
 	original.Source = message.Source{Type: message.SourceType("context-provider"), ID: "ctx"}

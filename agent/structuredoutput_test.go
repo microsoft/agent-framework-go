@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"iter"
+	"strconv"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -128,6 +129,51 @@ func TestAgent_StructuredOutput_FormatError(t *testing.T) {
 	_, err := a.Run(context.Background(), nil, agent.WithStructuredOutput(output)).Collect()
 	if !errors.Is(err, expectedErr) {
 		t.Fatalf("expected error %v, got %v", expectedErr, err)
+	}
+}
+
+func TestAgent_StructuredOutput_CustomFormat(t *testing.T) {
+	type schema struct{ Unit string }
+	format := agent.ResponseFormat{Kind: "number", Name: "plain", Schema: schema{Unit: "integer"}}
+	var formatCalls, unmarshalCalls int
+	a := newStructuredOutputTestAgent(
+		func(v any) (agent.ResponseFormat, error) {
+			formatCalls++
+			return format, nil
+		},
+		func(got agent.ResponseFormat, data []byte, v any) error {
+			unmarshalCalls++
+			if got != format {
+				return errors.New("structured output format was changed")
+			}
+			number, err := strconv.Atoi(string(data))
+			if err != nil {
+				return err
+			}
+			output, ok := v.(*int)
+			if !ok {
+				return errors.New("structured output target was changed")
+			}
+			*output = number
+			return nil
+		},
+		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			got, ok := agent.GetOption(options, agent.WithResponseFormat)
+			if !ok || got != format {
+				return structuredOutputTestError(errors.New("provider did not receive its format"))
+			}
+			return singleStructuredOutputTestUpdate("42")
+		},
+	)
+
+	var output int
+	response, err := a.Run(t.Context(), nil, agent.WithStructuredOutput(&output)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != 42 || response.String() != "42" || formatCalls != 1 || unmarshalCalls != 1 {
+		t.Fatalf("output=%d, response=%q, format calls=%d, unmarshal calls=%d; want 42, 42, 1, 1",
+			output, response.String(), formatCalls, unmarshalCalls)
 	}
 }
 
