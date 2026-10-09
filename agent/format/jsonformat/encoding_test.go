@@ -164,24 +164,42 @@ func TestUnmarshalStructuredOutput(t *testing.T) {
 		newTarget      func() any
 		want           any
 	}{
-		{name: "object", response: `{"name":"Tiger"}`,
-			newTarget: func() any { return new(object) }, want: object{Name: "Tiger"}},
-		{name: "object with multiple JSON values", response: `{"name":"First"} {"name":"Second"}`,
-			newTarget: func() any { return new(object) }, want: object{Name: "First"}},
-		{name: "integer", response: `{"data":42}`,
-			newTarget: func() any { return new(int) }, want: 42},
-		{name: "wrapped result with extra property", response: `{"data":42,"extra":true}`,
-			newTarget: func() any { return new(int) }, want: 42},
-		{name: "array", response: `{"data":["a","b"]}`,
-			newTarget: func() any { return new([]string) }, want: []string{"a", "b"}},
-		{name: "enum-like string", response: `{"data":"Tiger"}`,
-			newTarget: func() any { return new(species) }, want: species("Tiger")},
-		{name: "nested array", response: `{"data":[{"label":"value"}]}`,
-			newTarget: func() any { return new([]nested) }, want: []nested{{Label: "value"}}},
-		{name: "pointer destination", response: `{"data":42}`,
-			newTarget: func() any { return new(*int) }, want: pointerValue},
-		{name: "bare integer fallback", response: `42`,
-			newTarget: func() any { return new(int) }, want: 42},
+		{
+			name: "object", response: `{"name":"Tiger"}`,
+			newTarget: func() any { return new(object) }, want: object{Name: "Tiger"},
+		},
+		{
+			name: "object with multiple JSON values", response: `{"name":"First"} {"name":"Second"}`,
+			newTarget: func() any { return new(object) }, want: object{Name: "First"},
+		},
+		{
+			name: "integer", response: `{"data":42}`,
+			newTarget: func() any { return new(int) }, want: 42,
+		},
+		{
+			name: "wrapped result with extra property", response: `{"data":42,"extra":true}`,
+			newTarget: func() any { return new(int) }, want: 42,
+		},
+		{
+			name: "array", response: `{"data":["a","b"]}`,
+			newTarget: func() any { return new([]string) }, want: []string{"a", "b"},
+		},
+		{
+			name: "enum-like string", response: `{"data":"Tiger"}`,
+			newTarget: func() any { return new(species) }, want: species("Tiger"),
+		},
+		{
+			name: "nested array", response: `{"data":[{"label":"value"}]}`,
+			newTarget: func() any { return new([]nested) }, want: []nested{{Label: "value"}},
+		},
+		{
+			name: "pointer destination", response: `{"data":42}`,
+			newTarget: func() any { return new(*int) }, want: pointerValue,
+		},
+		{
+			name: "bare integer fallback", response: `42`,
+			newTarget: func() any { return new(int) }, want: 42,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			output := tc.newTarget()

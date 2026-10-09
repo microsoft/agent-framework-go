@@ -1554,6 +1554,125 @@ func TestAgent_Run_UsesProvidedSession(t *testing.T) {
 	}
 }
 
+func TestAgent_InitializesSessionBeforeCallbacks(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		create           bool
+		providerCallback bool
+		provided         bool
+		configured       bool
+	}{
+		{name: "CreateSession provider callback", create: true, providerCallback: true},
+		{name: "automatic provider callback", providerCallback: true},
+		{name: "automatic middleware"},
+		{name: "provided zero value", provided: true},
+		{name: "configured zero value", configured: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wantID := ""
+			if tc.create {
+				wantID = "requested"
+			}
+			var captured *agent.Session
+			checkSession := func(session *agent.Session) {
+				captured = session
+				if got := session.ServiceID(); got != wantID {
+					t.Fatalf("ServiceID before callback writes = %q, want %q", got, wantID)
+				}
+				const keys = 32
+				start := make(chan struct{})
+				var wg sync.WaitGroup
+				for i := range keys {
+					wg.Go(func() {
+						<-start
+						key := fmt.Sprintf("key%d", i)
+						session.Set(key, i)
+						target := any(session)
+						if i%2 == 0 {
+							target = *session
+						}
+						data, err := json.Marshal(target)
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						var payload struct {
+							State     map[string]int
+							ServiceID string
+						}
+						if err := json.Unmarshal(data, &payload); err != nil {
+							t.Error(err)
+							return
+						}
+						if value, ok := payload.State[key]; !ok || value != i || payload.ServiceID != wantID {
+							t.Errorf("snapshot after Set(%q, %d) = %s, want stored value and service ID %q", key, i, data, wantID)
+						}
+					})
+				}
+				close(start)
+				wg.Wait()
+				for i := range keys {
+					var value int
+					key := fmt.Sprintf("key%d", i)
+					if ok, err := session.Get(key, &value); err != nil || !ok || value != i {
+						t.Fatalf("Get(%q) = (%d, %v, %v), want (%d, true, nil)", key, value, ok, err, i)
+					}
+				}
+			}
+
+			runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().AddText("done").Build()}
+			provider := agent.ProviderConfig{Run: runner.Run}
+			var cfg agent.Config
+			if tc.providerCallback {
+				provider.CreateSession = func(_ context.Context, session *agent.Session, _ ...agent.Option) error {
+					checkSession(session)
+					return nil
+				}
+			} else {
+				cfg.Middlewares = []agent.Middleware{
+					agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+						session, ok := agent.GetOption(options, agent.WithSession)
+						if !ok || session == nil {
+							t.Fatal("middleware did not receive a session")
+						}
+						checkSession(session)
+						return next(ctx, messages, options...)
+					}),
+				}
+			}
+			var provided agent.Session
+			options := []agent.Option{agent.WithServiceID("requested")}
+			if tc.provided {
+				options = append(options, agent.WithSession(&provided))
+			}
+			if tc.configured {
+				cfg.RunOptions = []agent.Option{agent.WithSession(&provided)}
+			}
+			a := agent.New(provider, cfg)
+			if tc.create {
+				session, err := a.CreateSession(t.Context(), options...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if session != captured {
+					t.Fatal("CreateSession returned a different session from its callback")
+				}
+			} else if _, err := a.RunText(t.Context(), "test", options...).Collect(); err != nil {
+				t.Fatal(err)
+			}
+			if captured == nil {
+				t.Fatal("session callback was not invoked")
+			}
+			if (tc.provided || tc.configured) && captured != &provided {
+				t.Fatal("run replaced the supplied session")
+			}
+			if got := captured.ServiceID(); got != wantID {
+				t.Fatalf("ServiceID after callback = %q, want %q", got, wantID)
+			}
+		})
+	}
+}
+
 func TestAgent_Run_PrependsAgentOptions(t *testing.T) {
 	var capturedOptions []agent.Option
 	runner := &agenttest.Runner{

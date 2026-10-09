@@ -1297,12 +1297,18 @@ func TestResponse_Collect_CombinesMessagesMetadataAndUsage(t *testing.T) {
 		t.Run(fmt.Sprintf("streaming=%v", streaming), func(t *testing.T) {
 			createdAt := time.Date(2024, 2, 3, 4, 5, 6, 0, time.UTC)
 			updates := []*agent.ResponseUpdate{
-				{AgentID: "agentId", ResponseID: "someResponse", MessageID: "12345", Role: message.RoleAssistant, CreatedAt: createdAt,
-					Contents: message.Contents{&message.TextContent{Text: "Hello"}}},
-				{AuthorName: "Someone", Role: message.Role("human"), AdditionalProperties: map[string]any{"a": "b"},
-					Contents: message.Contents{&message.TextContent{Text: ", "}}},
-				{CreatedAt: createdAt.AddDate(1, 0, 0), AdditionalProperties: map[string]any{"c": "d"},
-					Contents: message.Contents{&message.TextContent{Text: "world!"}}},
+				{
+					AgentID: "agentId", ResponseID: "someResponse", MessageID: "12345", Role: message.RoleAssistant, CreatedAt: createdAt,
+					Contents: message.Contents{&message.TextContent{Text: "Hello"}},
+				},
+				{
+					AuthorName: "Someone", Role: message.Role("human"), AdditionalProperties: map[string]any{"a": "b"},
+					Contents: message.Contents{&message.TextContent{Text: ", "}},
+				},
+				{
+					CreatedAt: createdAt.AddDate(1, 0, 0), AdditionalProperties: map[string]any{"c": "d"},
+					Contents: message.Contents{&message.TextContent{Text: "world!"}},
+				},
 				{Contents: message.Contents{&message.UsageContent{Details: message.UsageDetails{InputTokenCount: 1, OutputTokenCount: 2}}}},
 				{Contents: message.Contents{&message.UsageContent{Details: message.UsageDetails{InputTokenCount: 4, OutputTokenCount: 5}}}},
 			}
@@ -1395,13 +1401,22 @@ func TestResponse_Collect_CoalescesTextAndReasoningSeparately(t *testing.T) {
 				text      string
 				reasoning bool
 			}{
-				{"A", false}, {"B", false}, {"C", false},
-				{"D", true}, {"E", true}, {"F", true},
-				{"G", false}, {"H", false},
-				{"I", true}, {"J", true},
-				{"K", false}, {"L", true},
-				{"M", false}, {"N", false},
-				{"O", true}, {"P", true},
+				{"A", false},
+				{"B", false},
+				{"C", false},
+				{"D", true},
+				{"E", true},
+				{"F", true},
+				{"G", false},
+				{"H", false},
+				{"I", true},
+				{"J", true},
+				{"K", false},
+				{"L", true},
+				{"M", false},
+				{"N", false},
+				{"O", true},
+				{"P", true},
 			} {
 				var content message.Content = &message.TextContent{Text: part.text}
 				if part.reasoning {

@@ -204,10 +204,16 @@ func getOrCreateThreadID(session *agent.Session) (string, error) {
 	if session == nil {
 		return aguiEvents.GenerateThreadID(), nil
 	}
+	var threadID string
+	if _, err := session.Get(threadIDStateKey, &threadID); err != nil {
+		return "", err
+	}
+	if threadID != "" {
+		return threadID, nil
+	}
 	threadIDInitMu.Lock()
 	defer threadIDInitMu.Unlock()
 
-	var threadID string
 	if _, err := session.Get(threadIDStateKey, &threadID); err != nil {
 		return "", err
 	}

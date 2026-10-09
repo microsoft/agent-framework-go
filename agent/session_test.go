@@ -87,7 +87,11 @@ func TestSessionState_ConcurrentWritesAndSerialize(t *testing.T) {
 			defer wg.Done()
 			<-start
 			session.Set("shared", fmt.Sprintf("value%d", index))
-			data, err := json.Marshal(session)
+			target := any(session)
+			if index%2 == 0 {
+				target = *session
+			}
+			data, err := json.Marshal(target)
 			if err != nil {
 				errs <- err
 				return
@@ -109,6 +113,52 @@ func TestSessionState_ConcurrentWritesAndSerialize(t *testing.T) {
 	var got string
 	if ok, err := session.Get("shared", &got); err != nil || !ok || got == "" {
 		t.Fatalf("final Get(shared) = (%q, %v, %v)", got, ok, err)
+	}
+}
+
+func TestSession_MarshalJSON_SnapshotsStateEntriesTogether(t *testing.T) {
+	session := agenttest.CreateSession()
+	session.Set("first", 0)
+	session.Set("second", 0)
+	const operations = 1000
+	start := make(chan struct{})
+	errs := make(chan error, operations)
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 1; i <= operations; i++ {
+			session.Set("first", i)
+			session.Set("second", i)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for range operations {
+			data, err := json.Marshal(session)
+			if err != nil {
+				errs <- err
+				continue
+			}
+			var payload struct{ State map[string]int }
+			if err := json.Unmarshal(data, &payload); err != nil {
+				errs <- err
+				continue
+			}
+			first, hasFirst := payload.State["first"]
+			second, hasSecond := payload.State["second"]
+			if !hasFirst || !hasSecond || (first != second && first != second+1) {
+				errs <- fmt.Errorf("snapshot mixed state entries from different points in time: %s", data)
+			}
+		}
+	}()
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Error(err)
 	}
 }
 
@@ -193,8 +243,12 @@ func TestSession_ConcurrentJSONReplacementKeepsServiceIDAndStateTogether(t *test
 	go func() {
 		defer wg.Done()
 		<-start
-		for range operations {
-			data, err := json.Marshal(&session)
+		for i := range operations {
+			target := any(&session)
+			if i%2 == 0 {
+				target = session
+			}
+			data, err := json.Marshal(target)
 			if err != nil {
 				errs <- err
 				continue
@@ -221,7 +275,7 @@ func TestSession_ConcurrentJSONReplacementKeepsServiceIDAndStateTogether(t *test
 }
 
 func TestSession_ConcurrentFirstWritesPreserveState(t *testing.T) {
-	var session agent.Session
+	session := agenttest.CreateSession()
 	const keys = 100
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -526,6 +580,31 @@ func TestSession_UnmarshalJSON_IntoCreatedSession(t *testing.T) {
 	}
 }
 
+func TestSession_UnmarshalJSON_ErrorLeavesStateUnchanged(t *testing.T) {
+	for _, data := range []string{
+		`{"ServiceID":"replacement","State":[]}`,
+		`{"State":{"replacement":"new"},"ServiceID":123}`,
+	} {
+		t.Run(data, func(t *testing.T) {
+			session := agenttest.CreateSession(agent.WithServiceID("original"))
+			session.Set("retained", "value")
+			if err := json.Unmarshal([]byte(data), session); err == nil {
+				t.Fatal("expected a deserialization error")
+			}
+			if got := session.ServiceID(); got != "original" {
+				t.Fatalf("ServiceID after failed restoration = %q, want original", got)
+			}
+			var value string
+			if ok, err := session.Get("retained", &value); err != nil || !ok || value != "value" {
+				t.Fatalf("retained state after failed restoration = (%q, %v, %v)", value, ok, err)
+			}
+			if ok, err := session.Get("replacement", &value); err != nil || ok {
+				t.Fatalf("partially restored state after failure: (%v, %v)", ok, err)
+			}
+		})
+	}
+}
+
 func TestSession_UnmarshalJSON_NullStateValueRoundtripsAndCanBeOverwritten(t *testing.T) {
 	source := agenttest.CreateSession()
 	var original *nullablePerson
@@ -578,6 +657,50 @@ func TestSession_MarshalJSON_ZeroValueSession(t *testing.T) {
 	}
 	if got, want := string(data), `{"State":{},"ServiceID":""}`; got != want {
 		t.Fatalf("json.Marshal(session) = %s, want %s", got, want)
+	}
+}
+
+func TestSession_MarshalJSON_ValueFormPreservesState(t *testing.T) {
+	var zero agent.Session
+	data, err := json.Marshal(zero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(data), `{"State":{},"ServiceID":""}`; got != want {
+		t.Fatalf("zero-value Session JSON = %s, want %s", got, want)
+	}
+	var nilSession *agent.Session
+	if data, err := json.Marshal(nilSession); err != nil || string(data) != "null" {
+		t.Fatalf("nil Session JSON = %s, err = %v; want null", data, err)
+	}
+
+	session := agenttest.CreateSession()
+	session.Set("key", "value")
+	session.Set("other", "second")
+	session.SetServiceID("service")
+	for _, tc := range []struct {
+		name  string
+		value any
+	}{
+		{name: "value", value: *session},
+		{name: "pointer", value: session},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := json.Marshal(tc.value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var payload struct {
+				State     map[string]string
+				ServiceID string
+			}
+			if err := json.Unmarshal(data, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.ServiceID != "service" || payload.State["key"] != "value" || payload.State["other"] != "second" {
+				t.Fatalf("Session JSON = %s, want both stored values and service ID", data)
+			}
+		})
 	}
 }
 

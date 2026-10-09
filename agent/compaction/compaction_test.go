@@ -692,6 +692,26 @@ func TestSummarizationStrategy_PropagatesCancellation(t *testing.T) {
 	}
 }
 
+func TestNewContextProvider_PanicsWithBlankStateKey(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config compaction.ContextProviderConfig
+	}{
+		{name: "explicit state key", config: compaction.ContextProviderConfig{StateKey: " "}},
+		{name: "default state key from source ID", config: compaction.ContextProviderConfig{SourceID: "\t"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected blank compaction state key to panic at construction")
+				}
+			}()
+			tc.config.Strategy = new(compaction.TruncationStrategy)
+			compaction.NewContextProvider(tc.config)
+		})
+	}
+}
+
 func TestNewProvider_CompactsAndPersistsIndex(t *testing.T) {
 	session := agenttest.CreateSession()
 	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{

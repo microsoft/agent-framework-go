@@ -7,9 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
-	"sync/atomic"
-
-	"github.com/microsoft/agent-framework-go/internal/concurrent"
+	"sync"
 )
 
 // Session contains the state of a specific conversation with an agent which may include:
@@ -19,40 +17,38 @@ import (
 //   - Any other state that the agent needs to persist across runs for a conversation.
 //
 // Agent behaviors such as history and context providers live on the agent and store their state in the Session.
-// The zero value is ready to use. [Agent.CreateSession] can be used when a provider needs to configure
+// The zero value is ready for sequential use. [Agent.CreateSession] can be used when a provider needs to configure
 // provider-specific session state before the first run.
 //
 // Because provider-specific state can be associated with the agent that created it, a Session may not be reusable across
 // different agents.
 //
-// To support conversations that may need to survive application restarts or separate service requests,
-// a Session can be serialized and deserialized directly with encoding/json, so that it can be saved in a
-// persistent store.
-// Session methods support concurrent access to the state map and service ID. A
-// JSON snapshot can reflect writes from different points during marshaling;
-// UnmarshalJSON replaces the state and service ID together after decoding.
-// Values stored in the session are not cloned; callers must coordinate mutations
-// to their own values. Call Set after editing a value read from a deserialized
-// session to persist the edit. Do not copy a Session after first use. Marshal
-// a *Session, not a Session value, to preserve its JSON format.
+// Sessions support encoding/json, including marshaling by value. Use the same
+// *Session throughout a conversation; copies are only for marshaling.
+//
+// Methods support concurrent use after initialization by [Agent.CreateSession],
+// [Agent.Run], [Session.Set], [Session.SetServiceID], or successful JSON decoding.
+// Initialize before sharing; read-modify-write sequences need separate synchronization.
+//
+// Marshaling takes a shallow snapshot; successful decoding replaces the state
+// and service ID together. Stored values are not cloned. Synchronize mutations
+// and use [Session.Set] to persist edits to restored values.
 type Session struct {
-	current atomic.Pointer[sessionState]
+	// state is initialized before concurrent use and never replaced.
+	state *sessionState
 }
 
 type sessionState struct {
+	mu        sync.RWMutex
 	serviceID string
-	state     *concurrent.Map[string, *stateValue]
+	values    map[string]*stateValue
 }
 
-func (s *Session) stateForWrite() *sessionState {
-	if current := s.current.Load(); current != nil {
-		return current
+func (s *Session) initState() *sessionState {
+	if s.state == nil {
+		s.state = new(sessionState)
 	}
-	initial := &sessionState{state: new(concurrent.Map[string, *stateValue])}
-	if s.current.CompareAndSwap(nil, initial) {
-		return initial
-	}
-	return s.current.Load()
+	return s.state
 }
 
 func validateSessionStateKey(key string) {
@@ -71,14 +67,13 @@ func validateSessionStateKey(key string) {
 // It panics if key is empty or whitespace.
 func (s *Session) Get(key string, value any) (bool, error) {
 	validateSessionStateKey(key)
-	if s == nil {
+	if s == nil || s.state == nil {
 		return false, nil
 	}
-	current := s.current.Load()
-	if current == nil {
-		return false, nil
-	}
-	wrapped, ok := current.state.Load(key)
+	state := s.state
+	state.mu.RLock()
+	wrapped, ok := state.values[key]
+	state.mu.RUnlock()
 	if !ok {
 		return false, nil
 	}
@@ -98,21 +93,27 @@ func (s *Session) Set(key string, value any) {
 		wrapped = newStateValue(value)
 	}
 
-	s.stateForWrite().state.Store(key, wrapped)
+	state := s.initState()
+	state.mu.Lock()
+	if state.values == nil {
+		state.values = make(map[string]*stateValue)
+	}
+	state.values[key] = wrapped
+	state.mu.Unlock()
 }
 
 // Delete removes the value with the given key and reports whether it existed.
 // It panics if key is empty or whitespace.
 func (s *Session) Delete(key string) bool {
 	validateSessionStateKey(key)
-	if s == nil {
+	if s == nil || s.state == nil {
 		return false
 	}
-	current := s.current.Load()
-	if current == nil {
-		return false
-	}
-	_, ok := current.state.LoadAndDelete(key)
+	state := s.state
+	state.mu.Lock()
+	_, ok := state.values[key]
+	delete(state.values, key)
+	state.mu.Unlock()
 	return ok
 }
 
@@ -120,13 +121,14 @@ func (s *Session) Delete(key string) bool {
 // When [Config.RequirePerServiceCallHistoryPersistence] is enabled, it may instead
 // identify history managed locally by the agent.
 func (s *Session) ServiceID() string {
-	if s == nil {
+	if s == nil || s.state == nil {
 		return ""
 	}
-	if current := s.current.Load(); current != nil {
-		return current.serviceID
-	}
-	return ""
+	state := s.state
+	state.mu.RLock()
+	id := state.serviceID
+	state.mu.RUnlock()
+	return id
 }
 
 // SetServiceID sets the provider-specific identifier associated with the session.
@@ -134,32 +136,22 @@ func (s *Session) SetServiceID(id string) {
 	if s == nil {
 		return
 	}
-	for {
-		current := s.current.Load()
-		var state *concurrent.Map[string, *stateValue]
-		if current == nil {
-			state = new(concurrent.Map[string, *stateValue])
-		} else {
-			state = current.state
-		}
-		next := &sessionState{serviceID: id, state: state}
-		if s.current.CompareAndSwap(current, next) {
-			return
-		}
-	}
+	state := s.initState()
+	state.mu.Lock()
+	state.serviceID = id
+	state.mu.Unlock()
 }
 
-func (s *Session) MarshalJSON() ([]byte, error) {
-	if s == nil {
-		return []byte("null"), nil
+func (s Session) MarshalJSON() ([]byte, error) {
+	var tmp sessionData
+	if state := s.state; state != nil {
+		state.mu.RLock()
+		tmp.ServiceID = state.serviceID
+		tmp.State = maps.Clone(state.values)
+		state.mu.RUnlock()
 	}
-
-	tmp := sessionData{
-		State: make(map[string]*stateValue),
-	}
-	if current := s.current.Load(); current != nil {
-		tmp.ServiceID = current.serviceID
-		maps.Insert(tmp.State, current.state.All())
+	if tmp.State == nil {
+		tmp.State = make(map[string]*stateValue)
 	}
 	return json.Marshal(tmp)
 }
@@ -173,11 +165,15 @@ func (s *Session) UnmarshalJSON(data []byte) error {
 		return err
 	}
 
-	state := new(concurrent.Map[string, *stateValue])
+	values := make(map[string]*stateValue, len(tmp.State))
 	for key, raw := range tmp.State {
-		state.Store(key, &stateValue{raw: slices.Clone(raw)})
+		values[key] = &stateValue{raw: slices.Clone(raw)}
 	}
-	s.current.Store(&sessionState{serviceID: tmp.ServiceID, state: state})
+	state := s.initState()
+	state.mu.Lock()
+	state.serviceID = tmp.ServiceID
+	state.values = values
+	state.mu.Unlock()
 	return nil
 }
 

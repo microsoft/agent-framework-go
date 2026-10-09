@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"log/slog"
+	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/telemetry"
@@ -54,12 +55,16 @@ type contextProvider struct {
 // incrementally update the index. Without a session, it still performs stateless compaction over the
 // current message list. Service-managed sessions are skipped because the service owns history.
 // Generated summaries are marked as history so the default history store filter skips them.
+// It panics if Strategy is nil or the resolved StateKey is blank.
 func NewContextProvider(cfg ContextProviderConfig) agent.ContextProvider {
 	if cfg.Strategy == nil {
 		panic("Strategy is required")
 	}
 	cfg.SourceID = cmp.Or(cfg.SourceID, defaultProviderSourceID)
 	cfg.StateKey = cmp.Or(cfg.StateKey, cfg.SourceID)
+	if strings.TrimSpace(cfg.StateKey) == "" {
+		panic("StateKey must not be blank")
+	}
 	return &contextProvider{
 		strategy:     cfg.Strategy,
 		sourceID:     cfg.SourceID,
