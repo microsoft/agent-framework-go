@@ -1124,6 +1124,7 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 
 	currentUpdate := &agent.ResponseUpdate{
 		ResponseID:   resp.ID,
+		ModelID:      resp.Model,
 		FinishReason: finishReason,
 		CreatedAt:    time.Unix(int64(resp.CreatedAt), 0),
 		Role:         message.RoleAssistant,
@@ -1145,6 +1146,7 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 			}
 			currentUpdate.MessageID = out.ID
 			currentUpdate.ResponseID = resp.ID
+			currentUpdate.ModelID = resp.Model
 			currentUpdate.FinishReason = finishReason
 			// Only set ContinuationToken if it's not empty
 			if contToken != "" {
@@ -1434,6 +1436,7 @@ func responsesErrorContent(msg string, code string, details string) *message.Err
 type responsesStreamState struct {
 	mcpApprovalRequests map[string]*message.ToolApprovalRequestContent
 	messageID           string
+	model               string
 	role                message.Role
 	anyFunctions        bool
 	// imagePartialsSeen records image-generation item IDs that emitted a
@@ -1452,10 +1455,21 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			Role:              role,
 			Contents:          contents,
 			MessageID:         state.messageID,
+			ModelID:           state.model,
 			ResponseID:        responseID,
 			RawRepresentation: update,
 		}
 		return u
+	}
+
+	// setModel records the response model from a lifecycle event so this and
+	// every subsequent streaming update carries it, matching the non-streaming
+	// path. The createUpdate above runs before this, so stamp u directly too.
+	setModel := func(u *agent.ResponseUpdate, model string) {
+		if model != "" {
+			state.model = model
+			u.ModelID = model
+		}
 	}
 
 	// Lifecycle metadata belongs to the response, not the active message.
@@ -1467,6 +1481,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
+		setModel(u, event.Response.Model)
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
 		if contToken := createContinuationToken(event.Response.ID, event.SequenceNumber, event.Response.Status, isBackground); contToken != "" {
 			u.ContinuationToken = contToken
@@ -1477,6 +1492,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
+		setModel(u, event.Response.Model)
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
 		if contToken := createContinuationToken(event.Response.ID, event.SequenceNumber, event.Response.Status, isBackground); contToken != "" {
 			u.ContinuationToken = contToken
@@ -1487,6 +1503,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
+		setModel(u, event.Response.Model)
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
 		if contToken := createContinuationToken(event.Response.ID, event.SequenceNumber, event.Response.Status, isBackground); contToken != "" {
 			u.ContinuationToken = contToken
@@ -1514,6 +1531,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
+		setModel(u, event.Response.Model)
 		u.FinishReason = responsesFinishReason(&event.Response)
 		if state.anyFunctions && u.FinishReason == "stop" {
 			u.FinishReason = "tool_calls"
@@ -1529,6 +1547,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
+		setModel(u, event.Response.Model)
 		u.FinishReason = responsesFinishReason(&event.Response)
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
 		if contToken := createContinuationToken(event.Response.ID, event.SequenceNumber, event.Response.Status, isBackground); contToken != "" {
@@ -1540,6 +1559,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
+		setModel(u, event.Response.Model)
 		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
 		if failure := responsesFailureContent(&event.Response); failure != nil {
 			u.Contents = []message.Content{failure}
