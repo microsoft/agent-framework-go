@@ -229,21 +229,21 @@ func (wb *Builder) AddFanInBarrierEdge(sources []ExecutorBinding, target Executo
 
 // BuildOptions configures workflow validation during [Builder.BuildWithOptions].
 type BuildOptions struct {
-	ValidateOrphans bool
+	DisableOrphanValidation bool
 }
 
 // Build validates the assembled graph, including orphan-executor checks, and
 // returns the immutable [Workflow]. It returns the first accumulated error if
 // any builder step failed or validation did not pass.
 func (wb *Builder) Build() (*Workflow, error) {
-	return wb.BuildWithOptions(BuildOptions{ValidateOrphans: true})
+	return wb.BuildWithOptions(BuildOptions{})
 }
 
 // BuildWithOptions validates the assembled graph according to opts and returns
-// the immutable [Workflow]. All validation except orphan-executor checks is
-// always performed.
+// the immutable [Workflow]. Orphan-executor checks can be disabled; all other
+// validation is always performed.
 func (wb *Builder) BuildWithOptions(opts BuildOptions) (*Workflow, error) {
-	return wb.build(opts.ValidateOrphans)
+	return wb.build(!opts.DisableOrphanValidation)
 }
 
 func (wb *Builder) build(validateOrphans bool) (*Workflow, error) {
@@ -308,33 +308,32 @@ func (wb *Builder) validate(validateOrphans bool) bool {
 			return false
 		}
 	}
-	if !validateOrphans || len(wb.executorsBindings) == 0 {
-		return true
-	}
-	// Make sure that all nodes are connected to the start executor (transitively).
-	remainingExecutors := make(map[string]struct{}, len(wb.executorsBindings))
-	for id := range wb.executorsBindings {
-		remainingExecutors[id] = struct{}{}
-	}
-	toVisit := []string{wb.startExecutorId}
-	for len(toVisit) > 0 {
-		var currentID string
-		currentID, toVisit = toVisit[0], toVisit[1:]
-		if _, unvisited := remainingExecutors[currentID]; !unvisited {
-			continue
+	if validateOrphans && len(wb.executorsBindings) > 0 {
+		// Make sure that all nodes are connected to the start executor (transitively).
+		remainingExecutors := make(map[string]struct{}, len(wb.executorsBindings))
+		for id := range wb.executorsBindings {
+			remainingExecutors[id] = struct{}{}
 		}
-		delete(remainingExecutors, currentID)
-		if edges, ok := wb.edges[currentID]; ok {
-			for _, edge := range edges {
-				toVisit = append(toVisit, edge.Connection.SinkIDs...)
+		toVisit := []string{wb.startExecutorId}
+		for len(toVisit) > 0 {
+			var currentID string
+			currentID, toVisit = toVisit[0], toVisit[1:]
+			if _, unvisited := remainingExecutors[currentID]; !unvisited {
+				continue
+			}
+			delete(remainingExecutors, currentID)
+			if edges, ok := wb.edges[currentID]; ok {
+				for _, edge := range edges {
+					toVisit = append(toVisit, edge.Connection.SinkIDs...)
+				}
 			}
 		}
-	}
-	if len(remainingExecutors) > 0 {
-		keys := slices.Collect(maps.Keys(remainingExecutors))
-		slices.Sort(keys)
-		wb.err = fmt.Errorf("workflow cannot be built because there are orphaned executors: %v", keys)
-		return false
+		if len(remainingExecutors) > 0 {
+			keys := slices.Collect(maps.Keys(remainingExecutors))
+			slices.Sort(keys)
+			wb.err = fmt.Errorf("workflow cannot be built because there are orphaned executors: %v", keys)
+			return false
+		}
 	}
 	// Warn about self-loops (executor connecting to itself), which may cause infinite
 	// recursion if not gated by a condition.

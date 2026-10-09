@@ -206,12 +206,34 @@ func TestBuilder_BuildWithOptionsCanSkipOrphanValidation(t *testing.T) {
 	wf, err := workflow.NewBuilder(newPlaceholder("start")).
 		BindExecutor(newNoOpExecutor("start")).
 		AddEdge(newNoOpExecutor("unreachable"), newNoOpExecutor("also-unreachable")).
-		BuildWithOptions(workflow.BuildOptions{})
+		BuildWithOptions(workflow.BuildOptions{DisableOrphanValidation: true})
 	if err != nil {
 		t.Fatalf("BuildWithOptions() error = %v, want nil", err)
 	}
 	if wf == nil {
 		t.Fatal("BuildWithOptions() workflow = nil, want workflow")
+	}
+}
+
+func TestBuilder_BuildWithOptionsValidatesOrphansByDefault(t *testing.T) {
+	_, err := workflow.NewBuilder(newPlaceholder("start")).
+		BindExecutor(newNoOpExecutor("start")).
+		AddEdge(newNoOpExecutor("unreachable"), newNoOpExecutor("also-unreachable")).
+		BuildWithOptions(workflow.BuildOptions{})
+	if err == nil || !strings.Contains(err.Error(), "orphaned executors") {
+		t.Fatalf("BuildWithOptions() error = %v, want orphaned executors error", err)
+	}
+}
+
+func TestBuilder_BuildWithOptionsStillValidatesTypeCompatibility(t *testing.T) {
+	source := newTypedExecutor[string, int]("unreachable")
+	target := newTypedExecutor[string, string]("also-unreachable")
+
+	_, err := workflow.NewBuilder(newNoOpExecutor("start")).
+		AddEdge(source, target).
+		BuildWithOptions(workflow.BuildOptions{DisableOrphanValidation: true})
+	if err == nil || !strings.Contains(err.Error(), "type incompatibility") {
+		t.Fatalf("BuildWithOptions() error = %v, want type incompatibility error", err)
 	}
 }
 
