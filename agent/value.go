@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"sync"
 )
 
 // stateValue wraps a session state value in either serialized or deserialized form,
 // and supports lazy deserialization with type-aware caching.
 type stateValue struct {
+	mu sync.Mutex
+
 	raw       json.RawMessage
 	cached    any
 	cachedTyp reflect.Type
@@ -23,14 +26,25 @@ func newStateValue(value any) *stateValue {
 	return &stateValue{cached: value, cachedTyp: reflect.TypeOf(value), hasCached: true}
 }
 
-func (v *stateValue) readInto(out any) (bool, error) {
+func stateValueDestination(out any) (reflect.Value, error) {
 	if out == nil {
-		return false, fmt.Errorf("out must be a non-nil pointer")
+		return reflect.Value{}, fmt.Errorf("out must be a non-nil pointer")
 	}
 	outValue := reflect.ValueOf(out)
 	if outValue.Kind() != reflect.Pointer || outValue.IsNil() {
-		return false, fmt.Errorf("out must be a non-nil pointer")
+		return reflect.Value{}, fmt.Errorf("out must be a non-nil pointer")
 	}
+	return outValue, nil
+}
+
+func (v *stateValue) readInto(out any) (bool, error) {
+	outValue, err := stateValueDestination(out)
+	if err != nil {
+		return false, err
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
 	requestedType := outValue.Elem().Type()
 
 	if v.hasCached {
@@ -58,22 +72,25 @@ func (v *stateValue) readInto(out any) (bool, error) {
 }
 
 func (v *stateValue) MarshalJSON() ([]byte, error) {
-	// Prefer the original raw JSON when present: it is the authoritative
-	// serialized form for a deserialized value and preserves fields that were
-	// never read. Reading a value caches a typed copy (readInto), but that copy
-	// may be a narrower/partial view, so re-encoding it would silently drop the
-	// unread fields on the next save. Values created via Set have raw == nil and
-	// marshal losslessly from cached.
-	if v.raw != nil {
-		return slices.Clone(v.raw), nil
+	v.mu.Lock()
+	raw, cached, hasCached := v.raw, v.cached, v.hasCached
+	v.mu.Unlock()
+
+	// Preserve the original raw JSON after a read: a narrower destination
+	// type may not represent every field in the stored value. Set replaces
+	// the raw value when a caller wants edits to be persisted.
+	if raw != nil {
+		return slices.Clone(raw), nil
 	}
-	if v.hasCached {
-		return json.Marshal(v.cached)
+	if hasCached {
+		return json.Marshal(cached)
 	}
 	return []byte("null"), nil
 }
 
 func (v *stateValue) UnmarshalJSON(data []byte) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.raw = slices.Clone(json.RawMessage(data))
 	v.cached = nil
 	v.cachedTyp = nil

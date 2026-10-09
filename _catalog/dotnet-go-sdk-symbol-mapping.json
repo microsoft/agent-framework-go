@@ -772,7 +772,7 @@
       "Microsoft.Agents.AI.Abstractions.UnitTests.AIAgentMetadataTests": {
         "Constructor_WithNoArguments_SetsProviderNameToNull": null,
         "Constructor_WithNullProviderName_SetsProviderNameToNull": null,
-        "Constructor_WithProviderName_SetsProperty": null
+        "Constructor_WithProviderName_SetsProperty": "agent.TestAgentMetadata_Constructor_WithProviderName_SetsProperty"
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.AIAgentStructuredOutputTests": {
         "AgentResponseGeneric_Result_DeserializesObjectWithoutUnwrapping": null,
@@ -782,10 +782,10 @@
         "AgentResponseGeneric_Result_UnwrapsArrayFromDataProperty": null,
         "AgentResponseGeneric_Result_UnwrapsEnumFromDataProperty": null,
         "AgentResponseGeneric_Result_UnwrapsPrimitiveFromDataProperty": null,
-        "RunAsyncGeneric_ArrayEndToEnd_WrapsAndDeserializesCorrectlyAsync": null,
-        "RunAsyncGeneric_EnumEndToEnd_WrapsAndDeserializesCorrectlyAsync": null,
-        "RunAsyncGeneric_ObjectEndToEnd_NoWrappingAndDeserializesCorrectlyAsync": null,
-        "RunAsyncGeneric_PrimitiveEndToEnd_WrapsAndDeserializesCorrectlyAsync": null,
+        "RunAsyncGeneric_ArrayEndToEnd_WrapsAndDeserializesCorrectlyAsync": "provider/openaiprovider.TestStructuredOutputArrayEndToEnd",
+        "RunAsyncGeneric_EnumEndToEnd_WrapsAndDeserializesCorrectlyAsync": "provider/openaiprovider.TestStructuredOutputEnumEndToEnd",
+        "RunAsyncGeneric_ObjectEndToEnd_NoWrappingAndDeserializesCorrectlyAsync": "provider/openaiprovider.TestStructuredOutputObjectEndToEnd",
+        "RunAsyncGeneric_PrimitiveEndToEnd_WrapsAndDeserializesCorrectlyAsync": "provider/openaiprovider.TestStructuredOutputPrimitiveEndToEnd",
         "RunAsyncGeneric_WithArrayType_WrapsSchemaAsync": null,
         "RunAsyncGeneric_WithEnumType_WrapsSchemaAsync": null,
         "RunAsyncGeneric_WithObjectType_DoesNotWrapSchemaAsync": null,
@@ -793,7 +793,7 @@
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.AIAgentTests": {
         "Description_ReturnsNullByDefault": null,
-        "Description_ReturnsValueFromDerivedClass": null,
+        "Description_ReturnsValueFromDerivedClass": "agent.TestAgent_Description_ReturnsValueFromConfig",
         "GetService_Generic_ReturnsCorrectType": null,
         "GetService_Generic_ReturnsNullForUnrelatedType": null,
         "GetService_RequestingAIAgentType_ReturnsAgent": null,
@@ -801,14 +801,14 @@
         "GetService_RequestingUnrelatedType_ReturnsNull": null,
         "GetService_WithNullServiceType_ThrowsArgumentNullException": null,
         "GetService_WithServiceKey_ReturnsNull": null,
-        "InvokeStreamingWithSingleMessageCallsMockedInvokeWithMessageInCollectionAsync": null,
-        "InvokeStreamingWithStringMessageCallsMockedInvokeWithMessageInCollectionAsync": null,
-        "InvokeStreamingWithoutMessageCallsMockedInvokeWithEmptyArrayAsync": null,
-        "InvokeWithSingleMessageCallsMockedInvokeWithMessageInCollectionAsync": null,
-        "InvokeWithStringMessageCallsMockedInvokeWithMessageInCollectionAsync": null,
-        "InvokeWithoutMessageCallsMockedInvokeWithEmptyArrayAsync": null,
+        "InvokeStreamingWithSingleMessageCallsMockedInvokeWithMessageInCollectionAsync": "agent.TestAgent_InvokeStreamingWithSingleMessageCallsRunWithSameMessage",
+        "InvokeStreamingWithStringMessageCallsMockedInvokeWithMessageInCollectionAsync": "agent.TestAgent_InvokeStreamingWithStringMessageCallsRunWithOneMessage",
+        "InvokeStreamingWithoutMessageCallsMockedInvokeWithEmptyArrayAsync": "agent.TestAgent_InvokeStreamingWithoutMessageCallsRunWithEmptyMessages",
+        "InvokeWithSingleMessageCallsMockedInvokeWithMessageInCollectionAsync": "agent.TestAgent_InvokeWithSingleMessageCallsRunWithSameMessage",
+        "InvokeWithStringMessageCallsMockedInvokeWithMessageInCollectionAsync": "agent.TestAgent_InvokeWithStringMessageCallsRunWithOneMessage",
+        "InvokeWithoutMessageCallsMockedInvokeWithEmptyArrayAsync": "agent.TestAgent_InvokeWithoutMessageCallsRunWithEmptyMessages",
         "Name_ReturnsNullByDefault": null,
-        "Name_ReturnsValueFromDerivedClass": null,
+        "Name_ReturnsValueFromDerivedClass": "agent.TestAgent_Name_ReturnsValueFromConfig",
         "RunAsync_Cancellation_RestoresPreviousCurrentRunContextAsync": null,
         "RunAsync_Exception_RestoresPreviousCurrentRunContextAsync": null,
         "RunAsync_IncompleteRun_RestoresCallerContextBeforeAndAfterAwaitAsync": null,
@@ -816,8 +816,8 @@
         "RunAsync_SetsCurrentRunContext_AccessibleFromRunCoreAsync": null,
         "RunStreamingAsync_EarlyDisposal_RestoresPreviousCurrentRunContextAsync": null,
         "RunStreamingAsync_SetsCurrentRunContext_AccessibleFromRunCoreStreamingAsync": null,
-        "ValidateAgentIDCanBeProvidedByDerivedAgentClass": null,
-        "ValidateAgentIDIsIdempotent": null
+        "ValidateAgentIDCanBeProvidedByDerivedAgentClass": "agent.TestAgent_ID_UsesConfiguredID",
+        "ValidateAgentIDIsIdempotent": "agent.TestAgent_ID_IsStable"
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.AIContextProviderTests": {
         "GetService_Generic_ReturnsCorrectType": null,
@@ -839,12 +839,12 @@
         "InvokedContext_Session_ReturnsConstructorValue": null,
         "InvokedContext_SuccessConstructor_ThrowsForNullResponseMessages": null,
         "InvokedCoreAsync_CallsStoreAIContextWithFilteredMessagesAsync": "agent.TestContextProvider_Invoked_CallsStoreAndIncludesExternalRequestMessagesByDefault",
-        "InvokedCoreAsync_DefaultFilterExcludesNonExternalMessagesAsync": null,
-        "InvokedCoreAsync_DefaultResponseFilterPassesAllResponseMessagesAsync": null,
-        "InvokedCoreAsync_RequestAndResponseFiltersOperateIndependentlyAsync": null,
-        "InvokedCoreAsync_SkipsStorageWhenInvokeExceptionIsNotNullAsync": null,
-        "InvokedCoreAsync_UsesCustomResponseFilterAsync": null,
-        "InvokedCoreAsync_UsesCustomStoreInputFilterAsync": null,
+        "InvokedCoreAsync_DefaultFilterExcludesNonExternalMessagesAsync": "agent.TestContextProvider_Invoked_DefaultFilterExcludesNonExternalMessages",
+        "InvokedCoreAsync_DefaultResponseFilterPassesAllResponseMessagesAsync": "agent.TestContextProvider_Invoked_DefaultResponseFilterPassesAllMessages",
+        "InvokedCoreAsync_RequestAndResponseFiltersOperateIndependentlyAsync": "agent.TestContextProvider_Invoked_RequestAndResponseFiltersOperateIndependently",
+        "InvokedCoreAsync_SkipsStorageWhenInvokeExceptionIsNotNullAsync": "agent.TestContextProvider_Invoked_SkipsStorageWhenRunFails",
+        "InvokedCoreAsync_UsesCustomResponseFilterAsync": "agent.TestContextProvider_Invoked_UsesCustomResponseFilter",
+        "InvokedCoreAsync_UsesCustomStoreInputFilterAsync": "agent.TestContextProvider_Invoked_UsesCustomStoreInputFilters",
         "InvokingAsync_NullContext_ThrowsArgumentNullExceptionAsync": null,
         "InvokingContext_AIContext_ConstructorValueRoundtrips": null,
         "InvokingContext_Agent_ReturnsConstructorValue": null,
@@ -857,10 +857,10 @@
         "InvokingCoreAsync_FiltersInputToExternalOnlyByDefaultAsync": "agent.TestContextProvider_Invoking_FiltersInputMessagesBeforeProvide",
         "InvokingCoreAsync_MergesInstructionsAsync": null,
         "InvokingCoreAsync_MergesToolsAsync": "agent.TestContextProvider_InvokingContext_ReturnsProvidedFields",
-        "InvokingCoreAsync_MergesWithOriginalUnfilteredMessagesAsync": null,
+        "InvokingCoreAsync_MergesWithOriginalUnfilteredMessagesAsync": "agent.TestContextProvider_Invoking_MergesWithOriginalUnfilteredMessages",
         "InvokingCoreAsync_ReturnsEmptyContextByDefaultAsync": "agent.TestContextProvider_Invoking_WithoutProvide_ReturnsNoAdditions",
         "InvokingCoreAsync_StampsProvidedMessagesWithAIContextProviderSourceAsync": "agent.TestContextProvider_Invoking_UsesCustomSourceID",
-        "InvokingCoreAsync_UsesCustomProvideInputFilterAsync": null
+        "InvokingCoreAsync_UsesCustomProvideInputFilterAsync": "agent.TestContextProvider_Invoking_UsesCustomProvideInputMessageFilter"
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.AIContextTests": {
         "SetAIFunctionsRoundtrips": null,
@@ -989,7 +989,7 @@
         "ToAgentResponseUpdatesWithAdditionalPropertiesOnlyProducesSingleUpdate": "agent.TestResponse_ToUpdates_WithAdditionalPropertiesOnlyProducesSingleUpdate",
         "ToAgentResponseUpdatesWithNoMessagesProducesEmptyArray": "agent.TestResponse_ToUpdates_WithNoMessagesProducesEmptySlice",
         "ToAgentResponseUpdatesWithUsageOnlyProducesSingleUpdate": "agent.TestResponse_ToUpdates_WithUsageOnlyProducesSingleUpdate",
-        "ToStringOutputsText": null
+        "ToStringOutputsText": "agent.TestResponse_ToStringOutputsText"
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.AgentResponseUpdateExtensionsTests": {
         "AsChatResponseUpdate_WithNullArgument_ThrowsArgumentNullException": null,
@@ -1002,20 +1002,20 @@
         "AsChatResponse_WithNullArgument_ThrowsArgumentNullException": null,
         "AsChatResponse_WithRawRepresentationAsChatResponse_ReturnsSameInstance": null,
         "AsChatResponse_WithoutRawRepresentation_CreatesNewChatResponse": null,
-        "ToAgentResponseCoalescesTextContentAndTextReasoningContentSeparatelyAsync": null,
-        "ToAgentResponseCoalescesVariousSequenceAndGapLengthsAsync": null,
+        "ToAgentResponseCoalescesTextContentAndTextReasoningContentSeparatelyAsync": "agent.TestResponse_Collect_CoalescesTextAndReasoningSeparately",
+        "ToAgentResponseCoalescesVariousSequenceAndGapLengthsAsync": "agent.TestResponse_Collect_CoalescesTextAcrossDataGaps",
         "ToAgentResponseSuccessfullyCreatesResponseAsync": null,
         "ToAgentResponseUsesContentExtractedFromContentsAsync": null,
         "ToAgentResponseWithInvalidArgsThrows": null,
-        "ToAgentResponse_AlternativeTimestampsAsync": null,
-        "ToAgentResponse_TimestampFoldingAsync": null
+        "ToAgentResponse_AlternativeTimestampsAsync": "agent.TestResponse_Collect_AlternativeTimestamps",
+        "ToAgentResponse_TimestampFoldingAsync": "agent.TestResponse_Collect_TimestampFolding"
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.AgentResponseUpdateTests": {
         "ConstructorPropsDefaulted": null,
         "ConstructorWithChatResponseUpdateRoundtrips": null,
-        "JsonSerializationRoundtrips": null,
+        "JsonSerializationRoundtrips": "agent.TestResponseUpdate_JsonSerializationRoundtrips",
         "PropertiesRoundtrip": null,
-        "TextGetUsesAllTextContent": null
+        "TextGetUsesAllTextContent": "agent.TestResponseUpdate_TextGetUsesAllTextContent"
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.AgentRunContextTests": {
         "Agent_ReturnsValueFromConstructor": null,
@@ -1035,23 +1035,23 @@
         "JsonSerializationRoundtrips": null
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.AgentSessionExtensionsTests": {
-        "SetInMemoryChatHistory_WhenExistingState_ReplacesMessages": null,
-        "SetInMemoryChatHistory_WhenNoExistingState_CreatesNewState": null,
-        "SetInMemoryChatHistory_WithCustomStateKey_UsesCustomKey": null,
-        "SetInMemoryChatHistory_WithEmptyList_SetsEmptyList": null,
-        "SetInMemoryChatHistory_WithNullSession_ThrowsArgumentNullException": null,
-        "TryGetInMemoryChatHistory_WhenStateDoesNotExist_ReturnsFalse": null,
-        "TryGetInMemoryChatHistory_WhenStateExistsWithNullMessages_ReturnsFalse": null,
-        "TryGetInMemoryChatHistory_WhenStateExists_ReturnsTrueAndMessages": null,
-        "TryGetInMemoryChatHistory_WithCustomStateKey_DoesNotFindDefaultKey": null,
-        "TryGetInMemoryChatHistory_WithCustomStateKey_UsesCustomKey": null,
-        "TryGetInMemoryChatHistory_WithNullSession_ThrowsArgumentNullException": null
+        "SetInMemoryChatHistory_WhenExistingState_ReplacesMessages": "agent.TestSessionHistory_Set_WhenExistingState_ReplacesMessages",
+        "SetInMemoryChatHistory_WhenNoExistingState_CreatesNewState": "agent.TestSessionHistory_Set_WhenNoExistingState_CreatesNewState",
+        "SetInMemoryChatHistory_WithCustomStateKey_UsesCustomKey": "agent.TestSessionHistory_Set_WithCustomStateKey_UsesCustomKey",
+        "SetInMemoryChatHistory_WithEmptyList_SetsEmptyList": "agent.TestSessionHistory_Set_WithEmptyList_SetsEmptyList",
+        "SetInMemoryChatHistory_WithNullSession_ThrowsArgumentNullException": "agent.TestSessionHistory_Set_WithNullSession_ReturnsError",
+        "TryGetInMemoryChatHistory_WhenStateDoesNotExist_ReturnsFalse": "agent.TestSessionHistory_TryGet_WhenStateDoesNotExist_ReturnsFalse",
+        "TryGetInMemoryChatHistory_WhenStateExistsWithNullMessages_ReturnsFalse": "agent.TestSessionHistory_TryGet_WhenStateExistsWithNullMessages_ReturnsFalse",
+        "TryGetInMemoryChatHistory_WhenStateExists_ReturnsTrueAndMessages": "agent.TestSessionHistory_TryGet_WhenStateExists_ReturnsTrueAndMessages",
+        "TryGetInMemoryChatHistory_WithCustomStateKey_DoesNotFindDefaultKey": "agent.TestSessionHistory_TryGet_WithCustomStateKey_DoesNotFindDefaultKey",
+        "TryGetInMemoryChatHistory_WithCustomStateKey_UsesCustomKey": "agent.TestSessionHistory_TryGet_WithCustomStateKey_UsesCustomKey",
+        "TryGetInMemoryChatHistory_WithNullSession_ThrowsArgumentNullException": "agent.TestSessionHistory_TryGet_WithNullSession_ReturnsError"
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.AgentSessionStateBagTests": {
-        "ConcurrentReadsAndWrites_DoesNotThrowAsync": null,
-        "ConcurrentWritesAndSerialize_DoesNotThrowAsync": null,
+        "ConcurrentReadsAndWrites_DoesNotThrowAsync": "agent.TestSessionState_ConcurrentReadsAndWrites",
+        "ConcurrentWritesAndSerialize_DoesNotThrowAsync": "agent.TestSessionState_ConcurrentWritesAndSerialize",
         "Constructor_Default_CreatesEmptyStateBag": "agent.TestSessionState_Get_NonexistentKey_ReturnsNotFound",
-        "Deserialize_FromJsonDocument_ReturnsEmptyStateBag": null,
+        "Deserialize_FromJsonDocument_ReturnsEmptyStateBag": "agent.TestSessionStateBag_Deserialize_FromJsonDocument_ReturnsEmptyStateBag",
         "Deserialize_NullElement_ReturnsEmptyStateBag": null,
         "GetValue_CachesDeserializedValue": null,
         "GetValue_TypeMismatch_ExceptionMessageContainsBothTypeNames": null,
@@ -1059,45 +1059,45 @@
         "GetValue_WithDifferentTypeAfterDeserializedRoundtrip_ThrowsInvalidOperationException": null,
         "GetValue_WithDifferentTypeAfterSet_ThrowsInvalidOperationException": null,
         "GetValue_WithEmptyKey_ThrowsArgumentException": null,
-        "GetValue_WithExistingKey_ReturnsValue": null,
-        "GetValue_WithNonexistentKey_ReturnsNull": null,
+        "GetValue_WithExistingKey_ReturnsValue": "agent.TestSessionStateBag_GetValue_WithExistingKey_ReturnsValue",
+        "GetValue_WithNonexistentKey_ReturnsNull": "agent.TestSessionStateBag_GetValue_WithNonexistentKey_ReturnsNull",
         "GetValue_WithNullKey_ThrowsArgumentException": null,
-        "GetValue_WithNullValue_ReturnsNull": null,
-        "JsonSerializerDeserialize_NullJson_ReturnsNull": null,
-        "JsonSerializerRoundtrip_WithComplexObject_PreservesData": null,
-        "JsonSerializerRoundtrip_WithStringValue_PreservesData": null,
+        "GetValue_WithNullValue_ReturnsNull": "agent.TestSessionStateBag_GetValue_WithNullValue_ReturnsNull",
+        "JsonSerializerDeserialize_NullJson_ReturnsNull": "agent.TestSessionStateBag_JsonSerializerDeserialize_NullJson_ReturnsNull",
+        "JsonSerializerRoundtrip_WithComplexObject_PreservesData": "agent.TestSessionStateBag_JsonSerializerRoundtrip_WithComplexObject_PreservesData",
+        "JsonSerializerRoundtrip_WithStringValue_PreservesData": "agent.TestSessionStateBag_JsonSerializerRoundtrip_WithStringValue_PreservesData",
         "JsonSerializerSerialize_EmptyStateBag_ReturnsEmptyObject": null,
         "JsonSerializerSerialize_WithStringValue_ProducesSameOutputAsSerializeMethod": null,
         "JsonSerializerSerialize_WithUnknownType_Throws": null,
-        "SerializeDeserialize_WithComplexObject_Roundtrips": null,
-        "SerializeDeserialize_WithNullValue_SerializesAsNull": null,
-        "SerializeDeserialize_WithStringValue_Roundtrips": null,
-        "Serialize_EmptyStateBag_ReturnsEmptyObject": null,
-        "Serialize_WithComplexObject_ReturnsJsonWithProperties": null,
-        "Serialize_WithStringValue_ReturnsJsonWithValue": null,
-        "SetValue_MultipleConcurrentWrites_DoesNotThrowAsync": null,
-        "SetValue_OverwriteNullWithValue_ReturnsValue": null,
-        "SetValue_OverwriteWithNull_ReturnsNull": null,
+        "SerializeDeserialize_WithComplexObject_Roundtrips": "agent.TestSessionStateBag_SerializeDeserialize_WithComplexObject_Roundtrips",
+        "SerializeDeserialize_WithNullValue_SerializesAsNull": "agent.TestSessionStateBag_SerializeDeserialize_WithNullValue_SerializesAsNull",
+        "SerializeDeserialize_WithStringValue_Roundtrips": "agent.TestSessionStateBag_SerializeDeserialize_WithStringValue_Roundtrips",
+        "Serialize_EmptyStateBag_ReturnsEmptyObject": "agent.TestSessionStateBag_Serialize_EmptyStateBag_ReturnsEmptyObject",
+        "Serialize_WithComplexObject_ReturnsJsonWithProperties": "agent.TestSessionStateBag_Serialize_WithComplexObject_ReturnsJsonWithProperties",
+        "Serialize_WithStringValue_ReturnsJsonWithValue": "agent.TestSessionStateBag_Serialize_WithStringValue_ReturnsJsonWithValue",
+        "SetValue_MultipleConcurrentWrites_DoesNotThrowAsync": "agent.TestSession_ConcurrentFirstWritesPreserveState",
+        "SetValue_OverwriteNullWithValue_ReturnsValue": "agent.TestSessionStateBag_SetValue_OverwriteNullWithValue_ReturnsValue",
+        "SetValue_OverwriteWithNull_ReturnsNull": "agent.TestSessionStateBag_SetValue_OverwriteWithNull_ReturnsNull",
         "SetValue_OverwritesExistingValue": "agent.TestSessionState_Set_OverwritesExistingValue",
-        "SetValue_WithComplexObject_StoresValue": null,
+        "SetValue_WithComplexObject_StoresValue": "agent.TestSessionStateBag_SetValue_WithComplexObject_StoresValue",
         "SetValue_WithEmptyKey_ThrowsArgumentException": null,
         "SetValue_WithNullKey_ThrowsArgumentException": null,
-        "SetValue_WithNullValue_StoresNull": null,
+        "SetValue_WithNullValue_StoresNull": "agent.TestSessionStateBag_SetValue_WithNullValue_StoresNull",
         "SetValue_WithValidKeyAndValue_StoresValue": "agent.TestSessionState_Set_And_Get_Roundtrips",
         "SetValue_WithWhitespaceKey_ThrowsArgumentException": null,
-        "TryGetValue_ComplexTypeAfterSetString_ReturnsFalse": null,
-        "TryGetValue_WithComplexObject_ReturnsTrueAndValue": null,
-        "TryGetValue_WithDifferentTypeAfterDeserializedRead_ReturnsFalse": null,
-        "TryGetValue_WithDifferentTypeAfterSet_ReturnsFalse": "agent.TestSessionState_Get_TypeMismatchReturnsError",
+        "TryGetValue_ComplexTypeAfterSetString_ReturnsFalse": "agent.TestSessionStateBag_TryGetValue_ComplexTypeAfterSetString_ReturnsFalse",
+        "TryGetValue_WithComplexObject_ReturnsTrueAndValue": "agent.TestSessionStateBag_TryGetValue_WithComplexObject_ReturnsTrueAndValue",
+        "TryGetValue_WithDifferentTypeAfterDeserializedRead_ReturnsFalse": "agent.TestSessionStateBag_TryGetValue_WithDifferentTypeAfterDeserializedRead_ReturnsFalse",
+        "TryGetValue_WithDifferentTypeAfterSet_ReturnsFalse": "agent.TestSessionStateBag_TryGetValue_WithDifferentTypeAfterSet_ReturnsFalse",
         "TryGetValue_WithEmptyKey_ThrowsArgumentException": null,
-        "TryGetValue_WithExistingKey_ReturnsTrueAndValue": null,
-        "TryGetValue_WithNonexistentKey_ReturnsFalseAndNull": null,
+        "TryGetValue_WithExistingKey_ReturnsTrueAndValue": "agent.TestSessionStateBag_TryGetValue_WithExistingKey_ReturnsTrueAndValue",
+        "TryGetValue_WithNonexistentKey_ReturnsFalseAndNull": "agent.TestSessionStateBag_TryGetValue_WithNonexistentKey_ReturnsFalseAndNull",
         "TryGetValue_WithNullKey_ThrowsArgumentException": null,
         "TryGetValue_WithNullValue_ReturnsTrueAndNull": "agent.TestSessionState_Set_NilPointerValue_RoundtripsForSameType",
-        "TryRemoveValue_DoesNotAffectOtherKeys": null,
+        "TryRemoveValue_DoesNotAffectOtherKeys": "agent.TestSessionStateBag_TryRemoveValue_DoesNotAffectOtherKeys",
         "TryRemoveValue_ExistingKey_ReturnsTrueAndRemoves": "agent.TestSessionState_Delete_ExistingKey",
         "TryRemoveValue_NonexistentKey_ReturnsFalse": "agent.TestSessionState_Delete_NonexistentKey_ReturnsFalse",
-        "TryRemoveValue_ThenSetValue_Works": null,
+        "TryRemoveValue_ThenSetValue_Works": "agent.TestSessionStateBag_TryRemoveValue_ThenSetValue_Works",
         "TryRemoveValue_WithEmptyKey_ThrowsArgumentException": null,
         "TryRemoveValue_WithNullKey_ThrowsArgumentException": null,
         "TryRemoveValue_WithWhitespaceKey_ThrowsArgumentException": null
@@ -1131,9 +1131,9 @@
         "GetService_WithNullServiceType_ThrowsArgumentNullException": null,
         "GetService_WithServiceKey_ReturnsNull": null,
         "StateBag_Default_IsEmpty": null,
-        "StateBag_MultipleKeys_StoreAndRetrieveIndependently": "agent.TestSessionState_Set_DifferentValueTypes",
-        "StateBag_OverwriteValue_ReturnsUpdatedValue": null,
-        "StateBag_Values_Roundtrips": null
+        "StateBag_MultipleKeys_StoreAndRetrieveIndependently": "agent.TestAgentSession_StateBag_MultipleKeys_StoreAndRetrieveIndependently",
+        "StateBag_OverwriteValue_ReturnsUpdatedValue": "agent.TestAgentSession_StateBag_OverwriteValue_ReturnsUpdatedValue",
+        "StateBag_Values_Roundtrips": "agent.TestAgentSession_StateBag_Values_Roundtrips"
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.ChatHistoryProviderTests": {
         "GetService_Generic_ReturnsCorrectType": null,
@@ -1153,11 +1153,11 @@
         "InvokedContext_Session_CanBeNull": null,
         "InvokedContext_Session_ReturnsConstructorValue": null,
         "InvokedContext_SuccessConstructor_ThrowsForNullResponseMessages": null,
-        "InvokedCoreAsync_CallsStoreChatHistoryWithFilteredMessagesAsync": null,
-        "InvokedCoreAsync_DefaultFilterExcludesChatHistorySourcedMessagesAsync": null,
-        "InvokedCoreAsync_PassesResponseMessagesToStoreAsync": null,
-        "InvokedCoreAsync_SkipsStorageWhenInvokeExceptionIsNotNullAsync": null,
-        "InvokedCoreAsync_UsesCustomStoreInputFilterAsync": null,
+        "InvokedCoreAsync_CallsStoreChatHistoryWithFilteredMessagesAsync": "agent.TestHistoryProvider_Invoked_StoresFilteredRequestAndResponse",
+        "InvokedCoreAsync_DefaultFilterExcludesChatHistorySourcedMessagesAsync": "agent.TestHistoryProvider_Invoked_DefaultFilterExcludesHistoryMessages",
+        "InvokedCoreAsync_PassesResponseMessagesToStoreAsync": "agent.TestHistoryProvider_Invoked_PassesResponseMessagesToStore",
+        "InvokedCoreAsync_SkipsStorageWhenInvokeExceptionIsNotNullAsync": "agent.TestHistoryProvider_Invoked_SkipsStorageOnRunError",
+        "InvokedCoreAsync_UsesCustomStoreInputFilterAsync": "agent.TestHistoryProvider_Invoked_UsesCustomStoreFilters",
         "InvokingAsync_NullContext_ThrowsArgumentNullExceptionAsync": null,
         "InvokingContext_Agent_ReturnsConstructorValue": null,
         "InvokingContext_Constructor_ThrowsForNullAgent": null,
@@ -1166,22 +1166,22 @@
         "InvokingContext_RequestMessages_SetterThrowsForNull": null,
         "InvokingContext_Session_CanBeNull": null,
         "InvokingContext_Session_ReturnsConstructorValue": null,
-        "InvokingCoreAsync_AppliesProvideOutputFilterWhenProvidedAsync": null,
-        "InvokingCoreAsync_CallsProvideChatHistoryAndReturnsMessagesAsync": null,
-        "InvokingCoreAsync_HistoryAppearsBeforeRequestMessagesAsync": null,
-        "InvokingCoreAsync_NoFilterAppliedWhenProvideOutputFilterIsNullAsync": null,
-        "InvokingCoreAsync_ReturnsEmptyHistoryByDefaultAsync": null,
-        "InvokingCoreAsync_StampsHistoryMessagesWithChatHistorySourceAsync": null
+        "InvokingCoreAsync_AppliesProvideOutputFilterWhenProvidedAsync": "agent.TestHistoryProvider_Invoking_AppliesOutputFilter",
+        "InvokingCoreAsync_CallsProvideChatHistoryAndReturnsMessagesAsync": "agent.TestHistoryProvider_Invoking_ProvidesHistoryAndRequest",
+        "InvokingCoreAsync_HistoryAppearsBeforeRequestMessagesAsync": "agent.TestHistoryProvider_Invoking_HistoryPrecedesRequest",
+        "InvokingCoreAsync_NoFilterAppliedWhenProvideOutputFilterIsNullAsync": "agent.TestHistoryProvider_Invoking_WithoutOutputFilterKeepsAllHistory",
+        "InvokingCoreAsync_ReturnsEmptyHistoryByDefaultAsync": "agent.TestHistoryProvider_Invoking_WithoutProvideReturnsRequest",
+        "InvokingCoreAsync_StampsHistoryMessagesWithChatHistorySourceAsync": "agent.TestHistoryProvider_Invoking_StampsHistorySource"
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.ChatMessageExtensionsTests": {
         "AsAgentRequestMessageSourcedMessage_DoesNotModifyOriginalMessage": null,
         "AsAgentRequestMessageSourcedMessage_PreservesMessageContent": "message.TestMessage_WithSource_ClonesWhenSourceChanges",
-        "AsAgentRequestMessageSourcedMessage_WithDefaultNullSourceId_ReturnsClonesMessageWithNullSourceId": null,
-        "AsAgentRequestMessageSourcedMessage_WithDifferentSourceId_ReturnsClonesMessageWithNewAttribution": null,
-        "AsAgentRequestMessageSourcedMessage_WithDifferentSourceType_ReturnsClonesMessageWithNewAttribution": null,
+        "AsAgentRequestMessageSourcedMessage_WithDefaultNullSourceId_ReturnsClonesMessageWithNullSourceId": "message.TestMessage_WithSource_ClonesWithSourceTypeAndNoID",
+        "AsAgentRequestMessageSourcedMessage_WithDifferentSourceId_ReturnsClonesMessageWithNewAttribution": "message.TestMessage_WithSource_ClonesWhenSourceIDChanges",
+        "AsAgentRequestMessageSourcedMessage_WithDifferentSourceType_ReturnsClonesMessageWithNewAttribution": "message.TestMessage_WithSource_ClonesWhenSourceTypeChanges",
         "AsAgentRequestMessageSourcedMessage_WithMatchingSourceTypeAndNullSourceId_ReturnsSameInstance": null,
         "AsAgentRequestMessageSourcedMessage_WithMatchingSourceTypeAndSourceId_ReturnsSameInstance": "message.TestMessage_WithSource_ReturnsOriginalWhenUnchanged",
-        "AsAgentRequestMessageSourcedMessage_WithNoAdditionalProperties_ReturnsClonesMessageWithAttribution": null,
+        "AsAgentRequestMessageSourcedMessage_WithNoAdditionalProperties_ReturnsClonesMessageWithAttribution": "message.TestMessage_WithSource_ClonesWhenFirstAssigned",
         "AsAgentRequestMessageSourcedMessage_WithNullAdditionalProperties_ReturnsClonesMessageWithAttribution": null,
         "AsAgentRequestMessageSourcedMessage_WithWrongAttributionType_ReturnsClonesMessageWithNewAttribution": null,
         "GetAgentRequestMessageSourceId_WithAttribution_ReturnsSourceId": null,
@@ -1238,26 +1238,26 @@
         "PublicSurface_IsHiddenAndExperimental": null
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.InMemoryChatHistoryProviderTests": {
-        "AddMessagesAsync_WithReducer_AfterMessageAdded_InvokesReducerAsync": null,
-        "AddMessagesAsync_WithReducer_ButWrongTrigger_DoesNotInvokeReducerAsync": null,
+        "AddMessagesAsync_WithReducer_AfterMessageAdded_InvokesReducerAsync": "agent/compaction.TestHistoryProvider_ReducesAfterMessageAdded",
+        "AddMessagesAsync_WithReducer_ButWrongTrigger_DoesNotInvokeReducerAsync": "agent/compaction.TestHistoryProvider_DoesNotReduceOnAddWhenTriggeredBeforeRetrieval",
         "Constructor_Arguments_SetOnPropertiesCorrectly": null,
         "Constructor_DefaultsToBeforeMessageRetrieval_ForNotProvidedTriggerEvent": null,
-        "GetMessagesAsync_WithReducer_BeforeMessagesRetrieval_InvokesReducerAsync": null,
-        "GetMessagesAsync_WithReducer_ButWrongTrigger_DoesNotInvokeReducerAsync": null,
+        "GetMessagesAsync_WithReducer_BeforeMessagesRetrieval_InvokesReducerAsync": "agent/compaction.TestHistoryProvider_ReducesBeforeMessagesRetrieval",
+        "GetMessagesAsync_WithReducer_ButWrongTrigger_DoesNotInvokeReducerAsync": "agent/compaction.TestHistoryProvider_DoesNotReduceOnRetrievalWhenTriggeredAfterAdd",
         "GetMessages_ReturnsEmptyList_WhenNullSession": null,
-        "InvokedAsyncAddsMessagesAsync": null,
-        "InvokedAsyncWithEmptyDoesNotFailAsync": null,
+        "InvokedAsyncAddsMessagesAsync": "agent.TestNewInMemoryHistoryProvider_AddsRequestsAndResponses",
+        "InvokedAsyncWithEmptyDoesNotFailAsync": "agent.TestNewInMemoryHistoryProvider_InvokedWithEmptyMessages",
         "InvokedAsyncWithEmptyMessagesDoesNotChangeProviderAsync": null,
-        "InvokedAsync_CustomFilter_OverridesDefaultAsync": null,
+        "InvokedAsync_CustomFilter_OverridesDefaultAsync": "agent.TestNewInMemoryHistoryProvider_CustomRequestFilterOverridesDefault",
         "InvokedAsync_DefaultFilter_ExcludesChatHistoryMessagesAsync": "agent.TestNewInMemoryHistoryProvider_DefaultStoreInputRequestMessageFilter_ExcludesHistoryMessages",
-        "InvokedAsync_WithException_DoesNotAddMessagesAsync": null,
+        "InvokedAsync_WithException_DoesNotAddMessagesAsync": "agent.TestNewInMemoryHistoryProvider_InvokedErrorDoesNotAddMessages",
         "InvokedAsync_WithNullContext_ThrowsArgumentNullExceptionAsync": null,
-        "InvokingAsyncReturnsAllMessagesAsync": null,
-        "InvokingAsync_OutputFilter_FiltersOutputMessagesAsync": null,
+        "InvokingAsyncReturnsAllMessagesAsync": "agent.TestNewInMemoryHistoryProvider_InvokingReturnsAllMessages",
+        "InvokingAsync_OutputFilter_FiltersOutputMessagesAsync": "agent.TestNewInMemoryHistoryProvider_OutputFilterSelectsUserMessages",
         "InvokingAsync_WithNullContext_ThrowsArgumentNullExceptionAsync": null,
         "SetMessages_ThrowsForNullMessages": null,
-        "SetMessages_UpdatesState": null,
-        "StateInitializer_IsInvoked_WhenSessionHasNoState": null,
+        "SetMessages_UpdatesState": "agent.TestNewInMemoryHistoryProvider_SetMessagesUpdatesState",
+        "StateInitializer_IsInvoked_WhenSessionHasNoState": "agent.TestNewInMemoryHistoryProvider_StateInitializer_SeedsMissingState",
         "StateKeys_ReturnsCustomKey_WhenSetViaOptions": null,
         "StateKeys_ReturnsDefaultKey_WhenNoOptionsProvided": null
       },
@@ -1276,7 +1276,7 @@
         "InvokingContext_Properties_Roundtrip": null,
         "InvokingContext_RequestMessages_SetterAcceptsValidValue": null,
         "InvokingContext_RequestMessages_SetterThrowsForNull": null,
-        "ProvideAIContextAsync_PreservesInstructionsAndToolsAsync": null,
+        "ProvideAIContextAsync_PreservesInstructionsAndToolsAsync": "agent.TestContextProvider_Invoking_MessageOnlyPreservesInstructionsAndTools",
         "ProvideAIContextAsync_PreservesNullInstructionsAndToolsAsync": null
       },
       "Microsoft.Agents.AI.Abstractions.UnitTests.ProviderSessionStateTests": {
@@ -8715,10 +8715,10 @@
         },
         "constructors": {
           "AIContext()": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "agent.InvokingContext{}",
+            "go_symbols": ["agent.InvokingContext"],
+            "status": "adapted",
+            "note": "Go passes messages and options as an InvokingContext and returns provider additions separately, rather than constructing an AIContext result object."
           }
         }
       },
@@ -8737,7 +8737,7 @@
           "StateKeys": {
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go ContextProvider has no public state-key enumeration; SourceID identifies provided messages but does not enumerate session state keys."
           }
         },
         "methods": {
@@ -8745,13 +8745,13 @@
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go ContextProvider has no type/key-based service lookup; implementations retain or capture their own dependencies."
           },
           "GetService<TService>(object) -> TService": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go ContextProvider has no generic service lookup; dependencies are passed or captured directly."
           },
           "InvokedAsync(AIContextProvider.InvokedContext, CancellationToken) -> ValueTask": {
             "go": "provider.Invoked(ctx, invoked)",
@@ -8822,10 +8822,10 @@
         },
         "constructors": {
           "InvokedContext(AIAgent, AgentSession, IEnumerable<ChatMessage>, Exception)": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "agent.InvokedContext{RequestMessages: messages, Err: runErr}",
+            "go_symbols": ["agent.InvokedContext", "agent.InvokedContext.Err"],
+            "status": "adapted",
+            "note": "Construct a post-run context value with request messages and Err; agent identity comes from context.Context and session from Options. Go does not enforce the .NET constructor's null checks."
           },
           "InvokedContext(AIAgent, AgentSession, IEnumerable<ChatMessage>, IEnumerable<ChatMessage>)": {
             "go": "",
@@ -8994,38 +8994,38 @@
           "go": "",
           "go_symbols": [],
           "status": "unmapped",
-          "unreviewed": true
+          "note": "Go uses ordinary map[string]any properties and has no SDK helper that keys values by their type name."
         },
         "methods": {
           "Add<T>(AdditionalPropertiesDictionary, T) -> void": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go has no typed additional-property insertion helper that chooses the type's full name as key and rejects a duplicate key."
           },
           "Contains<T>(AdditionalPropertiesDictionary) -> bool": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go has no SDK helper to look up an additional-property key derived from a type; callers use explicit string map keys."
           },
           "Remove<T>(AdditionalPropertiesDictionary) -> bool": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go has no typed additional-property removal helper; callers delete an explicit string key from a map."
           },
           "TryAdd<T>(AdditionalPropertiesDictionary, T) -> bool": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go has no type-name-keyed conditional insertion helper preserving the original value on duplicate types."
           },
           "TryGetValue<T>(AdditionalPropertiesDictionary, out T) -> bool": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go has no typed additional-property retrieval helper that derives the key from T and checks the stored value's type."
           }
         }
       },
@@ -9036,13 +9036,13 @@
           "go": "",
           "go_symbols": [],
           "status": "unmapped",
-          "unreviewed": true
+          "note": "Go uses encoding/json and type-specific JSON methods; no exported SDK utility owns the shared .NET resolver and serializer-options configuration."
         },
         "properties": {
           "DefaultOptions": {
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go has no public shared serializer-options instance combining agent and Microsoft.Extensions.AI contracts; encoding/json and type-specific JSON methods provide serialization."
           }
         }
       },
@@ -9854,40 +9854,40 @@
         },
         "methods": {
           "Equals(AgentRequestMessageSourceAttribution) -> bool": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "var left, right message.Source; _ = left == right",
+            "go_symbols": ["message.Source"],
+            "status": "adapted",
+            "note": "Source is a comparable Go value: == compares its type and ID exactly rather than invoking an Equals method."
           },
           "Equals(object) -> bool": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "var left message.Source; var candidate any = message.Source{}; right, ok := candidate.(message.Source); _ = ok && left == right",
+            "go_symbols": ["message.Source"],
+            "status": "adapted",
+            "note": "Type-assert an arbitrary value to Source before comparing; Go has no object-taking Equals method."
           },
           "GetHashCode() -> int": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Source is usable as a Go map key, but Go exposes no integer hash code for it."
           },
           "ToString() -> string": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go Source has no formatter returning the .NET type:sourceId representation; its zero and empty source IDs are not distinct."
           },
           "op_Equality(AgentRequestMessageSourceAttribution, AgentRequestMessageSourceAttribution) -> bool": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "var left, right message.Source; _ = left == right",
+            "go_symbols": ["message.Source"],
+            "status": "adapted",
+            "note": "The comparable Source struct uses Go's built-in == operator to compare type and ID."
           },
           "op_Inequality(AgentRequestMessageSourceAttribution, AgentRequestMessageSourceAttribution) -> bool": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "var left, right message.Source; _ = left != right",
+            "go_symbols": ["message.Source"],
+            "status": "adapted",
+            "note": "The comparable Source struct uses Go's built-in != operator to compare type and ID."
           }
         },
         "constructors": {
@@ -9952,40 +9952,40 @@
         },
         "methods": {
           "Equals(AgentRequestMessageSourceType) -> bool": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "var left, right message.SourceType; _ = left == right",
+            "go_symbols": ["message.SourceType"],
+            "status": "adapted",
+            "note": "Compare Go SourceType values directly; their local category strings need not match the .NET Value spellings."
           },
           "Equals(object) -> bool": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "var left message.SourceType; var candidate any = message.SourceType(\"custom\"); right, ok := candidate.(message.SourceType); _ = ok && left == right",
+            "go_symbols": ["message.SourceType"],
+            "status": "adapted",
+            "note": "Type-assert an arbitrary value to SourceType before comparing; Go has no object-taking Equals method."
           },
           "GetHashCode() -> int": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go SourceType is a comparable string-backed map key, but Go exposes no integer hash-code method."
           },
           "ToString() -> string": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "string(message.SourceType(\"custom\"))",
+            "go_symbols": ["message.SourceType"],
+            "status": "adapted",
+            "note": "Convert SourceType to string; Go uses local category values and an empty string for external input, unlike the .NET External spelling."
           },
           "op_Equality(AgentRequestMessageSourceType, AgentRequestMessageSourceType) -> bool": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "var left, right message.SourceType; _ = left == right",
+            "go_symbols": ["message.SourceType"],
+            "status": "adapted",
+            "note": "Go's string-backed SourceType compares directly with ==."
           },
           "op_Inequality(AgentRequestMessageSourceType, AgentRequestMessageSourceType) -> bool": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "var left, right message.SourceType; _ = left != right",
+            "go_symbols": ["message.SourceType"],
+            "status": "adapted",
+            "note": "Go's string-backed SourceType compares directly with !=."
           }
         },
         "constructors": {
@@ -10082,36 +10082,35 @@
             "status": "mapped"
           },
           "ToString() -> string": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "response.String()",
+            "go_symbols": ["agent.Response.String"],
+            "status": "mapped"
           }
         },
         "constructors": {
           "AgentResponse()": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "agent.Response{}",
+            "go_symbols": ["agent.Response"],
+            "status": "mapped",
+            "note": "The Go zero value has a nil Messages slice instead of an allocated empty list; both contain no messages."
           },
           "AgentResponse(ChatMessage)": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "agent.Response{Messages: []*message.Message{msg}}",
+            "go_symbols": ["agent.Response", "agent.Response.Messages"],
+            "status": "adapted",
+            "note": "Initialize the Messages slice with the one message instead of calling a constructor."
           },
           "AgentResponse(ChatResponse)": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go has no separate Microsoft.Extensions.AI ChatResponse type to convert; providers return agent.Response directly."
           },
           "AgentResponse(IList<ChatMessage>)": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "agent.Response{Messages: messages}",
+            "go_symbols": ["agent.Response", "agent.Response.Messages"],
+            "status": "adapted",
+            "note": "Supply a Go message slice directly; the response retains the slice rather than wrapping an IList."
           }
         }
       },
@@ -10129,18 +10128,22 @@
         },
         "properties": {
           "IsWrappedInObject": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "note": "No wrapped-response flag or automatic non-object unwrapping counterpart was located. Go's OpenAI strict-schema path rejects non-object roots instead of adding this wrapper."
+            "go_symbols": [
+              "agent.WithStructuredOutput",
+              "agent/format/jsonformat.WrapNonObjectSchema",
+              "agent/format/jsonformat.Format.UnmarshalStructuredOutput"
+            ],
+            "status": "partial",
+            "note": "Built-in providers use shared jsonformat helpers to wrap non-object JSON schemas and decode the data property; agent middleware is format-agnostic. Go does not expose a per-response IsWrappedInObject flag or a way to query the wrapper state of a returned Response."
           },
           "Result": {
             "go_symbols": [
               "agent.WithStructuredOutput",
               "agent.ResponseStream.Collect",
-              "agent/format/jsonformat.Format.Unmarshal"
+              "agent/format/jsonformat.Format.UnmarshalStructuredOutput"
             ],
             "status": "adapted",
-            "note": "Read the destination after successful collection, or explicitly unmarshal existing response text; no generic Result property is needed."
+            "note": "Read the caller-owned destination after successful collection, or use Format.UnmarshalStructuredOutput with the matching response format to decode existing text. Go decodes eagerly and has no generic Result property."
           }
         },
         "constructors": {
@@ -10161,29 +10164,29 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "stream.Collect()",
+          "go_symbols": ["agent.ResponseStream.Collect", "agent.Response.Update"],
+          "status": "adapted",
+          "note": "Go folds streaming updates through Collect or Response.Update; there is no extension-method class or conversion to Microsoft.Extensions.AI response types."
         },
         "methods": {
           "AsChatResponse(AgentResponse) -> ChatResponse": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go has no separate ChatResponse object model or conversion preserving an original ChatResponse in RawRepresentation."
           },
           "AsChatResponseUpdate(AgentResponseUpdate) -> ChatResponseUpdate": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go has no separate ChatResponseUpdate object model to reconstruct from an agent.ResponseUpdate."
           },
           "AsChatResponseUpdatesAsync(IAsyncEnumerable<AgentResponseUpdate>) -> IAsyncEnumerable<ChatResponseUpdate>": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go has one ResponseUpdate stream type, not a distinct ChatResponseUpdate stream requiring element conversion."
           },
           "ToAgentResponse(IEnumerable<AgentResponseUpdate>) -> AgentResponse": {
             "go": "var response agent.Response; for _, update := range updates { response.Update(update) }; response.Coalesce()",
@@ -10290,36 +10293,34 @@
         },
         "methods": {
           "ToString() -> string": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "update.String()",
+            "go_symbols": ["agent.ResponseUpdate.String"],
+            "status": "mapped"
           }
         },
         "constructors": {
           "AgentResponseUpdate()": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "agent.ResponseUpdate{}",
+            "go_symbols": ["agent.ResponseUpdate"],
+            "status": "mapped"
           },
           "AgentResponseUpdate(ChatResponseUpdate)": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go has no separate ChatResponseUpdate type from which to seed an agent response update."
           },
           "AgentResponseUpdate(ChatRole?, IList<AIContent>)": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "agent.ResponseUpdate{Role: role, Contents: contents}",
+            "go_symbols": ["agent.ResponseUpdate", "agent.ResponseUpdate.Contents", "agent.ResponseUpdate.Role"],
+            "status": "adapted",
+            "note": "Use a struct literal; the zero Go role means no explicit role and Contents is a Go slice."
           },
           "AgentResponseUpdate(ChatRole?, string)": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "agent.ResponseUpdate{Role: role, Contents: message.Contents{&message.TextContent{Text: text}}}",
+            "go_symbols": ["agent.ResponseUpdate", "message.Contents", "message.TextContent"],
+            "status": "adapted",
+            "note": "Wrap non-nil text in a TextContent item in the Contents slice; Go does not distinguish a null role from the zero role."
           }
         }
       },
@@ -10371,10 +10372,10 @@
         },
         "constructors": {
           "AgentRunContext(AIAgent, AgentSession, IReadOnlyCollection<ChatMessage>, AgentRunOptions)": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "agent.InvokingContext{Messages: messages, Options: options}",
+            "go_symbols": ["agent.InvokingContext", "agent.AgentFromContext", "agent.WithSession"],
+            "status": "adapted",
+            "note": "Go passes run messages and typed options explicitly; retrieve agent identity from context.Context and the session from options. No aggregate run-context constructor or .NET null checks are needed."
           }
         }
       },
@@ -10423,15 +10424,15 @@
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "There is no exported clone of a run-options object. Copying a []agent.Option slice does not clone option payloads or the .NET AdditionalProperties dictionary."
           }
         },
         "constructors": {
           "AgentRunOptions()": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "[]agent.Option{}",
+            "go_symbols": ["agent.Option"],
+            "status": "adapted",
+            "note": "Go uses variadic typed options rather than allocating an AgentRunOptions object."
           }
         }
       },
@@ -10462,13 +10463,13 @@
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go Session has no type/key service-discovery method; its state is accessed by Get, Set, and Delete."
           },
           "GetService<TService>(object) -> TService": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go Session has no generic service lookup; callers retain the session pointer and access state explicitly."
           }
         }
       },
@@ -10476,23 +10477,23 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "session.InMemoryHistory(\"\")",
+          "go_symbols": ["agent.Session.InMemoryHistory", "agent.Session.SetInMemoryHistory"],
+          "status": "adapted",
+          "note": "The history extension methods are ordinary methods on Go Session; this type mapping does not imply a separate extension-method container."
         },
         "methods": {
           "SetInMemoryChatHistory(AgentSession, List<ChatMessage>, string, JsonSerializerOptions) -> void": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "note": "No dedicated public replacement helper for existing in-memory history was located. Direct Session.Set cannot supply the provider's private cached state type; round-tripping a compatible serialized shape would depend on the provider's representation. StateInitializer only seeds first use."
+            "go": "session.SetInMemoryHistory(\"\", messages)",
+            "go_symbols": ["agent.Session.SetInMemoryHistory"],
+            "status": "mapped",
+            "note": "Go uses encoding/json without per-call JsonSerializerOptions; an empty state key selects the Go provider's default. Call SetInMemoryHistory after editing retrieved history to persist changes."
           },
           "TryGetInMemoryChatHistory(AgentSession, out List<ChatMessage>, string, JsonSerializerOptions) -> bool": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "note": "No dedicated public raw-history getter with a presence result was located. Live cached history uses a private state type; after serialization, Session.Get can decode a compatible shape, but that depends on the provider's state representation. Invoking the provider can initialize and filter history instead."
+            "go": "session.InMemoryHistory(\"\")",
+            "go_symbols": ["agent.Session.InMemoryHistory"],
+            "status": "mapped",
+            "note": "Go returns messages and error rather than a bool/out parameter; a nil slice represents missing or null history. It uses encoding/json without per-call JsonSerializerOptions, and an empty state key selects the Go provider's default."
           }
         }
       },
@@ -10500,36 +10501,36 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "agent.Session{}",
+          "go_symbols": ["agent.Session", "agent.Session.Get", "agent.Session.Set", "agent.Session.Delete"],
+          "status": "partial",
+          "note": "Session owns concurrent state directly rather than exporting a separate bag. Individual operations and lazy decoding are synchronized; JSON enumeration can reflect overlapping writes, while UnmarshalJSON atomically replaces state and service ID. Go preserves raw JSON after a read rather than reserializing cached values as .NET does; call Set after edits."
         },
         "properties": {
           "Count": {
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Session's state map is private and exposes no public key-count accessor."
           }
         },
         "methods": {
           "Deserialize(JsonElement) -> AgentSessionStateBag": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "json.Unmarshal(data, session)",
+            "go_symbols": ["agent.Session.UnmarshalJSON"],
+            "status": "partial",
+            "note": "Go deserializes a complete Session envelope with a State field, not a standalone state-bag JsonElement."
           },
           "GetValue<T>(string, JsonSerializerOptions) -> T": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "session.Get(\"key\", &value)",
+            "go_symbols": ["agent.Session.Get"],
+            "status": "partial",
+            "note": "Go Get writes to a destination pointer but reports unreadable stored values as not found instead of throwing. A deserialized session preserves raw JSON after reads, and Go has no per-call JsonSerializerOptions."
           },
           "Serialize() -> JsonElement": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "json.Marshal(session)",
+            "go_symbols": ["agent.Session.MarshalJSON"],
+            "status": "partial",
+            "note": "Go serializes the whole Session envelope as JSON bytes, not a standalone state-bag JsonElement."
           },
           "SetValue<T>(string, T, JsonSerializerOptions) -> void": {
             "go": "session.Set(\"topic\", \"Go\")",
@@ -10553,15 +10554,15 @@
               "agent.Session.Delete"
             ],
             "status": "adapted",
-            "note": "Go stores state directly on Session and Delete now returns whether the key existed and was removed. The Go method has no per-call JSON options and does not reject an empty key."
+            "note": "Go stores state directly on Session; Delete reports whether the key existed and rejects blank keys. There is no separate state-bag object."
           }
         },
         "constructors": {
           "AgentSessionStateBag()": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "agent.Session{}",
+            "go_symbols": ["agent.Session"],
+            "status": "adapted",
+            "note": "The zero-value Session owns an initially empty state map; Go has no separate state-bag object."
           }
         }
       },
@@ -10569,23 +10570,23 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "json.Marshal(session)",
+          "go_symbols": ["agent.Session.MarshalJSON", "agent.Session.UnmarshalJSON"],
+          "status": "partial",
+          "note": "Go serializes state through Session JSON methods without registering a converter; a standalone bag-only JSON converter is not exported."
         },
         "methods": {
           "Read(ref Utf8JsonReader, Type, JsonSerializerOptions) -> AgentSessionStateBag": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "json.Unmarshal(data, session)",
+            "go_symbols": ["agent.Session.UnmarshalJSON"],
+            "status": "partial",
+            "note": "Go decodes the enclosing Session JSON with encoding/json; it has no standalone state-bag converter or per-call serializer options."
           },
           "Write(Utf8JsonWriter, AgentSessionStateBag, JsonSerializerOptions) -> void": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "json.Marshal(session)",
+            "go_symbols": ["agent.Session.MarshalJSON"],
+            "status": "partial",
+            "note": "Go encodes the Session envelope, not a standalone bag JSON object; JSON settings are controlled by Go types rather than per-call options."
           }
         },
         "constructors": {
@@ -10593,7 +10594,7 @@
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go Session owns its JSON encoding/decoding; there is no public converter instance to construct."
           }
         }
       },
@@ -12273,7 +12274,7 @@
           "StateKeys": {
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go HistoryProvider has no public state-key enumeration; SourceID and StateKey configuration do not reveal every active session key."
           }
         },
         "methods": {
@@ -12281,13 +12282,13 @@
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go HistoryProvider has no type/key-based service lookup; dependencies are retained by provider implementations."
           },
           "GetService<TService>(object) -> TService": {
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go HistoryProvider has no generic service-discovery method; consumers use explicit provider references."
           },
           "InvokedAsync(ChatHistoryProvider.InvokedContext, CancellationToken) -> ValueTask": {
             "go": "provider.Invoked(ctx, invoked)",
@@ -12309,10 +12310,10 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "agent.InvokedContext{}",
+          "go_symbols": ["agent.InvokedContext", "agent.AgentFromContext", "agent.GetOption"],
+          "status": "adapted",
+          "note": "History and AI context providers share Go InvokedContext; agent identity is in context.Context and session in Options."
         },
         "properties": {
           "Agent": {
@@ -12352,10 +12353,10 @@
         },
         "constructors": {
           "InvokedContext(AIAgent, AgentSession, IEnumerable<ChatMessage>, Exception)": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "agent.InvokedContext{RequestMessages: messages, Err: runErr}",
+            "go_symbols": ["agent.InvokedContext", "agent.InvokedContext.Err"],
+            "status": "adapted",
+            "note": "Set Err and request messages in the shared Go context value; agent/session come from context.Context and Options, without .NET constructor validation."
           },
           "InvokedContext(AIAgent, AgentSession, IEnumerable<ChatMessage>, IEnumerable<ChatMessage>)": {
             "go": "",
@@ -12370,10 +12371,10 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "agent.InvokingContext{Messages: messages, Options: options}",
+          "go_symbols": ["agent.InvokingContext", "agent.GetOption"],
+          "status": "adapted",
+          "note": "History and AI context providers share Go InvokingContext; session is an option and agent identity comes from context.Context."
         },
         "properties": {
           "Agent": {
@@ -12414,10 +12415,10 @@
         "area": "messages",
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "msg.WithSource(message.Source{Type: sourceType, ID: sourceID})",
+          "go_symbols": ["message.Message.WithSource", "message.Source"],
+          "status": "adapted",
+          "note": "Go stores attribution in Message.Source and uses WithSource to clone and stamp messages, rather than an extension-method container."
         },
         "methods": {
           "GetAgentRequestMessageSourceId(ChatMessage) -> string": {
@@ -12638,14 +12639,14 @@
         },
         "properties": {
           "Description": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent.Agent.Description", "agent.Config.Middlewares"],
+            "status": "adapted",
+            "note": "Middleware decorates the same Agent, so Description remains its configured value rather than forwarding from an inner agent."
           },
           "Name": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent.Agent.Name", "agent.Config.Middlewares"],
+            "status": "adapted",
+            "note": "Middleware decorates the same Agent, so Name remains its configured value rather than forwarding from an inner agent."
           }
         },
         "methods": {
@@ -12653,7 +12654,7 @@
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go middleware has no wrapper-agent service lookup or keyed delegation to an inner agent."
           }
         }
       },
@@ -14111,40 +14112,40 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "agent.NewInMemoryHistoryProvider(agent.InMemoryHistoryProviderConfig{})",
+          "go_symbols": ["agent.NewInMemoryHistoryProvider", "agent.InMemoryHistoryProviderConfig", "agent/compaction.NewHistoryProvider"],
+          "status": "adapted",
+          "note": "Go returns a HistoryProvider interface from a config factory. Reducer-backed history uses the separate compaction provider, and history access lives on Session."
         },
         "properties": {
           "ChatReducer": {
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go configures a compaction Strategy through HistoryProviderConfig but exposes no runtime getter for the active reducer or strategy."
           },
           "ReducerTriggerEvent": {
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go configures the trigger on compaction.HistoryProviderConfig but exposes no getter on the constructed history provider."
           },
           "StateKeys": {
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go HistoryProvider has no runtime StateKeys accessor; caller-held SourceID and StateKey configuration select its storage key."
           }
         },
         "methods": {
           "GetMessages(AgentSession) -> List<ChatMessage>": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "session.InMemoryHistory(\"\")",
+            "go_symbols": ["agent.Session.InMemoryHistory"],
+            "status": "adapted",
+            "note": "Read history from the session instead of the provider. Unlike GetMessages with a null session, a nil Go session returns an error; missing or null history returns a nil slice."
           },
           "SetMessages(AgentSession, List<ChatMessage>) -> void": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "session.SetInMemoryHistory(\"\", messages)",
+            "go_symbols": ["agent.Session.SetInMemoryHistory"],
+            "status": "adapted",
+            "note": "Replace history through the session instead of the provider. Go accepts a nil message slice and returns an error for a nil session; .NET rejects null messages and allows a null session."
           }
         },
         "constructors": {
@@ -14170,9 +14171,9 @@
         },
         "properties": {
           "Messages": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "note": "No exported field or live history accessor exposes the built-in message list. StateInitializer only seeds it. Session.Get can decode a caller-defined shape after JSON restoration, but cannot read live cached state as a different concrete type."
+            "go_symbols": ["agent.Session.InMemoryHistory", "agent.Session.SetInMemoryHistory"],
+            "status": "adapted",
+            "note": "Read or replace messages through the session's history methods; the internal state container remains private. Call SetInMemoryHistory after editing returned history to persist changes across serialization."
           }
         },
         "constructors": {
@@ -14180,7 +14181,7 @@
             "go": "",
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "The Go history state struct is private; callers use Session.InMemoryHistory and SetInMemoryHistory instead of constructing a public State."
           }
         }
       },
@@ -14207,7 +14208,7 @@
           "JsonSerializerOptions": {
             "go_symbols": [],
             "status": "unmapped",
-            "unreviewed": true
+            "note": "Go history serialization uses encoding/json and built-in message content codecs; no per-provider serializer-options or custom AIContent converter configuration is exposed."
           },
           "ProvideOutputMessageFilter": {
             "go_symbols": [
@@ -14238,7 +14239,7 @@
               "agent/compaction.HistoryProviderConfig.StateKey"
             ],
             "status": "adapted",
-            "note": "Selects the session storage key; Go defaults to SourceID (in-memory for the plain provider, CompactionHistoryProvider for the compaction provider), not the C# provider type name."
+            "note": "Selects the session storage key; Go defaults to SourceID (in-memory for the plain provider, CompactionHistoryProvider for the compaction provider), not the C# provider type name. Resolved blank keys panic at provider construction."
           },
           "StorageInputRequestMessageFilter": {
             "go_symbols": [
@@ -14259,10 +14260,10 @@
         },
         "constructors": {
           "InMemoryChatHistoryProviderOptions()": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "agent.InMemoryHistoryProviderConfig{}",
+            "go_symbols": ["agent.InMemoryHistoryProviderConfig"],
+            "status": "adapted",
+            "note": "A zero Go config supplies plain in-memory history defaults; reducer-backed storage uses compaction.HistoryProviderConfig with a required Strategy."
           }
         }
       },
@@ -14660,10 +14661,10 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "agent.InvokingContext{Messages: messages, Options: options}",
+          "go_symbols": ["agent.InvokingContext", "agent.GetOption"],
+          "status": "adapted",
+          "note": "Message and general AI context providers share Go InvokingContext; agent identity comes from context.Context and session from Options."
         },
         "properties": {
           "Agent": {
@@ -14922,9 +14923,9 @@
         },
         "properties": {
           "StateKey": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent.Session.Get", "agent.Session.Set"],
+            "status": "adapted",
+            "note": "The caller holds the state key and supplies it to Session.Get and Session.Set; Go has no constructed generic provider-state helper with a StateKey accessor."
           }
         },
         "methods": {
@@ -14943,15 +14944,15 @@
               "agent.Session.Set"
             ],
             "status": "adapted",
-            "note": "Set overwrites the key and is a no-op on a nil session; it does not deep-copy the value. After modifying restored state, Set it again so serialization does not retain the original raw JSON."
+            "note": "Set overwrites the key and is a no-op on a nil session; it does not deep-copy the value. After modifying restored state, call Set so serialization does not retain the original raw JSON."
           }
         },
         "constructors": {
           "ProviderSessionState(Func<AgentSession, TState>, string, JsonSerializerOptions)": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "session.Set(key, initialState)",
+            "go_symbols": ["agent.Session.Get", "agent.Session.Set"],
+            "status": "adapted",
+            "note": "Go composes Session.Get and Set with a caller-held key and initializer instead of constructing a configured generic state object; there are no per-helper JSON serializer options."
           }
         }
       },

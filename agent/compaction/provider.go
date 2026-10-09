@@ -45,6 +45,7 @@ type contextProvider struct {
 	stateKey     string
 	tokenCounter TokenCounter
 	logger       *slog.Logger
+	locks        *historyProviderSessionLocks
 }
 
 // NewContextProvider creates a context provider that applies compaction before each agent run.
@@ -65,6 +66,7 @@ func NewContextProvider(cfg ContextProviderConfig) agent.ContextProvider {
 		stateKey:     cfg.StateKey,
 		tokenCounter: cfg.TokenCounter,
 		logger:       cfg.Logger,
+		locks:        new(historyProviderSessionLocks),
 	}
 }
 
@@ -86,6 +88,9 @@ func (p *contextProvider) Invoking(ctx context.Context, invoking agent.InvokingC
 		}
 		return p.markGeneratedMessages(compactedMessages, messages), options, nil
 	}
+	mu := p.locks.forOptions(options)
+	mu.Lock()
+	defer mu.Unlock()
 	if session.ServiceID() != "" {
 		if p.logger != nil {
 			p.logger.DebugContext(ctx, "compaction provider skipped", slog.String("reason", "session managed by remote service"))

@@ -222,14 +222,14 @@ func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) 
 	if !p.suppressTodoMessage {
 		mu := p.getSessionLock(session)
 		mu.Lock()
-		st := p.loadState(session)
+		items := slices.Clone(p.loadState(session).Items)
 		mu.Unlock()
 
 		var todoMsg string
 		if p.todoListMessageBuilder != nil {
-			todoMsg = p.todoListMessageBuilder(st.Items)
+			todoMsg = p.todoListMessageBuilder(items)
 		} else {
-			todoMsg = formatTodoListMessage(st.Items)
+			todoMsg = formatTodoListMessage(items)
 		}
 		outMessages = append(outMessages, message.NewText(todoMsg))
 	}

@@ -42,7 +42,7 @@ type ProviderConfig struct {
 	// retained originals. The provider remains responsible for execution and approvals.
 	ManagesToolExecution bool
 
-	// Format creates a provider response format for a structured output value.
+	// Format creates a provider response format for the structured output value.
 	Format func(v any) (ResponseFormat, error)
 
 	// Unmarshal decodes provider structured output into v using format.

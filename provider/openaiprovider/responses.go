@@ -96,7 +96,11 @@ func ResponsesIncludeReasoningEncryptedContent(enabled bool) agent.Option {
 }
 
 func (a *responsesClient) formatOf(v any) (agent.ResponseFormat, error) {
-	return jsonformat.ForType(reflect.TypeOf(v))
+	format, err := jsonformat.ForType(reflect.TypeOf(v))
+	if err != nil {
+		return agent.ResponseFormat{}, err
+	}
+	return jsonformat.WrapNonObjectSchema(format)
 }
 
 func (a *responsesClient) unmarshal(format agent.ResponseFormat, data []byte, v any) error {
@@ -104,7 +108,7 @@ func (a *responsesClient) unmarshal(format agent.ResponseFormat, data []byte, v 
 	if err != nil {
 		return err
 	}
-	return jsonFormat.Unmarshal(data, v)
+	return jsonFormat.UnmarshalStructuredOutput(data, v)
 }
 
 func (a *responsesClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {

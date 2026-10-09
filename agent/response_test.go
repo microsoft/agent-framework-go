@@ -4,14 +4,101 @@ package agent_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"maps"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 )
+
+func TestResponseUpdate_TextGetUsesAllTextContent(t *testing.T) {
+	first := &message.TextContent{Text: "text-1"}
+	update := &agent.ResponseUpdate{
+		Role: message.RoleUser,
+		Contents: message.Contents{
+			&message.DataContent{Data: "aGVsbG8=", MediaType: "audio/mpeg"},
+			&message.DataContent{Data: "aGVsbG8=", MediaType: "image/png"},
+			&message.FunctionCallContent{CallID: "callId1", Name: "fc1"},
+			first,
+			&message.TextContent{Text: "text-2"},
+			&message.FunctionResultContent{CallID: "callId1", Result: "result"},
+		},
+	}
+	if got := update.String(); got != "text-1text-2" {
+		t.Fatalf("String() = %q, want text-1text-2", got)
+	}
+	first.Text = "text-3"
+	if update.Contents[3] != first || update.String() != "text-3text-2" {
+		t.Fatalf("changed text = %q, want text-3text-2", update.String())
+	}
+}
+
+func TestResponseUpdate_JsonSerializationRoundtrips(t *testing.T) {
+	createdAt := time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC)
+	original := &agent.ResponseUpdate{
+		AuthorName: "author",
+		Role:       message.RoleAssistant,
+		Contents: message.Contents{
+			&message.TextContent{Text: "text-1"},
+			&message.DataContent{Data: "aGVsbG8=", MediaType: "image/png"},
+			&message.FunctionCallContent{CallID: "callId1", Name: "fc1"},
+			&message.DataContent{Data: "ZGF0YQ==", MediaType: "text/plain"},
+			&message.TextContent{Text: "text-2"},
+		},
+		RawRepresentation:    new(int),
+		ResponseID:           "id",
+		MessageID:            "messageid",
+		CreatedAt:            createdAt,
+		AdditionalProperties: map[string]any{"key": "value"},
+		ContinuationToken:    "AQID",
+	}
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result agent.ResponseUpdate
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Contents) != 5 || result.String() != "text-1text-2" {
+		t.Fatalf("roundtripped contents = %v, want 5 items and both text fragments", result.Contents)
+	}
+	if _, ok := result.Contents[0].(*message.TextContent); !ok {
+		t.Fatalf("first content = %T, want text", result.Contents[0])
+	}
+	if content, ok := result.Contents[1].(*message.DataContent); !ok || content.Data != "aGVsbG8=" || content.MediaType != "image/png" {
+		t.Fatalf("second content = %v, want image data", result.Contents[1])
+	}
+	if content, ok := result.Contents[2].(*message.FunctionCallContent); !ok || content.Name != "fc1" {
+		t.Fatalf("third content = %v, want function call fc1", result.Contents[2])
+	}
+	if content, ok := result.Contents[3].(*message.DataContent); !ok || content.Data != "ZGF0YQ==" || content.MediaType != "text/plain" {
+		t.Fatalf("fourth content = %v, want text data", result.Contents[3])
+	}
+	if _, ok := result.Contents[4].(*message.TextContent); !ok {
+		t.Fatalf("fifth content = %T, want text", result.Contents[4])
+	}
+	if result.AuthorName != "author" || result.Role != message.RoleAssistant ||
+		result.ResponseID != "id" || result.MessageID != "messageid" ||
+		!result.CreatedAt.Equal(createdAt) || result.AdditionalProperties["key"] != "value" ||
+		result.ContinuationToken != "AQID" {
+		t.Fatalf("roundtripped metadata = %+v", result)
+	}
+}
+
+func TestResponse_ToStringOutputsText(t *testing.T) {
+	text := "This is a test.\nIt's multiple lines."
+	response := &agent.Response{Messages: []*message.Message{
+		{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: text}}},
+	}}
+	if got := response.String(); got != text {
+		t.Fatalf("String() = %q, want %q", got, text)
+	}
+}
 
 func TestResponse_Update_NilUpdate(t *testing.T) {
 	resp := &agent.Response{}
@@ -1178,5 +1265,237 @@ func TestResponse_ToUpdates_PropagatesContinuationToken(t *testing.T) {
 
 	if roundTripped.ContinuationToken != "tok-123" {
 		t.Errorf("expected ContinuationToken tok-123, got %q", roundTripped.ContinuationToken)
+	}
+}
+
+func collectPortedResponseUpdates(t *testing.T, updates []*agent.ResponseUpdate, streaming bool) *agent.Response {
+	t.Helper()
+	if streaming {
+		stream := agent.ResponseStream(func(yield func(*agent.ResponseUpdate, error) bool) {
+			for _, update := range updates {
+				if !yield(update, nil) {
+					return
+				}
+			}
+		})
+		response, err := stream.Collect()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	response := new(agent.Response)
+	for _, update := range updates {
+		response.Update(update)
+	}
+	response.Coalesce()
+	return response
+}
+
+func TestResponse_Collect_CombinesMessagesMetadataAndUsage(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprintf("streaming=%v", streaming), func(t *testing.T) {
+			createdAt := time.Date(2024, 2, 3, 4, 5, 6, 0, time.UTC)
+			updates := []*agent.ResponseUpdate{
+				{AgentID: "agentId", ResponseID: "someResponse", MessageID: "12345", Role: message.RoleAssistant, CreatedAt: createdAt,
+					Contents: message.Contents{&message.TextContent{Text: "Hello"}}},
+				{AuthorName: "Someone", Role: message.Role("human"), AdditionalProperties: map[string]any{"a": "b"},
+					Contents: message.Contents{&message.TextContent{Text: ", "}}},
+				{CreatedAt: createdAt.AddDate(1, 0, 0), AdditionalProperties: map[string]any{"c": "d"},
+					Contents: message.Contents{&message.TextContent{Text: "world!"}}},
+				{Contents: message.Contents{&message.UsageContent{Details: message.UsageDetails{InputTokenCount: 1, OutputTokenCount: 2}}}},
+				{Contents: message.Contents{&message.UsageContent{Details: message.UsageDetails{InputTokenCount: 4, OutputTokenCount: 5}}}},
+			}
+			response := collectPortedResponseUpdates(t, updates, streaming)
+			if response.AgentID != "agentId" || response.ID != "someResponse" || !response.CreatedAt.Equal(createdAt) {
+				t.Fatalf("response metadata = %+v", response)
+			}
+			if got := response.Usage(); got.InputTokenCount != 5 || got.OutputTokenCount != 7 {
+				t.Fatalf("usage = %+v, want input 5 output 7", got)
+			}
+			if len(response.Messages) != 2 {
+				t.Fatalf("messages = %d, want 2", len(response.Messages))
+			}
+			first, second := response.Messages[0], response.Messages[1]
+			if first.ID != "12345" || first.Role != message.RoleAssistant || first.AuthorName != "" || first.String() != "Hello" ||
+				second.ID != "" || second.Role != message.Role("human") || second.AuthorName != "Someone" || second.String() != ", world!" {
+				t.Fatalf("messages = %+v", response.Messages)
+			}
+			if !maps.Equal(response.AdditionalProperties, map[string]any{"a": "b", "c": "d"}) || response.String() != "Hello\n, world!" {
+				t.Fatalf("response properties/text = %v / %q", response.AdditionalProperties, response.String())
+			}
+		})
+	}
+}
+
+func TestResponse_Collect_CoalescesTextAcrossDataGaps(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		for sequences := 1; sequences <= 3; sequences++ {
+			for length := 1; length <= 3; length++ {
+				for gapLength := 1; gapLength <= 3; gapLength++ {
+					for _, ends := range []bool{false, true} {
+						t.Run(fmt.Sprintf("stream=%v/sequences=%d/length=%d/gap=%d/ends=%v", streaming, sequences, length, gapLength, ends), func(t *testing.T) {
+							var updates []*agent.ResponseUpdate
+							var expected []string
+							addGap := func() {
+								for range gapLength {
+									updates = append(updates, &agent.ResponseUpdate{Contents: message.Contents{
+										&message.DataContent{Data: "aGVsbG8=", MediaType: "image/png"},
+									}})
+								}
+							}
+							if ends {
+								addGap()
+							}
+							for seq := range sequences {
+								var text string
+								for i := range length {
+									part := fmt.Sprintf("%c%d", 'A'+seq, i)
+									updates = append(updates, &agent.ResponseUpdate{Contents: message.Contents{&message.TextContent{Text: part}}})
+									text += part
+								}
+								expected = append(expected, text)
+								if seq < sequences-1 {
+									addGap()
+								}
+							}
+							if ends {
+								addGap()
+							}
+							response := collectPortedResponseUpdates(t, updates, streaming)
+							if len(response.Messages) != 1 {
+								t.Fatalf("messages = %d, want 1", len(response.Messages))
+							}
+							wantContents := sequences + gapLength*(sequences-1)
+							if ends {
+								wantContents += 2 * gapLength
+							}
+							var texts []string
+							for _, content := range response.Messages[0].Contents {
+								if text, ok := content.(*message.TextContent); ok {
+									texts = append(texts, text.Text)
+								}
+							}
+							if len(response.Messages[0].Contents) != wantContents || !slices.Equal(texts, expected) {
+								t.Fatalf("contents = %v, texts = %v; want %d contents and %v", response.Messages[0].Contents, texts, wantContents, expected)
+							}
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestResponse_Collect_CoalescesTextAndReasoningSeparately(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprintf("streaming=%v", streaming), func(t *testing.T) {
+			var updates []*agent.ResponseUpdate
+			for _, part := range []struct {
+				text      string
+				reasoning bool
+			}{
+				{"A", false}, {"B", false}, {"C", false},
+				{"D", true}, {"E", true}, {"F", true},
+				{"G", false}, {"H", false},
+				{"I", true}, {"J", true},
+				{"K", false}, {"L", true},
+				{"M", false}, {"N", false},
+				{"O", true}, {"P", true},
+			} {
+				var content message.Content = &message.TextContent{Text: part.text}
+				if part.reasoning {
+					content = &message.TextReasoningContent{Text: part.text}
+				}
+				updates = append(updates, &agent.ResponseUpdate{Contents: message.Contents{content}})
+			}
+			response := collectPortedResponseUpdates(t, updates, streaming)
+			if len(response.Messages) != 1 {
+				t.Fatalf("messages = %d, want 1", len(response.Messages))
+			}
+			contents := response.Messages[0].Contents
+			if len(contents) != 8 {
+				t.Fatalf("contents = %v, want 8 alternating text and reasoning runs", contents)
+			}
+			for i, want := range []string{"ABC", "DEF", "GH", "IJ", "K", "L", "MN", "OP"} {
+				if i%2 == 0 {
+					text, ok := contents[i].(*message.TextContent)
+					if !ok || text.Text != want {
+						t.Errorf("contents[%d] = %v, want text %q", i, contents[i], want)
+					}
+				} else {
+					reasoning, ok := contents[i].(*message.TextReasoningContent)
+					if !ok || reasoning.Text != want {
+						t.Errorf("contents[%d] = %v, want reasoning %q", i, contents[i], want)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestResponse_Collect_ExtractsTextAndUsageContent(t *testing.T) {
+	response := collectPortedResponseUpdates(t, []*agent.ResponseUpdate{
+		{Contents: message.Contents{&message.TextContent{Text: "Hello, "}}},
+		{Contents: message.Contents{&message.TextContent{Text: "world!"}}},
+		{Contents: message.Contents{&message.UsageContent{Details: message.UsageDetails{TotalTokenCount: 42}}}},
+	}, true)
+	if len(response.Messages) != 1 || response.String() != "Hello, world!" || response.Usage().TotalTokenCount != 42 {
+		t.Fatalf("response = %+v, want one text message and 42 tokens", response)
+	}
+	if len(response.Messages[0].Contents) != 2 {
+		t.Fatalf("contents = %v, want text plus usage content", response.Messages[0].Contents)
+	}
+}
+
+func TestResponse_Collect_AlternativeTimestamps(t *testing.T) {
+	for _, streaming := range []bool{false, true} {
+		t.Run(fmt.Sprintf("streaming=%v", streaming), func(t *testing.T) {
+			early := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
+			updates := []*agent.ResponseUpdate{
+				{Role: message.RoleTool, MessageID: "4", CreatedAt: early, Contents: message.Contents{&message.TextContent{Text: "a"}}},
+				{CreatedAt: time.Unix(0, 0), Contents: message.Contents{&message.TextContent{Text: "b"}}},
+				{CreatedAt: early.Add(time.Hour), Contents: message.Contents{&message.TextContent{Text: "c"}}},
+				{CreatedAt: early, Contents: message.Contents{&message.TextContent{Text: "d"}}},
+				{CreatedAt: early.Add(2 * time.Hour), Contents: message.Contents{&message.TextContent{Text: "e"}}},
+				{CreatedAt: time.Unix(0, 0), Contents: message.Contents{&message.TextContent{Text: "f"}}},
+				{Contents: message.Contents{&message.TextContent{Text: "g"}}},
+			}
+			response := collectPortedResponseUpdates(t, updates, streaming)
+			if len(response.Messages) != 1 || response.Messages[0].String() != "abcdefg" ||
+				response.Messages[0].Role != message.RoleTool || !response.Messages[0].CreatedAt.Equal(early) || !response.CreatedAt.Equal(early) {
+				t.Fatalf("response = %+v, want single tool message at %v", response, early)
+			}
+		})
+	}
+}
+
+func TestResponse_Collect_TimestampFolding(t *testing.T) {
+	first := time.Date(2024, 1, 1, 10, 0, 0, 0, time.UTC)
+	second := first.Add(time.Hour)
+	for _, tc := range []struct {
+		name       string
+		a, b, want time.Time
+	}{
+		{name: "both absent"},
+		{name: "first only", a: first, want: first},
+		{name: "second only", b: first, want: first},
+		{name: "first wins over later", a: first, b: second, want: first},
+		{name: "first wins over earlier", a: second, b: first, want: second},
+		{name: "first wins over epoch", a: first, b: time.Unix(0, 0), want: first},
+		{name: "epoch ignored", a: time.Unix(0, 0), b: first, want: first},
+	} {
+		for _, streaming := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/streaming=%v", tc.name, streaming), func(t *testing.T) {
+				response := collectPortedResponseUpdates(t, []*agent.ResponseUpdate{
+					{Role: message.RoleAssistant, CreatedAt: tc.a, Contents: message.Contents{&message.TextContent{Text: "a"}}},
+					{CreatedAt: tc.b, Contents: message.Contents{&message.TextContent{Text: "b"}}},
+				}, streaming)
+				if len(response.Messages) != 1 || response.Messages[0].String() != "ab" ||
+					!response.Messages[0].CreatedAt.Equal(tc.want) || !response.CreatedAt.Equal(tc.want) {
+					t.Fatalf("response = %+v, want single 'ab' message at %v", response, tc.want)
+				}
+			})
+		}
 	}
 }

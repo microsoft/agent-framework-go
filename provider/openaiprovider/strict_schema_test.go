@@ -405,6 +405,20 @@ func TestStrictSchemaToMapRejectsNonObjectRoot(t *testing.T) {
 	}
 }
 
+func TestExplicitResponseFormatStillRejectsNonObjectRoot(t *testing.T) {
+	format, err := jsonformat.For[int]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := []agent.Option{agent.WithResponseFormat(format)}
+	if _, err := buildCompletionParams("test-model", nil, options); err == nil || !strings.Contains(err.Error(), "root schema must have type object") {
+		t.Fatalf("chat format error = %v, want object-root error", err)
+	}
+	if _, err := responsesBuildCompletionParams(AgentConfig{Model: "test-model"}, nil, options); err == nil || !strings.Contains(err.Error(), "root schema must have type object") {
+		t.Fatalf("responses format error = %v, want object-root error", err)
+	}
+}
+
 func TestStrictSchemaToMapRejectsRootAnyOf(t *testing.T) {
 	_, err := strictSchemaToMap(map[string]any{
 		"type":                 "object",
