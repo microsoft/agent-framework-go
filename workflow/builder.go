@@ -227,18 +227,23 @@ func (wb *Builder) AddFanInBarrierEdge(sources []ExecutorBinding, target Executo
 	return wb
 }
 
-// Build validates the assembled graph and returns the immutable [Workflow].
-// By default, Build checks for orphaned executors. Pass false to skip that
-// check while retaining all other validation.
-func (wb *Builder) Build(validateOrphans ...bool) (*Workflow, error) {
-	if len(validateOrphans) > 1 {
-		return nil, fmt.Errorf("workflow: Build accepts at most one validateOrphans argument")
-	}
-	validate := true
-	if len(validateOrphans) == 1 {
-		validate = validateOrphans[0]
-	}
-	return wb.build(validate)
+// BuildOptions configures workflow validation during [Builder.BuildWithOptions].
+type BuildOptions struct {
+	ValidateOrphans bool
+}
+
+// Build validates the assembled graph, including orphan-executor checks, and
+// returns the immutable [Workflow]. It returns the first accumulated error if
+// any builder step failed or validation did not pass.
+func (wb *Builder) Build() (*Workflow, error) {
+	return wb.BuildWithOptions(BuildOptions{ValidateOrphans: true})
+}
+
+// BuildWithOptions validates the assembled graph according to opts and returns
+// the immutable [Workflow]. All validation except orphan-executor checks is
+// always performed.
+func (wb *Builder) BuildWithOptions(opts BuildOptions) (*Workflow, error) {
+	return wb.build(opts.ValidateOrphans)
 }
 
 func (wb *Builder) build(validateOrphans bool) (*Workflow, error) {
