@@ -202,6 +202,26 @@ func TestBuilder_Validation_FailsWhenUnreachableExecutors(t *testing.T) {
 	}
 }
 
+func TestBuilder_BuildCanSkipOrphanValidation(t *testing.T) {
+	wf, err := workflow.NewBuilder(newPlaceholder("start")).
+		BindExecutor(newNoOpExecutor("start")).
+		AddEdge(newNoOpExecutor("unreachable"), newNoOpExecutor("also-unreachable")).
+		Build(false)
+	if err != nil {
+		t.Fatalf("Build(false) error = %v, want nil", err)
+	}
+	if wf == nil {
+		t.Fatal("Build(false) workflow = nil, want workflow")
+	}
+}
+
+func TestBuilder_BuildRejectsMultipleOrphanValidationArguments(t *testing.T) {
+	_, err := workflow.NewBuilder(newNoOpExecutor("start")).Build(true, false)
+	if err == nil || err.Error() != "workflow: Build accepts at most one validateOrphans argument" {
+		t.Fatalf("Build(true, false) error = %v, want argument-count error", err)
+	}
+}
+
 func TestBuilder_Validation_AddEdgesOutOfOrderDoesNotImpactReachability(t *testing.T) {
 	wf, err := workflow.NewBuilder(newPlaceholder("start")).
 		BindExecutor(newNoOpExecutor("start")).
