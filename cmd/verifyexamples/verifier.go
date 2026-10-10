@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/microsoft/agent-framework-go/agent"
 )
@@ -139,5 +140,11 @@ func truncate(text string, maxLength int) string {
 	if len(text) <= maxLength {
 		return text
 	}
-	return text[:maxLength] + "... (truncated)"
+	// Back off to a rune boundary so truncation never splits a multi-byte rune
+	// (examples print °C, emoji, etc.) and emits invalid UTF-8 into logs/CSV.
+	end := maxLength
+	for end > 0 && !utf8.RuneStart(text[end]) {
+		end--
+	}
+	return text[:end] + "... (truncated)"
 }
