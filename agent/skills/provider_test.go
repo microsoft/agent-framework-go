@@ -410,6 +410,8 @@ func TestProvider_DefaultCaching_LoadsSourceOnce(t *testing.T) {
 }
 
 func TestProvider_CacheIsolationKey_LoadsEachBucketOnce(t *testing.T) {
+	type tenantContextKey struct{}
+
 	skill := mustInlineSkill(
 		skills.Frontmatter{Name: "isolated-skill", Description: "Isolated skill"},
 		"Instructions.",
@@ -419,21 +421,25 @@ func TestProvider_CacheIsolationKey_LoadsEachBucketOnce(t *testing.T) {
 	source := &countingSource{skills: []*skills.Skill{skill}}
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Sources: []skills.Source{source},
-		CacheIsolationKeySelector: func(invoking agent.InvokingContext) *string {
-			key := "empty"
+		CacheIsolationKeySelector: func(ctx context.Context, invoking agent.InvokingContext) *string {
+			key, _ := ctx.Value(tenantContextKey{}).(string)
 			if len(invoking.Messages) > 0 {
-				key = "with-messages"
+				key += ":with-messages"
 			}
 			return &key
 		},
 	})
 
-	_, _, _ = invokeProvider(provider, t.Context(), nil)
-	_, _, _ = invokeProvider(provider, t.Context(), nil)
-	_, _, _ = invokeProvider(provider, t.Context(), []*message.Message{message.NewText("request")})
-	_, _, _ = invokeProvider(provider, t.Context(), []*message.Message{message.NewText("request")})
+	for _, tenant := range []string{"tenant-a", "tenant-b"} {
+		ctx := context.WithValue(t.Context(), tenantContextKey{}, tenant)
+		_, _, _ = invokeProvider(provider, ctx, nil)
+		_, _, _ = invokeProvider(provider, ctx, nil)
+		messages := []*message.Message{message.NewText("request")}
+		_, _, _ = invokeProvider(provider, ctx, messages)
+		_, _, _ = invokeProvider(provider, ctx, messages)
+	}
 
-	if source.count != 2 {
+	if source.count != 4 {
 		t.Fatalf("expected one source load per cache bucket, got %d", source.count)
 	}
 }
@@ -457,6 +463,33 @@ func TestProvider_ZeroRefreshInterval_RefreshesEveryInvocation(t *testing.T) {
 
 	if source.count != 2 {
 		t.Fatalf("expected zero refresh interval to reload each time, got %d loads", source.count)
+	}
+}
+
+func TestProvider_PositiveRefreshInterval_ReusesUntilExpired(t *testing.T) {
+	skill := mustInlineSkill(
+		skills.Frontmatter{Name: "refreshing-skill", Description: "Refreshing skill"},
+		"Instructions.",
+		nil,
+		nil,
+	)
+	source := &countingSource{skills: []*skills.Skill{skill}}
+	interval := time.Second
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources:         []skills.Source{source},
+		RefreshInterval: &interval,
+	})
+
+	_, _, _ = invokeProvider(provider, t.Context(), nil)
+	_, _, _ = invokeProvider(provider, t.Context(), nil)
+	if source.count != 1 {
+		t.Fatalf("expected cached source result before expiry, got %d loads", source.count)
+	}
+
+	time.Sleep(interval + 10*time.Millisecond)
+	_, _, _ = invokeProvider(provider, t.Context(), nil)
+	if source.count != 2 {
+		t.Fatalf("expected source to reload after expiry, got %d loads", source.count)
 	}
 }
 

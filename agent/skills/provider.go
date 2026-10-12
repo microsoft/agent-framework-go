@@ -131,7 +131,7 @@ type ContextProviderOptions struct {
 	// CacheIsolationKeySelector selects the cache bucket for an invocation.
 	// A nil selector, or a nil key returned by the selector, uses the shared
 	// cache bucket. Keys should be stable and low-cardinality.
-	CacheIsolationKeySelector func(agent.InvokingContext) *string
+	CacheIsolationKeySelector func(context.Context, agent.InvokingContext) *string
 
 	// RefreshInterval controls how long a cached result remains fresh. A nil
 	// interval never expires the cache. A zero or negative interval refreshes
@@ -281,7 +281,7 @@ func (p *providerState) provide(ctx context.Context, invoking agent.InvokingCont
 
 	cacheKey := ""
 	if p.options.CacheIsolationKeySelector != nil {
-		if selected := p.options.CacheIsolationKeySelector(invoking); selected != nil {
+		if selected := p.options.CacheIsolationKeySelector(ctx, invoking); selected != nil {
 			cacheKey = "key:" + *selected
 		}
 	}
