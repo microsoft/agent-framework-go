@@ -10615,7 +10615,7 @@
         },
         "methods": {
           "GetOrCreateSessionAsync(AIAgent, AgentSessionStoreKey, CancellationToken) -> ValueTask<AgentSession>": {
-            "go": "session, err = store.Get(ctx, contextID)",
+            "go": "session, err = store.Get(ctx, contextID)\nif err == nil && session == nil {\n    session, err = a.CreateSession(ctx)\n}",
             "go_symbols": ["provider/a2aprovider.SessionStore.Get", "agent.Agent.CreateSession"],
             "status": "partial",
             "note": "A2A hosting composes SessionStore.Get with agent session creation when handling a request; the store interface itself only exposes Get and Save and uses a context ID instead of AgentSessionStoreKey partitions."
