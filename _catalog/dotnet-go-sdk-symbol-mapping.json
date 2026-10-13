@@ -10,6 +10,11 @@
     "inventory_complete": false,
     "scope": "Selected public declarations in agent-framework/dotnet/src and this Go SDK. Source identities and API correspondences were inspected at the pinned revisions; behavioral equivalence was not re-audited. A type mapping covers only that type, not all its members. Overloads are separate member entries. External dependency declarations, including Microsoft.Extensions.AI content/tool types, and unlisted APIs have not been inventoried. The historical feature inventory remains in Git history, not as a second source of symbol mappings."
   },
+  "go_only": {
+    "provider/a2aprovider.WithConfiguration": {
+      "note": "Go exposes the incoming A2A send configuration as an agent option for hosted-agent runs. The pinned .NET handler forwards request configuration internally through run options rather than a public declaration."
+    }
+  },
   "dotnet": {
     "schema_version": 1,
     "identity_format": "ecma335-v1",
@@ -10603,17 +10608,17 @@
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "experimental": "MAAI001",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "store = a2aprovider.NewInMemorySessionStore()",
+          "go_symbols": ["provider/a2aprovider.SessionStore", "provider/a2aprovider.NewInMemorySessionStore"],
+          "status": "adapted",
+          "note": "The recent A2A host store persists sessions by A2A context ID and returns independent JSON snapshots. It does not expose the general AgentSessionStoreKey partition model or service discovery."
         },
         "methods": {
           "GetOrCreateSessionAsync(AIAgent, AgentSessionStoreKey, CancellationToken) -> ValueTask<AgentSession>": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "session, err = store.Get(ctx, contextID)",
+            "go_symbols": ["provider/a2aprovider.SessionStore.Get", "agent.Agent.CreateSession"],
+            "status": "partial",
+            "note": "A2A hosting composes SessionStore.Get with agent session creation when handling a request; the store interface itself only exposes Get and Save and uses a context ID instead of AgentSessionStoreKey partitions."
           },
           "GetService(Type, object) -> object": {
             "go": "",
@@ -10628,16 +10633,16 @@
             "unreviewed": true
           },
           "GetSessionAsync(AIAgent, AgentSessionStoreKey, CancellationToken) -> ValueTask<AgentSession>": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "session, err = store.Get(ctx, contextID)",
+            "go_symbols": ["provider/a2aprovider.SessionStore.Get"],
+            "status": "adapted",
+            "note": "Get returns an independently owned session snapshot or nil when absent. Go scopes the key to an A2A context ID and host-provided store isolation instead of taking the owning agent plus AgentSessionStoreKey partitions."
           },
           "SaveSessionAsync(AIAgent, AgentSessionStoreKey, AgentSession, CancellationToken) -> ValueTask": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "err = store.Save(ctx, contextID, session)",
+            "go_symbols": ["provider/a2aprovider.SessionStore.Save"],
+            "status": "adapted",
+            "note": "Save persists a serializable session snapshot for an A2A context ID. The Go API omits the owning agent parameter and AgentSessionStoreKey partitions; hosts that share stores must enforce their own trusted isolation."
           }
         }
       },
@@ -22990,12 +22995,14 @@
             "status": "mapped"
           },
           "Build(bool) -> Workflow": {
-            "go": "builder.Build()",
+            "go": "builder.BuildWithOptions(workflow.BuildOptions{DisableOrphanValidation: true})",
             "go_symbols": [
-              "workflow.Builder.Build"
+              "workflow.Builder.Build",
+              "workflow.Builder.BuildWithOptions",
+              "workflow.BuildOptions"
             ],
-            "status": "partial",
-            "note": "Go always validates orphan executors; there is no public counterpart to Build(false)."
+            "status": "adapted",
+            "note": "Build validates orphans by default like Build(true); BuildWithOptions with DisableOrphanValidation covers Build(false) while preserving the other graph validations."
           },
           "WithDescription(string) -> WorkflowBuilder": {
             "go": "builder.WithDescription(description)",
