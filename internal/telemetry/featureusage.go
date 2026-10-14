@@ -21,6 +21,7 @@ const (
 	FeatureAgent                   = 0
 	FeatureWorkflow                = 2
 	FeatureToolApproval            = 3
+	FeatureFileMemoryProvider      = 5
 	FeatureInMemoryHistoryProvider = 13
 	FeatureCompactionProvider      = 9
 	FeatureSkillsProvider          = 8

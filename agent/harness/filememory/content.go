@@ -1,11 +1,5 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// Package filememory provides search and editing support for file-based agent memory.
-//
-// Storage operations are supplied by filestore.Store. Searches inspect direct
-// files using Go regular expressions and case-insensitive filename globs.
-// Search matches and line edits share 1-based line numbering and preserve each
-// line's LF, CRLF, or CR terminator.
 package filememory
 
 import (
@@ -23,9 +17,9 @@ import (
 )
 
 type lineEdit struct {
-	LineNumber   int     `json:"line_number"`
-	NewLine      string  `json:"new_line"`
-	ExpectedLine *string `json:"expected_line,omitempty"`
+	LineNumber   int     `json:"line_number" jsonschema:"1-based line number to replace."`
+	NewLine      string  `json:"new_line" jsonschema:"Literal replacement text including any desired trailing newline; empty text deletes the line."`
+	ExpectedLine *string `json:"expected_line,omitempty" jsonschema:"Optional expected line text; its trailing terminator is ignored when checking for stale edits."`
 }
 
 type searchMatch struct {
