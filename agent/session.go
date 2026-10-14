@@ -117,6 +117,18 @@ func (s *Session) Delete(key string) bool {
 	return ok
 }
 
+// StateCount returns the number of values stored in the session state.
+func (s *Session) StateCount() int {
+	if s == nil || s.state == nil {
+		return 0
+	}
+	state := s.state
+	state.mu.RLock()
+	count := len(state.values)
+	state.mu.RUnlock()
+	return count
+}
+
 // ServiceID returns the provider-specific identifier associated with the session.
 // When [Config.RequirePerServiceCallHistoryPersistence] is enabled, it may instead
 // identify history managed locally by the agent.

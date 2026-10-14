@@ -346,8 +346,31 @@ func TestSessionState_Get_NonexistentKey_ReturnsNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
+
 	if ok {
 		t.Error("expected not found for nonexistent key")
+	}
+}
+
+func TestSessionState_StateCount_TracksValues(t *testing.T) {
+	var session agent.Session
+	if got := session.StateCount(); got != 0 {
+		t.Fatalf("StateCount() = %d, want 0", got)
+	}
+
+	session.Set("first", "value")
+	session.Set("second", 2)
+	if got := session.StateCount(); got != 2 {
+		t.Fatalf("StateCount() = %d, want 2", got)
+	}
+
+	session.Set("first", "updated")
+	if got := session.StateCount(); got != 2 {
+		t.Fatalf("StateCount() after replacement = %d, want 2", got)
+	}
+
+	if !session.Delete("first") || session.StateCount() != 1 {
+		t.Fatalf("StateCount() after deletion = %d, want 1", session.StateCount())
 	}
 }
 
