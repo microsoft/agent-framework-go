@@ -117,8 +117,8 @@ func (s *Session) Delete(key string) bool {
 	return ok
 }
 
-// StateCount returns the number of values stored in the session state.
-func (s *Session) StateCount() int {
+// Count returns the number of values stored in the session state.
+func (s *Session) Count() int {
 	if s == nil || s.state == nil {
 		return 0
 	}

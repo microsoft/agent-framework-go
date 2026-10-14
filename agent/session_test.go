@@ -352,25 +352,25 @@ func TestSessionState_Get_NonexistentKey_ReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestSessionState_StateCount_TracksValues(t *testing.T) {
+func TestSessionState_Count_TracksValues(t *testing.T) {
 	var session agent.Session
-	if got := session.StateCount(); got != 0 {
-		t.Fatalf("StateCount() = %d, want 0", got)
+	if got := session.Count(); got != 0 {
+		t.Fatalf("Count() = %d, want 0", got)
 	}
 
 	session.Set("first", "value")
 	session.Set("second", 2)
-	if got := session.StateCount(); got != 2 {
-		t.Fatalf("StateCount() = %d, want 2", got)
+	if got := session.Count(); got != 2 {
+		t.Fatalf("Count() = %d, want 2", got)
 	}
 
 	session.Set("first", "updated")
-	if got := session.StateCount(); got != 2 {
-		t.Fatalf("StateCount() after replacement = %d, want 2", got)
+	if got := session.Count(); got != 2 {
+		t.Fatalf("Count() after replacement = %d, want 2", got)
 	}
 
-	if !session.Delete("first") || session.StateCount() != 1 {
-		t.Fatalf("StateCount() after deletion = %d, want 1", session.StateCount())
+	if !session.Delete("first") || session.Count() != 1 {
+		t.Fatalf("Count() after deletion = %d, want 1", session.Count())
 	}
 }
 
