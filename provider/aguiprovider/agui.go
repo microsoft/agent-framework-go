@@ -11,6 +11,7 @@ import (
 	"iter"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	aguiSSEClient "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/client/sse"
@@ -44,6 +45,8 @@ type provider struct {
 }
 
 const threadIDStateKey = "aguiprovider.threadID"
+
+var threadIDInitMu sync.Mutex
 
 type threadIDOpt string
 
@@ -198,7 +201,19 @@ func decodeFrame(decoder *aguiEvents.EventDecoder, data []byte) (aguiEvents.Even
 }
 
 func getOrCreateThreadID(session *agent.Session) (string, error) {
+	if session == nil {
+		return aguiEvents.GenerateThreadID(), nil
+	}
 	var threadID string
+	if _, err := session.Get(threadIDStateKey, &threadID); err != nil {
+		return "", err
+	}
+	if threadID != "" {
+		return threadID, nil
+	}
+	threadIDInitMu.Lock()
+	defer threadIDInitMu.Unlock()
+
 	if _, err := session.Get(threadIDStateKey, &threadID); err != nil {
 		return "", err
 	}

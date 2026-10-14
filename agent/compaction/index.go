@@ -3,9 +3,11 @@
 package compaction
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/microsoft/agent-framework-go/message"
 )
@@ -388,7 +390,9 @@ func computeContentByteCount(content message.Content) int {
 	case *message.TextReasoningContent:
 		return stringByteCount(typed.Text) + stringByteCount(typed.ProtectedData)
 	case *message.DataContent:
-		return len(typed.Data) + stringByteCount(typed.MediaType) + stringByteCount(typed.Name)
+		// Data is base64-encoded; count the original bytes without decoding them.
+		dataBytes := base64.RawStdEncoding.DecodedLen(len(strings.TrimRight(typed.Data, "=")))
+		return dataBytes + stringByteCount(typed.MediaType) + stringByteCount(typed.Name)
 	case *message.URIContent:
 		return stringByteCount(typed.URI) + stringByteCount(typed.MediaType)
 	case *message.FunctionCallContent:

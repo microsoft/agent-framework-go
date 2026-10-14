@@ -304,6 +304,23 @@ func TestMemoryProviderInvokingSearchFailureLogsAndReturnsOriginalMessages(t *te
 	}
 }
 
+func TestMemoryProviderInvokingCallerCancellationPropagates(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	transport := &recordingTransport{handle: func(req *http.Request, _ string) (*http.Response, error) {
+		cancel()
+		return nil, context.Canceled
+	}}
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+		ClientOptions: azcore.ClientOptions{Transport: transport},
+	})
+
+	_, _, err := provider.Invoking(ctx, agent.InvokingContext{Messages: []*message.Message{message.NewText("what do you remember?")}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Invoking error = %v, want context.Canceled", err)
+	}
+}
+
 func TestMemoryProviderInvokedUpdatesMemories(t *testing.T) {
 	transport := &recordingTransport{}
 	transport.handle = func(req *http.Request, _ string) (*http.Response, error) {
@@ -400,13 +417,29 @@ func TestMemoryProviderInvokedLogsUpdateFailureAndDoesNotReturnError(t *testing.
 	if err != nil {
 		t.Fatalf("Invoked error = %v", err)
 	}
-
 	logText := logs.String()
 	if !strings.Contains(logText, "foundrymemory: failed to update memories") || !strings.Contains(logText, expected.Error()) {
 		t.Fatalf("logs = %q", logText)
 	}
 	if strings.Contains(logText, "user-456") {
 		t.Fatalf("logs should not include scope: %q", logText)
+	}
+}
+
+func TestMemoryProviderInvokedCallerCancellationPropagates(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	transport := &recordingTransport{handle: func(req *http.Request, _ string) (*http.Response, error) {
+		cancel()
+		return nil, context.Canceled
+	}}
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+		ClientOptions: azcore.ClientOptions{Transport: transport},
+	})
+
+	err := provider.Invoked(ctx, agent.InvokedContext{RequestMessages: []*message.Message{message.NewText("remember me")}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Invoked error = %v, want context.Canceled", err)
 	}
 }
 

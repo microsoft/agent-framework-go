@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"weak"
 
@@ -43,7 +44,7 @@ type HistoryProviderConfig struct {
 	SourceID string
 
 	// StateKey identifies where provider state is stored in the session.
-	// When empty, SourceID is used.
+	// When empty, SourceID is used. Whitespace-only keys are invalid.
 	StateKey string
 
 	// StateInitializer returns initial messages on first use.
@@ -107,6 +108,7 @@ func (l *historyProviderSessionLocks) forOptions(options []agent.Option) *sync.M
 // The provider stores conversation history in the session like [agent.NewInMemoryHistoryProvider],
 // but it automatically applies Strategy at the configured TriggerEvent. This gives history providers
 // first-class reducer-trigger behavior without requiring a separate context provider.
+// It panics if the resolved StateKey is blank.
 func NewHistoryProvider(cfg HistoryProviderConfig) agent.HistoryProvider {
 	if cfg.Strategy == nil {
 		panic("Strategy is required")
@@ -117,6 +119,9 @@ func NewHistoryProvider(cfg HistoryProviderConfig) agent.HistoryProvider {
 	}
 	cfg.SourceID = cmp.Or(cfg.SourceID, defaultHistoryProviderSourceID)
 	cfg.StateKey = cmp.Or(cfg.StateKey, cfg.SourceID)
+	if strings.TrimSpace(cfg.StateKey) == "" {
+		panic("StateKey must not be blank")
+	}
 	return &historyProvider{config: cfg, locks: new(historyProviderSessionLocks)}
 }
 

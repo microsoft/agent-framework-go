@@ -420,8 +420,13 @@ func TestContextProvider_Invoking_DoesNotMutateProvidedMessageSlice(t *testing.T
 }
 
 func TestContextProvider_Invoking_DoesNotMutateInputBackingArrays(t *testing.T) {
+	replacement := message.NewText("replacement")
 	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
+		ProvideInputMessageFilter: func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
+			messages[0] = replacement
+			return messages, nil
+		},
 		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			return []*message.Message{message.NewText("provided")}, []agent.Option{agent.WithInstructions("provided")}, nil
 		},
@@ -442,6 +447,9 @@ func TestContextProvider_Invoking_DoesNotMutateInputBackingArrays(t *testing.T) 
 	}
 	if messageBacking[1] != messageSentinel {
 		t.Fatal("expected context provider not to modify the input message backing array")
+	}
+	if messages[0].String() != "request" {
+		t.Fatal("expected custom filter not to replace the original message")
 	}
 	if optionBacking[1] != optionSentinel {
 		t.Fatal("expected context provider not to modify the input option backing array")
@@ -517,33 +525,26 @@ func TestContextProvider_Invoking_FiltersInputMessagesBeforeProvide(t *testing.T
 }
 
 func TestContextProvider_Invoking_UsesCustomProvideInputMessageFilter(t *testing.T) {
-	request := message.NewText("request")
-	replacement := message.NewText("replacement")
-	ctxMessage := message.NewText("ctx")
-	ctxMessage.Source = message.Source{Type: agent.SourceTypeContextProvider, ID: "other"}
+	request := message.NewText("External")
+	historyMessage := message.NewText("History")
+	historyMessage.Source = message.Source{Type: agent.SourceTypeHistoryProvider, ID: "src"}
 	var providedInput []*message.Message
 	provider := agent.NewContextProvider(agent.ContextProviderConfig{
-		SourceID: "ctx",
-		ProvideInputMessageFilter: func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
-			messages[0] = replacement
-			return messages, nil
-		},
+		SourceID:                  "ctx",
+		ProvideInputMessageFilter: messagefilter.PassThrough,
 		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			providedInput = invoking.Messages
 			return nil, nil, nil
 		},
 	})
 
-	inputMessages := []*message.Message{request, ctxMessage}
+	inputMessages := []*message.Message{request, historyMessage}
 	_, _, err := invokeContextProvider(provider, t.Context(), inputMessages, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := messageStrings(providedInput); !slices.Equal(got, []string{"replacement", "ctx"}) {
-		t.Fatalf("provided input messages = %v, want custom-filtered input", got)
-	}
-	if inputMessages[0] != request {
-		t.Fatal("expected custom filter not to mutate the original input slice")
+	if !slices.Equal(providedInput, inputMessages) {
+		t.Fatalf("provided input = %v, want both external and history messages", messageStrings(providedInput))
 	}
 }
 
@@ -576,39 +577,58 @@ func TestContextProvider_Invoking_ReturnsProvidedMessagesAndSetsSourceID(t *test
 	}
 }
 
-func TestContextProvider_Invoking_AppendsProvidedMessages(t *testing.T) {
-	provided := message.NewText("ctx")
+func TestContextProvider_Invoking_MergesWithOriginalUnfilteredMessages(t *testing.T) {
+	provided := message.NewText("Provided")
 	provided.Role = message.RoleSystem
-	request := message.NewText("request")
+	request := message.NewText("External")
+	historyMessage := message.NewText("History")
+	historyMessage.Source = message.Source{Type: agent.SourceTypeHistoryProvider, ID: "src"}
 
 	provider := agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: "ctx",
 		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			if !slices.Equal(invoking.Messages, []*message.Message{request}) {
+				t.Errorf("Provide input = %v, want only external request", messageStrings(invoking.Messages))
+			}
+			return []*message.Message{provided}, nil, nil
+		},
+	})
+
+	messages, _, err := invokeContextProvider(provider, t.Context(), []*message.Message{request, historyMessage}, agent.WithSession(agenttest.CreateSession()))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(messages) != 3 || messages[0] != request || messages[1] != historyMessage || messages[2].String() != "Provided" {
+		t.Fatalf("merged messages = %v, want external, history, provided", messageStrings(messages))
+	}
+	if messages[2] == provided {
+		t.Fatal("expected provided message to be cloned")
+	}
+	if messages[2].Source != (message.Source{Type: agent.SourceTypeContextProvider, ID: "ctx"}) {
+		t.Fatalf("provided source = %+v, want context provider ctx", messages[2].Source)
+	}
+}
+
+func TestContextProvider_Invoking_AppendsProvidedMessages(t *testing.T) {
+	provided := message.NewText("ctx")
+	provided.Role = message.RoleSystem
+	request := message.NewText("request")
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "ctx",
+		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 			return []*message.Message{provided}, nil, nil
 		},
 	})
 
 	messages, _, err := invokeContextProvider(provider, t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if len(messages) != 2 {
-		t.Fatalf("expected original and provided messages, got %d", len(messages))
+	if len(messages) != 2 || messages[0] != request || messages[1].String() != "ctx" {
+		t.Fatalf("merged messages = %v, want request, ctx", messageStrings(messages))
 	}
-	if got := messages[0].String(); got != "request" {
-		t.Fatalf("original message text = %q, want request", got)
-	}
-	if got := messages[1].String(); got != "ctx" {
-		t.Fatalf("provided message text = %q, want ctx", got)
-	}
-	if messages[0] != request {
-		t.Fatal("expected original message to be preserved first")
-	}
-	if messages[1] == provided {
-		t.Fatal("expected provided message to be cloned")
-	}
-	if messages[1].Source.ID != "ctx" {
-		t.Fatalf("expected SourceID=ctx, got %q", messages[1].Source.ID)
+	if messages[1] == provided || messages[1].Source != (message.Source{Type: agent.SourceTypeContextProvider, ID: "ctx"}) {
+		t.Fatalf("provided message = %+v, want sourced clone", messages[1])
 	}
 }
 
@@ -680,6 +700,156 @@ func TestContextProvider_Invoked_CallsStoreAndIncludesExternalRequestMessagesByD
 	}
 	if got := storedResponse[0].Role; got != message.RoleAssistant {
 		t.Fatalf("stored response role = %q, want assistant", got)
+	}
+}
+
+func TestContextProvider_Invoked_SkipsStorageWhenRunFails(t *testing.T) {
+	called := false
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "ctx",
+		Store: func(context.Context, agent.InvokedContext) error {
+			called = true
+			return nil
+		},
+	})
+	err := provider.Invoked(t.Context(), agent.InvokedContext{
+		RequestMessages: []*message.Message{message.NewText("msg")},
+		Err:             errors.New("failed"),
+	})
+	if err != nil || called {
+		t.Fatalf("Invoked error = %v, Store called = %v; want nil and false", err, called)
+	}
+}
+
+func TestContextProvider_Invoked_UsesCustomStoreInputFilters(t *testing.T) {
+	user := message.NewText("User msg")
+	system := message.NewText("System msg")
+	system.Role = message.RoleSystem
+	assistant := message.NewText("Response")
+	assistant.Role = message.RoleAssistant
+	toolMessage := message.NewText("Response")
+	toolMessage.Role = message.RoleTool
+	var stored agent.InvokedContext
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "ctx",
+		StoreInputRequestMessageFilter: func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
+			return slices.DeleteFunc(messages, func(msg *message.Message) bool { return msg.Role != message.RoleSystem }), nil
+		},
+		StoreInputResponseMessageFilter: func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
+			return slices.DeleteFunc(messages, func(msg *message.Message) bool { return msg.Role != message.RoleAssistant }), nil
+		},
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			stored = invoked
+			return nil
+		},
+	})
+	if err := invokeContextProviderInvoked(provider, t.Context(), []*message.Message{user, system}, []*message.Message{assistant, toolMessage}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(stored.RequestMessages, []*message.Message{system}) || !slices.Equal(stored.ResponseMessages, []*message.Message{assistant}) {
+		t.Fatalf("stored request/response = %v / %v, want system / assistant", messageStrings(stored.RequestMessages), messageStrings(stored.ResponseMessages))
+	}
+}
+
+func TestContextProvider_Invoked_DefaultFilterExcludesNonExternalMessages(t *testing.T) {
+	external := message.NewText("External")
+	history := message.NewText("History")
+	history.Source = message.Source{Type: agent.SourceTypeHistoryProvider, ID: "src"}
+	contextMessage := message.NewText("Context")
+	contextMessage.Source = message.Source{Type: agent.SourceTypeContextProvider, ID: "src"}
+	var stored []*message.Message
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "ctx",
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			stored = invoked.RequestMessages
+			return nil
+		},
+	})
+	if err := invokeContextProviderInvoked(provider, t.Context(), []*message.Message{external, history, contextMessage}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(stored, []*message.Message{external}) {
+		t.Fatalf("stored requests = %v, want only external", messageStrings(stored))
+	}
+}
+
+func TestContextProvider_Invoked_DefaultResponseFilterPassesAllMessages(t *testing.T) {
+	external := message.NewText("ExternalResp")
+	external.Role = message.RoleAssistant
+	history := message.NewText("HistoryResp")
+	history.Role = message.RoleAssistant
+	history.Source = message.Source{Type: agent.SourceTypeHistoryProvider, ID: "src"}
+	contextMessage := message.NewText("ContextResp")
+	contextMessage.Role = message.RoleAssistant
+	contextMessage.Source = message.Source{Type: agent.SourceTypeContextProvider, ID: "src"}
+	responses := []*message.Message{external, history, contextMessage}
+	var stored []*message.Message
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "ctx",
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			stored = invoked.ResponseMessages
+			return nil
+		},
+	})
+	if err := invokeContextProviderInvoked(provider, t.Context(), []*message.Message{message.NewText("Request")}, responses); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(stored, responses) {
+		t.Fatalf("stored responses = %v, want all three in order", messageStrings(stored))
+	}
+}
+
+func TestContextProvider_Invoked_UsesCustomResponseFilter(t *testing.T) {
+	keep := message.NewText("Keep")
+	keep.Role = message.RoleAssistant
+	drop := message.NewText("Drop")
+	drop.Role = message.RoleAssistant
+	var stored []*message.Message
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "ctx",
+		StoreInputResponseMessageFilter: func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
+			return slices.DeleteFunc(messages, func(msg *message.Message) bool { return msg.String() != "Keep" }), nil
+		},
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			stored = invoked.ResponseMessages
+			return nil
+		},
+	})
+	if err := invokeContextProviderInvoked(provider, t.Context(), []*message.Message{message.NewText("Request")}, []*message.Message{keep, drop}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(stored, []*message.Message{keep}) {
+		t.Fatalf("stored responses = %v, want Keep", messageStrings(stored))
+	}
+}
+
+func TestContextProvider_Invoked_RequestAndResponseFiltersOperateIndependently(t *testing.T) {
+	user := message.NewText("User")
+	system := message.NewText("System")
+	system.Role = message.RoleSystem
+	first := message.NewText("Resp1")
+	first.Role = message.RoleAssistant
+	second := message.NewText("Resp2")
+	second.Role = message.RoleAssistant
+	var stored agent.InvokedContext
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "ctx",
+		StoreInputRequestMessageFilter: func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
+			return slices.DeleteFunc(messages, func(msg *message.Message) bool { return msg.Role != message.RoleSystem }), nil
+		},
+		StoreInputResponseMessageFilter: func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
+			return slices.DeleteFunc(messages, func(msg *message.Message) bool { return msg.String() != "Resp1" }), nil
+		},
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			stored = invoked
+			return nil
+		},
+	})
+	if err := invokeContextProviderInvoked(provider, t.Context(), []*message.Message{user, system}, []*message.Message{first, second}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(stored.RequestMessages, []*message.Message{system}) || !slices.Equal(stored.ResponseMessages, []*message.Message{first}) {
+		t.Fatalf("stored request/response = %v / %v, want System / Resp1", messageStrings(stored.RequestMessages), messageStrings(stored.ResponseMessages))
 	}
 }
 
@@ -762,5 +932,42 @@ func TestContextProvider_InvokingContext_ReturnsProvidedFields(t *testing.T) {
 	}
 	if got := []string{tools[0].Name(), tools[1].Name()}; !slices.Equal(got, []string{"input_tool", "provided_tool"}) {
 		t.Fatalf("expected input and provided tools, got %v", got)
+	}
+}
+
+func TestContextProvider_Invoking_MessageOnlyPreservesInstructionsAndTools(t *testing.T) {
+	request := message.NewText("Hello")
+	provided := message.NewText("Context")
+	provided.Role = message.RoleSystem
+	inputTool := functool.MustNew(functool.Config{Name: "inputTool"}, func(_ context.Context, _ struct{}) (string, error) {
+		return "a", nil
+	})
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "ctx",
+		Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return []*message.Message{provided}, nil, nil
+		},
+	})
+	session := agenttest.CreateSession()
+	messages, options, err := invokeContextProvider(
+		provider, t.Context(), []*message.Message{request},
+		agent.WithSession(session), agent.WithInstructions("Be helpful"), agent.WithTool(inputTool),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := slices.Collect(agent.AllOptions(options, agent.WithInstructions)); !slices.Equal(got, []string{"Be helpful"}) {
+		t.Errorf("instructions = %v, want [Be helpful]", got)
+	}
+	if got := slices.Collect(agent.AllOptions(options, agent.WithTool)); !slices.Equal(got, []tool.Tool{inputTool}) {
+		t.Errorf("tools = %v, want original inputTool", got)
+	}
+	if got, ok := agent.GetOption(options, agent.WithSession); !ok || got != session {
+		t.Errorf("session = (%p, %v), want original session", got, ok)
+	}
+	if len(messages) != 2 || messages[0] != request || messages[0].String() != "Hello" ||
+		messages[1].String() != "Context" || messages[1].Role != message.RoleSystem ||
+		messages[1].Source.Type != agent.SourceTypeContextProvider {
+		t.Fatalf("messages = %v, want original request and sourced system context", messages)
 	}
 }

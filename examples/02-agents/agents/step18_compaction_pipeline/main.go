@@ -123,6 +123,16 @@ When responding, be extra descriptive and use as many words as possible without 
 	for _, prompt := range prompts {
 		resp, err := a.RunText(ctx, prompt, agent.WithSession(session)).Collect()
 		demo.Response(resp, err)
+		if err != nil {
+			continue
+		}
+		history, err := session.InMemoryHistory("")
+		if err != nil {
+			demo.Panic(err)
+		}
+		if history != nil {
+			fmt.Printf("\n[Messages: #%d]\n", len(history))
+		}
 	}
 }
 

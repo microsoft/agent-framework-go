@@ -398,6 +398,68 @@ func TestAGUIAgentRun_WithSession_PreservesHistoryAcrossMultipleTurns(t *testing
 	}
 }
 
+func TestAGUIAgentRun_ConcurrentFirstRunsShareThreadID(t *testing.T) {
+	const runs = 32
+	threadIDs := make(chan string, runs)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var input aguiTypes.RunAgentInput
+		if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+			t.Errorf("decode request: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		threadIDs <- input.ThreadID
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent(input.ThreadID, input.RunID))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent(input.ThreadID, input.RunID))
+	}))
+	defer server.Close()
+
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	errs := make(chan error, runs)
+	var wg sync.WaitGroup
+	wg.Add(runs)
+	for range runs {
+		go func() {
+			defer wg.Done()
+			<-start
+			_, err := a.RunText(t.Context(), "hello", agent.WithSession(session)).Collect()
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent run: %v", err)
+		}
+	}
+	if got := len(threadIDs); got != runs {
+		t.Fatalf("requests = %d, want %d", got, runs)
+	}
+	close(threadIDs)
+	var threadID string
+	for id := range threadIDs {
+		if id == "" {
+			t.Fatal("empty thread ID")
+		}
+		if threadID != "" && id != threadID {
+			t.Errorf("thread ID = %q, want %q", id, threadID)
+		}
+		threadID = id
+	}
+	var stored string
+	if ok, err := session.Get("aguiprovider.threadID", &stored); err != nil || !ok || stored != threadID {
+		t.Fatalf("stored thread ID = (%q, %v, %v), want %q", stored, ok, err, threadID)
+	}
+}
+
 func TestAGUIAgentRun_MapsReasoningEvents(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var input aguiTypes.RunAgentInput

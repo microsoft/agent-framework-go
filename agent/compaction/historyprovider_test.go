@@ -25,12 +25,40 @@ func (s *countingStrategy) Compact(ctx context.Context, index *compaction.Messag
 	return s.strategy.Compact(ctx, index)
 }
 
+type reducingHistoryStrategy struct{ calls int }
+
+func (s *reducingHistoryStrategy) Compact(_ context.Context, index *compaction.MessageIndex) (bool, error) {
+	s.calls++
+	index.Update([]*message.Message{textMessage(message.RoleUser, "Reduced")})
+	return true, nil
+}
+
 func invokeHistoryProvider(provider agent.HistoryProvider, ctx context.Context, messages []*message.Message, options ...agent.Option) ([]*message.Message, error) {
 	return provider.Invoking(ctx, agent.InvokingContext{Messages: messages, Options: options})
 }
 
 func invokeHistoryProviderInvoked(provider agent.HistoryProvider, ctx context.Context, requestMessages, responseMessages []*message.Message, options ...agent.Option) error {
 	return provider.Invoked(ctx, agent.InvokedContext{RequestMessages: requestMessages, ResponseMessages: responseMessages, Options: options})
+}
+
+func TestNewHistoryProvider_PanicsWithBlankStateKey(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config compaction.HistoryProviderConfig
+	}{
+		{name: "explicit state key", config: compaction.HistoryProviderConfig{StateKey: " "}},
+		{name: "default state key from source ID", config: compaction.HistoryProviderConfig{SourceID: "\t"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected blank history state key to panic at construction")
+				}
+			}()
+			tc.config.Strategy = new(reducingHistoryStrategy)
+			compaction.NewHistoryProvider(tc.config)
+		})
+	}
 }
 
 func TestNewHistoryProvider_CompactsBeforeMessagesRetrievalByDefault(t *testing.T) {
@@ -116,6 +144,79 @@ func TestNewHistoryProvider_CompactsAfterMessageAdded(t *testing.T) {
 	}
 	if strategy.calls != 2 {
 		t.Fatalf("strategy calls = %d, want 2", strategy.calls)
+	}
+}
+
+func TestHistoryProvider_ReducesAfterMessageAdded(t *testing.T) {
+	session := agenttest.CreateSession()
+	strategy := new(reducingHistoryStrategy)
+	provider := compaction.NewHistoryProvider(compaction.HistoryProviderConfig{
+		Strategy: strategy, TriggerEvent: compaction.HistoryProviderTriggerEventAfterMessageAdded,
+	})
+	request := textMessage(message.RoleUser, "Hello")
+	response := textMessage(message.RoleAssistant, "Hi there!")
+	if err := invokeHistoryProviderInvoked(provider, t.Context(), []*message.Message{request}, []*message.Message{response}, agent.WithSession(session)); err != nil {
+		t.Fatal(err)
+	}
+	messages, err := invokeHistoryProvider(provider, t.Context(), nil, agent.WithSession(session))
+	if err != nil || !slices.Equal(messageTexts(messages), []string{"Reduced"}) || strategy.calls != 1 {
+		t.Fatalf("history = %v, reducer calls = %d, err = %v; want Reduced, once", messageTexts(messages), strategy.calls, err)
+	}
+}
+
+func TestHistoryProvider_ReducesBeforeMessagesRetrieval(t *testing.T) {
+	session := agenttest.CreateSession()
+	strategy := new(reducingHistoryStrategy)
+	provider := compaction.NewHistoryProvider(compaction.HistoryProviderConfig{
+		Strategy: strategy,
+		StateInitializer: func(*agent.Session) []*message.Message {
+			return []*message.Message{textMessage(message.RoleUser, "Hello"), textMessage(message.RoleAssistant, "Hi there!")}
+		},
+	})
+	messages, err := invokeHistoryProvider(provider, t.Context(), nil, agent.WithSession(session))
+	if err != nil || !slices.Equal(messageTexts(messages), []string{"Reduced"}) || strategy.calls != 1 {
+		t.Fatalf("history = %v, reducer calls = %d, err = %v; want Reduced, once", messageTexts(messages), strategy.calls, err)
+	}
+}
+
+func TestHistoryProvider_DoesNotReduceOnAddWhenTriggeredBeforeRetrieval(t *testing.T) {
+	session := agenttest.CreateSession()
+	strategy := new(reducingHistoryStrategy)
+	provider := compaction.NewHistoryProvider(compaction.HistoryProviderConfig{Strategy: strategy})
+	if err := invokeHistoryProviderInvoked(provider, t.Context(), []*message.Message{textMessage(message.RoleUser, "Hello")}, nil, agent.WithSession(session)); err != nil {
+		t.Fatal(err)
+	}
+	if strategy.calls != 0 {
+		t.Fatalf("reducer calls on add = %d, want 0", strategy.calls)
+	}
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		Messages []*message.Message `json:"messages"`
+	}
+	if ok, err := restored.Get("CompactionHistoryProvider", &state); err != nil || !ok || !slices.Equal(messageTexts(state.Messages), []string{"Hello"}) {
+		t.Fatalf("stored history = %v, found = %v, err = %v; want Hello", messageTexts(state.Messages), ok, err)
+	}
+}
+
+func TestHistoryProvider_DoesNotReduceOnRetrievalWhenTriggeredAfterAdd(t *testing.T) {
+	session := agenttest.CreateSession()
+	strategy := new(reducingHistoryStrategy)
+	provider := compaction.NewHistoryProvider(compaction.HistoryProviderConfig{
+		Strategy: strategy, TriggerEvent: compaction.HistoryProviderTriggerEventAfterMessageAdded,
+		StateInitializer: func(*agent.Session) []*message.Message {
+			return []*message.Message{textMessage(message.RoleUser, "Hello")}
+		},
+	})
+	messages, err := invokeHistoryProvider(provider, t.Context(), nil, agent.WithSession(session))
+	if err != nil || !slices.Equal(messageTexts(messages), []string{"Hello"}) || strategy.calls != 0 {
+		t.Fatalf("history = %v, reducer calls = %d, err = %v; want Hello, zero calls", messageTexts(messages), strategy.calls, err)
 	}
 }
 

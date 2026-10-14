@@ -26,6 +26,156 @@ type stubTool struct {
 	name string
 }
 
+func TestAgentMetadata_Constructor_WithProviderName_SetsProperty(t *testing.T) {
+	var runner agenttest.Runner
+	a := agent.New(agent.ProviderConfig{
+		ProviderName: "TestProvider",
+		Run:          runner.Run,
+	}, agent.Config{})
+	if got := a.ProviderName(); got != "TestProvider" {
+		t.Fatalf("ProviderName() = %q, want TestProvider", got)
+	}
+}
+
+func TestAgent_Name_ReturnsValueFromConfig(t *testing.T) {
+	var runner agenttest.Runner
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{
+		Name: "TestAgentName", Description: "TestAgentDescription",
+	})
+	if got := a.Name(); got != "TestAgentName" {
+		t.Fatalf("Name() = %q, want TestAgentName", got)
+	}
+}
+
+func TestAgent_Description_ReturnsValueFromConfig(t *testing.T) {
+	var runner agenttest.Runner
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{
+		Name: "TestAgentName", Description: "TestAgentDescription",
+	})
+	if got := a.Description(); got != "TestAgentDescription" {
+		t.Fatalf("Description() = %q, want TestAgentDescription", got)
+	}
+}
+
+func TestAgent_ID_IsStable(t *testing.T) {
+	var runner agenttest.Runner
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{})
+	id := a.ID()
+	if id == "" || a.ID() != id {
+		t.Fatalf("ID() = %q, subsequent ID() = %q; want stable non-empty ID", id, a.ID())
+	}
+}
+
+func TestAgent_ID_UsesConfiguredID(t *testing.T) {
+	var runner agenttest.Runner
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{ID: "test-agent-id"})
+	if got := a.ID(); got != "test-agent-id" {
+		t.Fatalf("ID() = %q, want test-agent-id", got)
+	}
+}
+
+func TestAgent_InvokeWithoutMessageCallsRunWithEmptyMessages(t *testing.T) {
+	testAgentInvocation(t, "none", false)
+}
+
+func TestAgent_InvokeWithStringMessageCallsRunWithOneMessage(t *testing.T) {
+	testAgentInvocation(t, "text", false)
+}
+
+func TestAgent_InvokeWithSingleMessageCallsRunWithSameMessage(t *testing.T) {
+	testAgentInvocation(t, "message", false)
+}
+
+func TestAgent_InvokeStreamingWithoutMessageCallsRunWithEmptyMessages(t *testing.T) {
+	testAgentInvocation(t, "none", true)
+}
+
+func TestAgent_InvokeStreamingWithStringMessageCallsRunWithOneMessage(t *testing.T) {
+	testAgentInvocation(t, "text", true)
+}
+
+func TestAgent_InvokeStreamingWithSingleMessageCallsRunWithSameMessage(t *testing.T) {
+	testAgentInvocation(t, "message", true)
+}
+
+func testAgentInvocation(t *testing.T, inputKind string, streaming bool) {
+	t.Helper()
+	session := agenttest.CreateSession()
+	input := message.NewText("Hello, Agent!")
+	providerCalls := 0
+	a := agent.New(agent.ProviderConfig{
+		Run: func(_ context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			providerCalls++
+			gotSession, ok := agent.GetOption(options, agent.WithSession)
+			if !ok || gotSession != session {
+				t.Errorf("provider session = %p, want %p", gotSession, session)
+			}
+			gotStream, ok := agent.GetOption(options, agent.Stream)
+			if !ok || gotStream != streaming {
+				t.Errorf("provider stream = (%v, %v), want (%v, true)", gotStream, ok, streaming)
+			}
+			switch inputKind {
+			case "none":
+				if len(messages) != 0 {
+					t.Errorf("provider messages = %v, want empty", messages)
+				}
+			case "text":
+				if len(messages) != 1 || messages[0].Role != message.RoleUser || messages[0].String() != "Hello, Agent!" {
+					t.Errorf("provider messages = %v, want one user text message", messages)
+				}
+			case "message":
+				if len(messages) != 1 || messages[0] != input {
+					t.Errorf("provider messages = %v, want original message", messages)
+				}
+			default:
+				t.Fatalf("unknown input kind %q", inputKind)
+			}
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "Hi"}},
+				}, nil)
+			}
+		},
+	}, agent.Config{})
+
+	options := []agent.Option{agent.WithSession(session), agent.Stream(streaming)}
+	var updates agent.ResponseStream
+	switch inputKind {
+	case "none":
+		updates = a.Run(t.Context(), nil, options...)
+	case "text":
+		updates = a.RunText(t.Context(), input.String(), options...)
+	case "message":
+		updates = a.RunMessage(t.Context(), input, options...)
+	}
+	if streaming {
+		count := 0
+		for update, err := range updates {
+			if err != nil {
+				t.Fatal(err)
+			}
+			count++
+			if got := update.String(); got != "Hi" {
+				t.Errorf("streamed text = %q, want Hi", got)
+			}
+		}
+		if count != 1 {
+			t.Errorf("streamed updates = %d, want 1", count)
+		}
+	} else {
+		resp, err := updates.Collect()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := resp.String(); got != "Hi" {
+			t.Errorf("response text = %q, want Hi", got)
+		}
+	}
+	if providerCalls != 1 {
+		t.Errorf("provider calls = %d, want 1", providerCalls)
+	}
+}
+
 func TestFunctionInvocationMiddleware_Composition(t *testing.T) {
 	toolFailure := errors.New("tool failed")
 	for _, tc := range []struct {
@@ -1401,6 +1551,125 @@ func TestAgent_Run_UsesProvidedSession(t *testing.T) {
 
 	if session != providedSession {
 		t.Error("expected provided session to be used")
+	}
+}
+
+func TestAgent_InitializesSessionBeforeCallbacks(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		create           bool
+		providerCallback bool
+		provided         bool
+		configured       bool
+	}{
+		{name: "CreateSession provider callback", create: true, providerCallback: true},
+		{name: "automatic provider callback", providerCallback: true},
+		{name: "automatic middleware"},
+		{name: "provided zero value", provided: true},
+		{name: "configured zero value", configured: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wantID := ""
+			if tc.create {
+				wantID = "requested"
+			}
+			var captured *agent.Session
+			checkSession := func(session *agent.Session) {
+				captured = session
+				if got := session.ServiceID(); got != wantID {
+					t.Fatalf("ServiceID before callback writes = %q, want %q", got, wantID)
+				}
+				const keys = 32
+				start := make(chan struct{})
+				var wg sync.WaitGroup
+				for i := range keys {
+					wg.Go(func() {
+						<-start
+						key := fmt.Sprintf("key%d", i)
+						session.Set(key, i)
+						target := any(session)
+						if i%2 == 0 {
+							target = *session
+						}
+						data, err := json.Marshal(target)
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						var payload struct {
+							State     map[string]int
+							ServiceID string
+						}
+						if err := json.Unmarshal(data, &payload); err != nil {
+							t.Error(err)
+							return
+						}
+						if value, ok := payload.State[key]; !ok || value != i || payload.ServiceID != wantID {
+							t.Errorf("snapshot after Set(%q, %d) = %s, want stored value and service ID %q", key, i, data, wantID)
+						}
+					})
+				}
+				close(start)
+				wg.Wait()
+				for i := range keys {
+					var value int
+					key := fmt.Sprintf("key%d", i)
+					if ok, err := session.Get(key, &value); err != nil || !ok || value != i {
+						t.Fatalf("Get(%q) = (%d, %v, %v), want (%d, true, nil)", key, value, ok, err, i)
+					}
+				}
+			}
+
+			runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().AddText("done").Build()}
+			provider := agent.ProviderConfig{Run: runner.Run}
+			var cfg agent.Config
+			if tc.providerCallback {
+				provider.CreateSession = func(_ context.Context, session *agent.Session, _ ...agent.Option) error {
+					checkSession(session)
+					return nil
+				}
+			} else {
+				cfg.Middlewares = []agent.Middleware{
+					agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+						session, ok := agent.GetOption(options, agent.WithSession)
+						if !ok || session == nil {
+							t.Fatal("middleware did not receive a session")
+						}
+						checkSession(session)
+						return next(ctx, messages, options...)
+					}),
+				}
+			}
+			var provided agent.Session
+			options := []agent.Option{agent.WithServiceID("requested")}
+			if tc.provided {
+				options = append(options, agent.WithSession(&provided))
+			}
+			if tc.configured {
+				cfg.RunOptions = []agent.Option{agent.WithSession(&provided)}
+			}
+			a := agent.New(provider, cfg)
+			if tc.create {
+				session, err := a.CreateSession(t.Context(), options...)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if session != captured {
+					t.Fatal("CreateSession returned a different session from its callback")
+				}
+			} else if _, err := a.RunText(t.Context(), "test", options...).Collect(); err != nil {
+				t.Fatal(err)
+			}
+			if captured == nil {
+				t.Fatal("session callback was not invoked")
+			}
+			if (tc.provided || tc.configured) && captured != &provided {
+				t.Fatal("run replaced the supplied session")
+			}
+			if got := captured.ServiceID(); got != wantID {
+				t.Fatalf("ServiceID after callback = %q, want %q", got, wantID)
+			}
+		})
 	}
 }
 

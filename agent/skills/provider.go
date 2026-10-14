@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
@@ -127,6 +128,16 @@ type ContextProviderOptions struct {
 	// DisableCaching rebuilds instructions and tools for every invocation.
 	DisableCaching bool
 
+	// CacheIsolationKeySelector selects the cache bucket for an invocation.
+	// A nil selector, or a nil key returned by the selector, uses the shared
+	// cache bucket. Keys should be stable and low-cardinality.
+	CacheIsolationKeySelector func(context.Context, agent.InvokingContext) *string
+
+	// RefreshInterval controls how long a cached result remains fresh. A nil
+	// interval never expires the cache. A zero or negative interval refreshes
+	// on every invocation.
+	RefreshInterval *time.Duration
+
 	// DisableSourceDeduplication preserves duplicate skill names from the configured
 	// skills and sources instead of removing later duplicates.
 	DisableSourceDeduplication bool
@@ -176,9 +187,14 @@ type providerState struct {
 	options ContextProviderOptions
 	logger  *slog.Logger
 
-	mu      sync.Mutex
-	cached  *providerContext
-	loading chan struct{}
+	mu     sync.Mutex
+	caches map[string]*providerCache
+}
+
+type providerCache struct {
+	cached    *providerContext
+	refreshed time.Time
+	loading   chan struct{}
 }
 
 type providerContext struct {
@@ -202,6 +218,7 @@ func NewContextProvider(opts ContextProviderOptions) agent.ContextProvider {
 		sources: newProviderSources(opts.Skills, opts.Sources),
 		options: opts,
 		logger:  opts.Logger,
+		caches:  make(map[string]*providerCache),
 	}
 
 	return agent.NewContextProvider(agent.ContextProviderConfig{
@@ -262,16 +279,28 @@ func (p *providerState) provide(ctx context.Context, invoking agent.InvokingCont
 		return outMessages, outOptions, nil
 	}
 
+	cacheKey := ""
+	if p.options.CacheIsolationKeySelector != nil {
+		if selected := p.options.CacheIsolationKeySelector(ctx, invoking); selected != nil {
+			cacheKey = "key:" + *selected
+		}
+	}
+
 	for {
 		p.mu.Lock()
-		if p.cached != nil {
-			cached := *p.cached
+		cache := p.caches[cacheKey]
+		if cache == nil {
+			cache = &providerCache{}
+			p.caches[cacheKey] = cache
+		}
+		if cache.cached != nil && p.cacheIsFresh(cache) {
+			cached := *cache.cached
 			p.mu.Unlock()
 			outMessages, outOptions = providedContext(cached)
 			return outMessages, outOptions, nil
 		}
-		if p.loading != nil {
-			loading := p.loading
+		if cache.loading != nil {
+			loading := cache.loading
 			p.mu.Unlock()
 			if err := ctx.Err(); err != nil {
 				return nil, nil, err
@@ -286,23 +315,24 @@ func (p *providerState) provide(ctx context.Context, invoking agent.InvokingCont
 			// Clear a matching completed load defensively so every retry goes
 			// through the same owner path and panic recovery below.
 			p.mu.Lock()
-			if p.loading == loading {
-				p.loading = nil
+			if cache.loading == loading {
+				cache.loading = nil
 			}
 			p.mu.Unlock()
 			continue
 		}
 		loading := make(chan struct{})
-		p.loading = loading
+		cache.loading = loading
 		p.mu.Unlock()
 
 		result, err := p.buildContextSafely(ctx)
 		p.mu.Lock()
 		if err == nil {
 			cached := result
-			p.cached = &cached
+			cache.cached = &cached
+			cache.refreshed = time.Now()
 		}
-		p.loading = nil
+		cache.loading = nil
 		close(loading)
 		p.mu.Unlock()
 		if err != nil {
@@ -311,6 +341,13 @@ func (p *providerState) provide(ctx context.Context, invoking agent.InvokingCont
 		outMessages, outOptions = providedContext(result)
 		return outMessages, outOptions, nil
 	}
+}
+
+func (p *providerState) cacheIsFresh(cache *providerCache) bool {
+	if p.options.RefreshInterval == nil {
+		return true
+	}
+	return time.Since(cache.refreshed) < *p.options.RefreshInterval
 }
 
 func (p *providerState) buildContextSafely(ctx context.Context) (result providerContext, err error) {
