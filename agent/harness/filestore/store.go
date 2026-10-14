@@ -4,9 +4,10 @@
 //
 // Store paths are relative to a store root. An empty directory names the root.
 // FileSystemStore creates missing directories and confines operations to its
-// root, rejecting absolute paths, traversal segments, and symbolic links.
+// root, rejecting absolute paths and paths that escape the root. Relative
+// symbolic links are followed only when they remain within the root.
 // Read and Delete report missing files with errors wrapping fs.ErrNotExist.
-// List returns only direct regular files, not directories or symbolic links.
+// ListChildren returns only direct regular files, not directories or symbolic links.
 //
 // Contexts are checked before filesystem operations and during enumeration.
 // A filesystem call already in progress cannot be interrupted.
@@ -42,10 +43,10 @@ type Store interface {
 	// wrapping [fs.ErrNotExist].
 	Delete(ctx context.Context, name string) error
 
-	// List returns sorted names of regular files directly under directory.
+	// ListChildren returns sorted names of regular files directly under directory.
 	// Names are relative to that directory, without path separators. An empty
 	// directory selects the root; a missing directory returns an empty list.
-	List(ctx context.Context, directory string) ([]string, error)
+	ListChildren(ctx context.Context, directory string) ([]string, error)
 
 	// CreateDirectory ensures a directory and its parents exist.
 	// An empty directory selects the root.
@@ -56,7 +57,7 @@ var _ Store = (*FileSystemStore)(nil)
 
 // FileSystemStore stores text files beneath a filesystem directory.
 // Use [NewFileSystemStore] to create a store and [FileSystemStore.Close] to release its root handle.
-// Operations reject symbolic links in paths, and listing omits symbolic links.
+// Relative symbolic links within the root are allowed; listing omits symbolic links.
 type FileSystemStore struct {
 	mu   sync.RWMutex
 	root *os.Root
@@ -147,9 +148,9 @@ func (s *FileSystemStore) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-// List returns sorted names of regular files directly under directory.
+// ListChildren returns sorted names of regular files directly under directory.
 // Directories and symbolic links are omitted. A missing directory is empty.
-func (s *FileSystemStore) List(ctx context.Context, directory string) ([]string, error) {
+func (s *FileSystemStore) ListChildren(ctx context.Context, directory string) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	normalized, err := s.resolve(ctx, directory, true)
@@ -218,28 +219,17 @@ func (s *FileSystemStore) resolve(ctx context.Context, name string, directory bo
 		return "", fmt.Errorf("filestore: %w", err)
 	}
 	if normalized == "" {
-		return ".", nil
+		normalized = "."
 	}
-	segments := strings.Split(normalized, "/")
-	for i := range segments {
-		if err := ctx.Err(); err != nil {
-			return "", err
-		}
-		prefix := strings.Join(segments[:i+1], "/")
-		info, err := s.root.Lstat(prefix)
-		if errors.Is(err, fs.ErrNotExist) {
-			return normalized, nil
-		}
-		if err != nil {
-			return "", fmt.Errorf("filestore: inspect path %q: %w", name, err)
-		}
-		if info.Mode()&fs.ModeSymlink != 0 {
-			return "", fmt.Errorf("filestore: symbolic links are not allowed in path %q: %w", name, fs.ErrInvalid)
-		}
-		wantDirectory := directory || i < len(segments)-1
-		if wantDirectory && !info.IsDir() || !wantDirectory && !info.Mode().IsRegular() {
-			return "", fmt.Errorf("filestore: unexpected file type in path %q: %w", name, fs.ErrInvalid)
-		}
+	info, err := s.root.Stat(normalized)
+	if errors.Is(err, fs.ErrNotExist) {
+		return normalized, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("filestore: inspect path %q: %w", name, err)
+	}
+	if directory && !info.IsDir() || !directory && !info.Mode().IsRegular() {
+		return "", fmt.Errorf("filestore: unexpected file type in path %q: %w", name, fs.ErrInvalid)
 	}
 	return normalized, nil
 }
