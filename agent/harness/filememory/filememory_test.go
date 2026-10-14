@@ -346,11 +346,59 @@ func TestProvider_ListAndGrepHideInternalFiles(t *testing.T) {
 	}
 }
 
+func TestProvider_FilenamePatternSemantics(t *testing.T) {
+	_, _, _, tools := newMemoryFixture(t, Config{})
+	for _, name := range []string{"notes[1].md", "notes1.md", "notes?.md", "\u03c2.md", "README"} {
+		writeMemory(t, tools, name, "matching content", "")
+	}
+	for _, tc := range []struct {
+		pattern string
+		want    []string
+	}{
+		{pattern: "notes[1].md", want: []string{"notes[1].md"}},
+		{pattern: "notes?.md", want: []string{"notes?.md"}},
+		{pattern: "\u03a3.md", want: []string{"\u03c2.md"}},
+		{pattern: "**/notes1.md", want: []string{"notes1.md"}},
+		{pattern: "*.*", want: []string{"README", "notes1.md", "notes?.md", "notes[1].md", "\u03c2.md"}},
+		{pattern: "["},
+	} {
+		t.Run(tc.pattern, func(t *testing.T) {
+			listArgs := resultJSON(t, map[string]string{"globPattern": tc.pattern})
+			var listing []ListEntry
+			if err := json.Unmarshal([]byte(resultJSON(t, callMemoryTool(t, tools, LsToolName, listArgs))), &listing); err != nil {
+				t.Fatal(err)
+			}
+			var listedNames []string
+			for _, entry := range listing {
+				listedNames = append(listedNames, entry.Name)
+			}
+			if !slices.Equal(listedNames, tc.want) {
+				t.Fatalf("listed names = %q, want %q", listedNames, tc.want)
+			}
+			grepArgs := resultJSON(t, map[string]string{"regexPattern": "matching", "globPattern": tc.pattern})
+			var matches []struct {
+				FileName string `json:"fileName"`
+			}
+			if err := json.Unmarshal([]byte(resultJSON(t, callMemoryTool(t, tools, GrepToolName, grepArgs))), &matches); err != nil {
+				t.Fatal(err)
+			}
+			var matchedNames []string
+			for _, match := range matches {
+				matchedNames = append(matchedNames, match.FileName)
+			}
+			if !slices.Equal(matchedNames, tc.want) {
+				t.Fatalf("matched names = %q, want %q", matchedNames, tc.want)
+			}
+		})
+	}
+}
+
 func TestProvider_RejectsInvalidAndReservedFilenames(t *testing.T) {
 	_, store, _, tools := newMemoryFixture(t, Config{})
 	for _, name := range []string{
 		"", " \t", "../outside", "./notes.md", "/absolute.md", `C:\notes.md`,
-		"nested/notes.md", `nested\notes.md`, "memories.md", "MEMORIES.MD",
+		"nested/notes.md", `nested\notes.md`, "nested/../notes.md", `nested\..\notes.md`,
+		"nested/./notes.md", `.\notes.md`, "memories.md", "MEMORIES.MD",
 		"notes.md_description.md", "NOTES_DESCRIPTION.MD",
 	} {
 		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
@@ -371,11 +419,21 @@ func TestProvider_RejectsInvalidAndReservedFilenames(t *testing.T) {
 			}
 		})
 	}
-	names, err := store.List(t.Context(), "")
+	names, err := store.ListChildren(t.Context(), "")
 	if err != nil || len(names) != 0 {
 		t.Fatalf("invalid calls wrote files: %v, %v", names, err)
 	}
 	writeMemory(t, tools, "notes..md", "allowed", "")
+}
+
+func TestProvider_NormalizesFlatFilenames(t *testing.T) {
+	_, _, _, tools := newMemoryFixture(t, Config{})
+	for _, name := range []string{"notes.md/", "notes.md//", `notes.md\`} {
+		writeMemory(t, tools, name, "content", "")
+		if got := callMemoryTool(t, tools, ReadFileToolName, `{"fileName":"notes.md"}`); got != "content" {
+			t.Fatalf("normalized filename %q read = %v", name, got)
+		}
+	}
 }
 
 func TestProvider_ReplaceTools(t *testing.T) {
@@ -662,7 +720,7 @@ func TestProvider_CancellationDoesNotWaitForWriteLock(t *testing.T) {
 	if err := <-result; !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want cancellation while the write lock remains held", err)
 	}
-	if names, err := store.List(t.Context(), ""); err != nil || len(names) != 0 {
+	if names, err := store.ListChildren(t.Context(), ""); err != nil || len(names) != 0 {
 		t.Fatalf("cancelled write changed files: %v, %v", names, err)
 	}
 }
@@ -684,14 +742,14 @@ func TestProvider_RejectsInvalidToolArguments(t *testing.T) {
 		WriteToolName:        `{"fileName":"notes.md"}`,
 		ReadFileToolName:     `{"fileName":42}`,
 		GrepToolName:         `{"regexPattern":"["}`,
-		LsToolName:           `{"globPattern":"["}`,
+		LsToolName:           `{"globPattern":42}`,
 		ReplaceLinesToolName: `{"fileName":"notes.md","edits":[{"line_number":1}]}`,
 	} {
 		if _, err := tools[name].Call(t.Context(), args); err == nil {
 			t.Fatalf("%s accepted invalid arguments %s", name, args)
 		}
 	}
-	if names, err := store.List(t.Context(), ""); err != nil || len(names) != 0 {
+	if names, err := store.ListChildren(t.Context(), ""); err != nil || len(names) != 0 {
 		t.Fatalf("invalid arguments changed files: %v, %v", names, err)
 	}
 }
@@ -782,11 +840,11 @@ func (s *failingMemoryStore) Delete(ctx context.Context, name string) error {
 	return s.Store.Delete(ctx, name)
 }
 
-func (s *failingMemoryStore) List(ctx context.Context, directory string) ([]string, error) {
+func (s *failingMemoryStore) ListChildren(ctx context.Context, directory string) ([]string, error) {
 	if s.fails("list", directory) {
 		return nil, s.failure
 	}
-	return s.Store.List(ctx, directory)
+	return s.Store.ListChildren(ctx, directory)
 }
 
 func (s *failingMemoryStore) CreateDirectory(ctx context.Context, directory string) error {

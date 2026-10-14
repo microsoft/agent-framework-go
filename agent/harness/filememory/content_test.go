@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io/fs"
 	"regexp"
 	"slices"
@@ -159,6 +160,23 @@ func TestMatchesGlob(t *testing.T) {
 		{name: "notes.md", pattern: "nested/*.md"},
 		{name: "anything", match: true},
 		{name: "anything", pattern: " \t", match: true},
+		{name: "\u03c2.md", pattern: "\u03a3.md", match: true},
+		{name: "\u03c3.md", pattern: "\u03c2.md", match: true},
+		{name: "\u03a3.MD", pattern: "\u03c2.*", match: true},
+		{name: "\u212a.md", pattern: "k.md", match: true},
+		{name: "\u017f.md", pattern: "s.md", match: true},
+		{name: "SS.md", pattern: "\u00df.md"},
+		{name: "README", pattern: "*.*", match: true},
+		{name: "notes.md", pattern: "*.*", match: true},
+		{name: "notes.md", pattern: `**\*.md`, match: true},
+		{name: "notes.md", pattern: `nested\*.md`},
+		{name: "notes[1]+(a)?.md", pattern: "NOTES[1]+(A)?.MD", match: true},
+		{name: "notes1.md", pattern: "notes[1].md"},
+		{name: "notes1.md", pattern: "notes?.md"},
+		{name: "notes?.md", pattern: "notes?.md", match: true},
+		{name: "[", pattern: "[", match: true},
+		{name: "notes.md", pattern: "["},
+		{name: "notes.md\n", pattern: "notes.md"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name+"/"+tc.pattern, func(t *testing.T) {
@@ -168,8 +186,8 @@ func TestMatchesGlob(t *testing.T) {
 			}
 		})
 	}
-	if _, err := matchesGlob("", "["); err == nil {
-		t.Fatal("expected invalid glob error")
+	if _, err := matchesGlob("", "\xff"); err == nil {
+		t.Fatal("expected invalid UTF-8 pattern error")
 	}
 }
 
@@ -241,6 +259,25 @@ func TestSearchFiles(t *testing.T) {
 	}
 }
 
+func TestSearchFiles_UnicodeCaseInsensitiveGlob(t *testing.T) {
+	store := &memoryStore{files: map[string]string{"\u03c2.md": "matching content"}}
+	results, err := searchFiles(t.Context(), store, "", "matching", "\u03a3.md")
+	if err != nil || len(results) != 1 || results[0].FileName != "\u03c2.md" {
+		t.Fatalf("Unicode glob search = %+v, %v", results, err)
+	}
+}
+
+func TestSearchFiles_LiteralPatternCharacters(t *testing.T) {
+	store := &memoryStore{files: map[string]string{
+		"notes[1].md": "matching content",
+		"notes1.md":   "matching content",
+	}}
+	results, err := searchFiles(t.Context(), store, "", "matching", "notes[1].md")
+	if err != nil || len(results) != 1 || results[0].FileName != "notes[1].md" {
+		t.Fatalf("literal filename search = %+v, %v", results, err)
+	}
+}
+
 func TestSearchFiles_Snippet(t *testing.T) {
 	for _, character := range []string{"a", "\u03b1", "\U0001f642"} {
 		t.Run(character, func(t *testing.T) {
@@ -266,7 +303,7 @@ func TestSearchFiles_RejectsInvalidInput(t *testing.T) {
 		{name: "absolute directory", directory: "/outside"},
 		{name: "bad regex", regex: "["},
 		{name: "unsupported regex", regex: `(?<=prefix)match`},
-		{name: "bad glob", glob: "["},
+		{name: "invalid UTF-8 glob", glob: "\xff"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if _, err := searchFiles(t.Context(), store, tc.directory, tc.regex, tc.glob); err == nil {
@@ -369,6 +406,28 @@ func TestSearchFiles_Cancellation(t *testing.T) {
 			t.Fatalf("error = %v, want original storage error", err)
 		}
 	})
+	for _, partial := range []bool{false, true} {
+		t.Run(fmt.Sprintf("after missing final file/partial=%v", partial), func(t *testing.T) {
+			files := map[string]string{"z.md": "match"}
+			if partial {
+				files["a.md"] = "match"
+			}
+			base := &memoryStore{files: files}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			backend := &overriddenStore{Store: base, read: func(ctx context.Context, name string) (string, error) {
+				if name == "z.md" {
+					cancel()
+					return "", fs.ErrNotExist
+				}
+				return base.Read(ctx, name)
+			}}
+			results, err := searchFiles(ctx, backend, "", "match", "")
+			if !errors.Is(err, context.Canceled) || results != nil {
+				t.Fatalf("search = %+v, %v, want cancellation without partial results", results, err)
+			}
+		})
+	}
 }
 
 func TestSearchResultJSON(t *testing.T) {
@@ -431,7 +490,7 @@ func (s *memoryStore) Delete(ctx context.Context, name string) error {
 	return nil
 }
 
-func (s *memoryStore) List(ctx context.Context, directory string) ([]string, error) {
+func (s *memoryStore) ListChildren(ctx context.Context, directory string) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -472,9 +531,9 @@ func (s *overriddenStore) Read(ctx context.Context, name string) (string, error)
 	return s.Store.Read(ctx, name)
 }
 
-func (s *overriddenStore) List(ctx context.Context, directory string) ([]string, error) {
+func (s *overriddenStore) ListChildren(ctx context.Context, directory string) ([]string, error) {
 	if s.list != nil {
 		return s.list(ctx, directory)
 	}
-	return s.Store.List(ctx, directory)
+	return s.Store.ListChildren(ctx, directory)
 }

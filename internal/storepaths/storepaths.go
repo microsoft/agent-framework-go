@@ -6,16 +6,17 @@ package storepaths
 import (
 	"fmt"
 	"io/fs"
+	"path/filepath"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 )
 
-// Normalize replaces backslashes with forward slashes, collapses repeated
-// separators and removes trailing separators. Rooted paths, drive prefixes,
-// traversal segments and NUL bytes are rejected with an error wrapping
+// Normalize cleans a local relative path and returns forward-slash separators.
+// Backslashes are accepted as separators on every platform. Rooted paths, drive
+// prefixes, paths escaping the root and NUL bytes return an error wrapping
 // [fs.ErrInvalid]. Empty or whitespace-only paths select the root only when
-// directory is true.
+// directory is true. A cleaned "." also selects the root only for directories.
 func Normalize(name string, directory bool) (string, error) {
 	invalid := func() (string, error) {
 		return "", fmt.Errorf("invalid relative path %q: %w", name, fs.ErrInvalid)
@@ -26,7 +27,7 @@ func Normalize(name string, directory bool) (string, error) {
 		}
 		return invalid()
 	}
-	if strings.HasPrefix(name, "/") || strings.HasPrefix(name, "\\") || strings.ContainsRune(name, '\x00') {
+	if strings.ContainsRune(name, '\x00') {
 		return invalid()
 	}
 	normalized := strings.ReplaceAll(name, "\\", "/")
@@ -34,21 +35,16 @@ func Normalize(name string, directory bool) (string, error) {
 	if unicode.IsLetter(first) && len(normalized) > size && normalized[size] == ':' {
 		return invalid()
 	}
-	segments := strings.Split(normalized, "/")
-	clean := segments[:0]
-	for _, segment := range segments {
-		switch segment {
-		case ".", "..":
-			return invalid()
-		case "":
-			continue
-		default:
-			clean = append(clean, segment)
-		}
-	}
-	normalized = strings.Join(clean, "/")
-	if normalized == "" && !directory {
+	local := filepath.FromSlash(normalized)
+	if !filepath.IsLocal(local) {
 		return invalid()
+	}
+	normalized = filepath.ToSlash(filepath.Clean(local))
+	if normalized == "." {
+		if !directory {
+			return invalid()
+		}
+		return "", nil
 	}
 	return normalized, nil
 }

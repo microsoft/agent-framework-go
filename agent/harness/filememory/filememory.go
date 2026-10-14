@@ -11,8 +11,11 @@
 // to the agent before each invocation when present.
 //
 // Searches are non-recursive and use Go regular expressions and case-insensitive
-// filename globs. Search matches and line edits share 1-based line numbering and
-// preserve each line's LF, CRLF, or CR terminator.
+// filename patterns. Filename patterns support literal text and * wildcards;
+// ? and brackets are literal characters. Backslashes are path separators, not
+// escape characters. A leading **/ can match a direct file, and *.* matches all
+// filenames, including those without extensions. Search matches and line edits
+// share 1-based line numbering and preserve each line's LF, CRLF, or CR terminator.
 package filememory
 
 import (
@@ -221,11 +224,11 @@ func (p *Provider) createTools(session *agent.Session) []tool.FuncTool {
 		Description string `json:"description,omitempty" jsonschema:"Optional summary for future discovery."`
 	}
 	type listInput struct {
-		GlobPattern string `json:"globPattern,omitempty" jsonschema:"Optional case-insensitive filename glob, such as *.md."`
+		GlobPattern string `json:"globPattern,omitempty" jsonschema:"Optional case-insensitive filename pattern using * wildcards, such as *.md. Question marks and brackets are literal."`
 	}
 	type grepInput struct {
 		RegexPattern string `json:"regexPattern" jsonschema:"Case-insensitive Go regular expression to search for."`
-		GlobPattern  string `json:"globPattern,omitempty" jsonschema:"Optional case-insensitive filename glob, such as *.md."`
+		GlobPattern  string `json:"globPattern,omitempty" jsonschema:"Optional case-insensitive filename pattern using * wildcards, such as *.md. Question marks and brackets are literal."`
 	}
 	type replaceInput struct {
 		FileName   string `json:"fileName" jsonschema:"Flat memory filename, without directory separators."`
@@ -254,12 +257,12 @@ func (p *Provider) createTools(session *agent.Session) []tool.FuncTool {
 			return p.delete(ctx, session, input.FileName)
 		}),
 		functool.MustNew(functool.Config{
-			Name: LsToolName, Description: "List memory files with optional descriptions. Optionally filter names by globPattern. Description files and the memory index are hidden.",
+			Name: LsToolName, Description: "List memory files with optional descriptions. Optionally filter names by globPattern using * wildcards and literal filename text. Description files and the memory index are hidden.",
 		}, func(ctx context.Context, input listInput) ([]ListEntry, error) {
 			return p.list(ctx, session, input.GlobPattern)
 		}),
 		functool.MustNew(functool.Config{
-			Name: GrepToolName, Description: "Search memory files with a case-insensitive Go regular expression and optional filename glob. Returns filenames, snippets, and 1-based matching lines with their original terminators.",
+			Name: GrepToolName, Description: "Search memory files with a case-insensitive Go regular expression and optional filename pattern using * wildcards. Returns filenames, snippets, and 1-based matching lines with their original terminators.",
 		}, func(ctx context.Context, input grepInput) ([]searchResult, error) {
 			state, err := p.getState(ctx, session)
 			if err != nil {
@@ -471,7 +474,7 @@ func (p *Provider) replaceLines(ctx context.Context, session *agent.Session, fil
 }
 
 func (p *Provider) memoryNames(ctx context.Context, folder string) ([]string, error) {
-	names, err := p.store.List(ctx, folder)
+	names, err := p.store.ListChildren(ctx, folder)
 	if err != nil {
 		return nil, fmt.Errorf("filememory: list memories: %w", err)
 	}
@@ -530,12 +533,13 @@ func (p *Provider) rebuildIndex(ctx context.Context, folder string) error {
 }
 
 func validateMemoryFileName(fileName string) (string, error) {
-	name, err := storepaths.Normalize(fileName, false)
+	portable := strings.TrimRight(strings.ReplaceAll(fileName, "\\", "/"), "/")
+	if strings.ContainsRune(portable, '/') {
+		return "", fmt.Errorf("filememory: memory filenames must not contain directory separators: %w", fs.ErrInvalid)
+	}
+	name, err := storepaths.Normalize(portable, false)
 	if err != nil {
 		return "", fmt.Errorf("filememory: %w", err)
-	}
-	if strings.ContainsRune(name, '/') {
-		return "", fmt.Errorf("filememory: memory filenames must not contain directory separators: %w", fs.ErrInvalid)
 	}
 	if isInternalFile(name) {
 		return "", fmt.Errorf("filememory: filename %q is reserved for internal use: %w", fileName, fs.ErrInvalid)

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"path"
 	"regexp"
 	"strings"
 	"unicode/utf8"
@@ -104,18 +103,31 @@ func trimLineTerminator(line string) string {
 }
 
 func matchesGlob(name, pattern string) (bool, error) {
-	if strings.TrimSpace(pattern) == "" {
-		return true, nil
+	expression, err := compileGlob(pattern)
+	if err != nil {
+		return false, err
 	}
+	return expression == nil || expression.MatchString(name), nil
+}
+
+func compileGlob(pattern string) (*regexp.Regexp, error) {
+	if strings.TrimSpace(pattern) == "" {
+		return nil, nil
+	}
+	pattern = strings.ReplaceAll(pattern, "\\", "/")
 	// Searches are flat; a leading **/ can also match a direct child.
 	for strings.HasPrefix(pattern, "**/") {
 		pattern = strings.TrimPrefix(pattern, "**/")
 	}
-	matched, err := path.Match(strings.ToLower(pattern), strings.ToLower(name))
-	if err != nil {
-		return false, fmt.Errorf("filememory: invalid glob pattern %q: %w", pattern, err)
+	if pattern == "*.*" {
+		pattern = "*"
 	}
-	return matched, nil
+	expression := "(?i)\\A" + strings.ReplaceAll(regexp.QuoteMeta(pattern), `\*`, "[^/]*") + "\\z"
+	compiled, err := regexp.Compile(expression)
+	if err != nil {
+		return nil, fmt.Errorf("filememory: invalid glob pattern %q: %w", pattern, err)
+	}
+	return compiled, nil
 }
 
 func searchFiles(ctx context.Context, store filestore.Store, directory, regexPattern, globPattern string) ([]searchResult, error) {
@@ -130,10 +142,11 @@ func searchFiles(ctx context.Context, store filestore.Store, directory, regexPat
 	if err != nil {
 		return nil, fmt.Errorf("filememory: invalid regular expression %q: %w", regexPattern, err)
 	}
-	if _, err := matchesGlob("", globPattern); err != nil {
+	matcher, err := compileGlob(globPattern)
+	if err != nil {
 		return nil, err
 	}
-	names, err := store.List(ctx, directory)
+	names, err := store.ListChildren(ctx, directory)
 	if err != nil {
 		return nil, err
 	}
@@ -152,11 +165,7 @@ func searchFiles(ctx context.Context, store filestore.Store, directory, regexPat
 		if normalized != name || strings.ContainsRune(normalized, '/') {
 			return nil, fmt.Errorf("filememory: invalid listed file name %q: %w", name, fs.ErrInvalid)
 		}
-		matched, err := matchesGlob(name, globPattern)
-		if err != nil {
-			return nil, err
-		}
-		if !matched {
+		if matcher != nil && !matcher.MatchString(name) {
 			continue
 		}
 		fileName := name
@@ -165,6 +174,9 @@ func searchFiles(ctx context.Context, store filestore.Store, directory, regexPat
 		}
 		content, err := store.Read(ctx, fileName)
 		if errors.Is(err, fs.ErrNotExist) {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		if err != nil {
