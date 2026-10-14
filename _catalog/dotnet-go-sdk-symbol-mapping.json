@@ -5567,31 +5567,31 @@
         "ProcessActivity_Streaming_MapsActivityMetadataToChatMessageAsync": null
       },
       "Microsoft.Agents.AI.UnitTests.Data.TextSearchProviderTests": {
-        "InvokedAsync_CustomStorageInputFilter_OverridesDefaultAsync": null,
-        "InvokedAsync_DefaultFilter_ExcludesNonExternalMessagesFromStorageAsync": null,
-        "InvokedAsync_ShouldPersistMessagesToSessionStateBagAsync": null,
-        "InvokingAsync_CustomSearchInputFilter_OverridesDefaultAsync": null,
-        "InvokingAsync_DefaultFilter_ExcludesNonExternalMessagesFromSearchInputAsync": null,
-        "InvokingAsync_OnDemand_ShouldExposeSearchToolAsync": null,
-        "InvokingAsync_RedactsLogDataBasedOnOptionsAsync": null,
-        "InvokingAsync_ShouldInjectFormattedResultsAsync": null,
-        "InvokingAsync_ShouldNotThrow_WhenSearchFailsAsync": null,
-        "InvokingAsync_ShouldUseContextFormatterWhenProvidedAsync": null,
-        "InvokingAsync_WithAccumulatedMemoryAcrossInvocations_ShouldIncludeAllUpToLimitAsync": null,
-        "InvokingAsync_WithEmptyStateBag_ShouldHaveNoMessagesAsync": null,
-        "InvokingAsync_WithNoResults_ShouldReturnEmptyContextAsync": null,
-        "InvokingAsync_WithPreviousFailedRequest_ShouldNotIncludeFailedRequestInputInSearchInputAsync": null,
-        "InvokingAsync_WithRawRepresentations_ContextFormatterCanAccessAsync": null,
-        "InvokingAsync_WithRecentMessageMemory_ShouldIncludeStoredMessagesInSearchInputAsync": null,
-        "InvokingAsync_WithRecentMessageRolesIncluded_ShouldFilterRolesAsync": null,
+        "InvokedAsync_CustomStorageInputFilter_OverridesDefaultAsync": "agent/textsearch.TestTextSearchProvider_InvokedAsync_CustomStorageInputFilter_OverridesDefaultAsync",
+        "InvokedAsync_DefaultFilter_ExcludesNonExternalMessagesFromStorageAsync": "agent/textsearch.TestTextSearchProvider_InvokedAsync_DefaultFilter_ExcludesNonExternalMessagesFromStorageAsync",
+        "InvokedAsync_ShouldPersistMessagesToSessionStateBagAsync": "agent/textsearch.TestTextSearchProvider_InvokedAsync_ShouldPersistMessagesToSessionStateBagAsync",
+        "InvokingAsync_CustomSearchInputFilter_OverridesDefaultAsync": "agent/textsearch.TestTextSearchProvider_InvokingAsync_CustomSearchInputFilter_OverridesDefaultAsync",
+        "InvokingAsync_DefaultFilter_ExcludesNonExternalMessagesFromSearchInputAsync": "agent/textsearch.TestTextSearchProvider_InvokingAsync_DefaultFilter_ExcludesNonExternalMessagesFromSearchInputAsync",
+        "InvokingAsync_OnDemand_ShouldExposeSearchToolAsync": "agent/textsearch.TestTextSearchProvider_InvokingAsync_OnDemand_ShouldExposeSearchToolAsync",
+        "InvokingAsync_RedactsLogDataBasedOnOptionsAsync": "agent/textsearch.TestTextSearchProvider_InvokingAsync_RedactsLogDataBasedOnOptionsAsync",
+        "InvokingAsync_ShouldInjectFormattedResultsAsync": "agent/textsearch.TestTextSearchProvider_InvokingAsync_ShouldInjectFormattedResultsAsync",
+        "InvokingAsync_ShouldNotThrow_WhenSearchFailsAsync": "agent/textsearch.TestTextSearchProvider_InvokingAsync_ShouldNotThrow_WhenSearchFailsAsync",
+        "InvokingAsync_ShouldUseContextFormatterWhenProvidedAsync": "agent/textsearch.TestTextSearchProvider_InvokingAsync_ShouldUseContextFormatterWhenProvidedAsync",
+        "InvokingAsync_WithAccumulatedMemoryAcrossInvocations_ShouldIncludeAllUpToLimitAsync": "agent/textsearch.TestTextSearchProvider_InvokingAsync_WithAccumulatedMemoryAcrossInvocations_ShouldIncludeAllUpToLimitAsync",
+        "InvokingAsync_WithEmptyStateBag_ShouldHaveNoMessagesAsync": "agent/textsearch.TestTextSearchProvider_InvokingAsync_WithEmptyStateBag_ShouldHaveNoMessagesAsync",
+        "InvokingAsync_WithNoResults_ShouldReturnEmptyContextAsync": "agent/textsearch.TestTextSearchProvider_InvokingAsync_WithNoResults_ShouldReturnEmptyContextAsync",
+        "InvokingAsync_WithPreviousFailedRequest_ShouldNotIncludeFailedRequestInputInSearchInputAsync": "agent/textsearch.TestTextSearchProvider_InvokingAsync_WithPreviousFailedRequest_ShouldNotIncludeFailedRequestInputInSearchInputAsync",
+        "InvokingAsync_WithRawRepresentations_ContextFormatterCanAccessAsync": "agent/textsearch.TestTextSearchProvider_InvokingAsync_WithRawRepresentations_ContextFormatterCanAccessAsync",
+        "InvokingAsync_WithRecentMessageMemory_ShouldIncludeStoredMessagesInSearchInputAsync": "agent/textsearch.TestTextSearchProvider_InvokingAsync_WithRecentMessageMemory_ShouldIncludeStoredMessagesInSearchInputAsync",
+        "InvokingAsync_WithRecentMessageRolesIncluded_ShouldFilterRolesAsync": "agent/textsearch.TestTextSearchProvider_InvokingAsync_WithRecentMessageRolesIncluded_ShouldFilterRolesAsync",
         "MessageInvokingAsync_BeforeAIInvoke_DefaultFilter_ExcludesNonExternalMessagesAsync": null,
         "MessageInvokingAsync_BeforeAIInvoke_NoResults_ReturnsOnlyInputMessagesAsync": null,
         "MessageInvokingAsync_BeforeAIInvoke_SearchesAndReturnsMergedMessagesAsync": null,
         "MessageInvokingAsync_OnDemand_ThrowsInvalidOperationExceptionAsync": null,
-        "SearchAsync_ShouldReturnFormattedResultsAsync": null,
-        "StateBag_RoundtripRestoresMessagesAsync": null,
-        "StateKeys_ReturnsCustomKey_WhenSetViaOptions": null,
-        "StateKeys_ReturnsDefaultKey_WhenNoOptionsProvided": null
+        "SearchAsync_ShouldReturnFormattedResultsAsync": "agent/textsearch.TestTextSearchProvider_SearchAsync_ShouldReturnFormattedResultsAsync",
+        "StateBag_RoundtripRestoresMessagesAsync": "agent/textsearch.TestTextSearchProvider_StateBag_RoundtripRestoresMessagesAsync",
+        "StateKeys_ReturnsCustomKey_WhenSetViaOptions": "agent/textsearch.TestTextSearchProvider_StateKeys_ReturnsCustomKey_WhenSetViaOptions",
+        "StateKeys_ReturnsDefaultKey_WhenNoOptionsProvided": "agent/textsearch.TestTextSearchProvider_StateKeys_ReturnsDefaultKey_WhenNoOptionsProvided"
       },
       "Microsoft.Agents.AI.UnitTests.DelegateLoopEvaluatorTests": {
         "DelegateLoopEvaluator_NullDelegate_Throws": null,
@@ -15150,24 +15150,29 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "var provider *textsearch.Provider",
+          "go_symbols": [
+            "agent/textsearch.Provider"
+          ],
+          "status": "mapped"
         },
         "properties": {
           "StateKeys": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Provider.StateKeys"
+            ],
+            "status": "mapped"
           }
         },
         "constructors": {
           "TextSearchProvider(Func<string, CancellationToken, Task<IEnumerable<TextSearchProvider.TextSearchResult>>>, TextSearchProviderOptions, ILoggerFactory)": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "textsearch.NewContextProvider(search, textsearch.Config{Logger: logger})",
+            "go_symbols": [
+              "agent/textsearch.NewContextProvider",
+              "agent/textsearch.Config.Logger"
+            ],
+            "status": "adapted",
+            "note": "The factory takes a context-aware Go search callback and Config.Logger instead of an async delegate and ILoggerFactory. A nil Logger disables provider diagnostics, matching the .NET behavior when no logger factory is supplied."
           }
         }
       },
@@ -15175,24 +15180,27 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "new(textsearch.State)",
+          "go_symbols": [
+            "agent/textsearch.State"
+          ],
+          "status": "mapped"
         },
         "properties": {
           "RecentMessagesText": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.State.RecentMessagesText"
+            ],
+            "status": "mapped"
           }
         },
         "constructors": {
           "TextSearchProviderState()": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "new(textsearch.State)",
+            "go_symbols": [
+              "agent/textsearch.State"
+            ],
+            "status": "mapped"
           }
         }
       },
@@ -15200,39 +15208,45 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "textsearch.Result{Text: \"Retrieved context\"}",
+          "go_symbols": [
+            "agent/textsearch.Result"
+          ],
+          "status": "mapped"
         },
         "properties": {
           "RawRepresentation": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Result.RawRepresentation"
+            ],
+            "status": "mapped"
           },
           "SourceLink": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Result.SourceLink"
+            ],
+            "status": "mapped"
           },
           "SourceName": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Result.SourceName"
+            ],
+            "status": "mapped"
           },
           "Text": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Result.Text"
+            ],
+            "status": "mapped"
           }
         },
         "constructors": {
           "TextSearchResult()": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "new(textsearch.Result)",
+            "go_symbols": [
+              "agent/textsearch.Result"
+            ],
+            "status": "mapped"
           }
         }
       },
@@ -15240,89 +15254,111 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "textsearch.Config{}",
+          "go_symbols": [
+            "agent/textsearch.Config"
+          ],
+          "status": "mapped"
         },
         "properties": {
           "CitationsPrompt": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Config.CitationsPrompt"
+            ],
+            "status": "mapped"
           },
           "ContextFormatter": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Config.ContextFormatter"
+            ],
+            "status": "adapted",
+            "note": "Go formatter callbacks accept a result slice and return string/error. Returned errors are logged and suppressed for automatic searches, and propagated by the on-demand tool."
           },
           "ContextPrompt": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Config.ContextPrompt"
+            ],
+            "status": "mapped"
           },
           "EnableSensitiveTelemetryData": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Config.LogSensitiveData"
+            ],
+            "status": "mapped"
           },
           "FunctionToolDescription": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Config.FunctionToolDescription"
+            ],
+            "status": "mapped"
           },
           "FunctionToolName": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Config.FunctionToolName"
+            ],
+            "status": "mapped"
           },
           "RecentMessageMemoryLimit": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Config.RecentMessageMemoryLimit"
+            ],
+            "status": "partial",
+            "note": "Go disables both retention and use of previously stored memory at zero, honoring the documented disabled-memory contract. The pinned .NET implementation disables storage at zero but still prepends existing RecentMessagesText during automatic searches."
           },
           "RecentMessageRolesIncluded": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Config.RecentMessageRolesIncluded"
+            ],
+            "status": "mapped"
           },
           "Redactor": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Config.Redactor"
+            ],
+            "status": "adapted",
+            "note": "A string-transform callback replaces the Redactor object. The default placeholder is <redacted>, and LogSensitiveData bypasses any configured redactor."
           },
           "SearchInputMessageFilter": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Config.SearchInputMessageFilter"
+            ],
+            "status": "adapted",
+            "note": "Uses a context-aware messagefilter.Filter returning messages/error. Nil defaults to external-only input, and filtering operates on a copy of the request slice."
           },
           "SearchTime": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Config.SearchTime"
+            ],
+            "status": "mapped"
           },
           "StateKey": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Config.StateKey"
+            ],
+            "status": "mapped"
           },
           "StorageInputRequestMessageFilter": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Config.StorageInputRequestMessageFilter"
+            ],
+            "status": "adapted",
+            "note": "Uses a context-aware messagefilter.Filter returning messages/error. Nil defaults to external-only request messages before role selection and memory storage."
           },
           "StorageInputResponseMessageFilter": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": [
+              "agent/textsearch.Config.StorageInputResponseMessageFilter"
+            ],
+            "status": "adapted",
+            "note": "Uses a context-aware messagefilter.Filter returning messages/error. Nil passes all response messages through before role selection and memory storage."
           }
         },
         "constructors": {
           "TextSearchProviderOptions()": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "textsearch.Config{}",
+            "go_symbols": [
+              "agent/textsearch.Config"
+            ],
+            "status": "mapped"
           }
         }
       },
@@ -15331,23 +15367,26 @@
         "assembly": "Microsoft.Agents.AI",
         "kind": "enum",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "var behavior textsearch.SearchBehavior",
+          "go_symbols": [
+            "agent/textsearch.SearchBehavior"
+          ],
+          "status": "mapped"
         },
         "constants": {
           "BeforeAIInvoke": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "textsearch.BeforeInvoke",
+            "go_symbols": [
+              "agent/textsearch.BeforeInvoke"
+            ],
+            "status": "mapped"
           },
           "OnDemandFunctionCalling": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "textsearch.OnDemandFunctionCalling",
+            "go_symbols": [
+              "agent/textsearch.OnDemandFunctionCalling"
+            ],
+            "status": "mapped"
           }
         }
       },

@@ -58,6 +58,8 @@ For a detailed .NET-to-Go feature comparison, see the [.NET and Go SDK feature c
 - **Declarative Agents**: Not implemented yet in the Go SDK.
 - **Agent Skills**: Build domain-specific knowledge bases from files, inline definitions, and scripts for agents to discover and use.
   - [Skills examples](./examples/02-agents/skills/) | [Skills package](./agent/skills/)
+- **Text Search (RAG)**: Retrieve and cite external knowledge automatically before agent runs or through an on-demand search tool, with optional session-backed recent-message memory.
+  - [Text search package](./agent/textsearch/) | [RAG sample](./examples/02-agents/rag/step03_custom_rag_data_source/)
 - **AF Labs**: Not implemented yet in the Go SDK.
 - **DevUI**: Not implemented yet in the Go SDK.
 
