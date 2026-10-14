@@ -43,6 +43,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
+	"github.com/microsoft/agent-framework-go/agent/textsearch"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
@@ -74,6 +75,8 @@ var featureActivationCases = []struct {
 	{"agent-session", []int{0, 13}, nil},
 	{"history-provide", []int{13}, nil},
 	{"history-store", []int{13}, nil},
+	{"text-search", []int{6}, nil},
+	{"text-search-on-demand", []int{6}, nil},
 	{"compaction-context", []int{9}, nil},
 	{"compaction-history", []int{9}, nil},
 	{"compaction-store", []int{9}, nil},
@@ -375,6 +378,18 @@ func runFeatureActivation(t *testing.T, name string) {
 				return p.Invoked(ctx, agent.InvokedContext{RequestMessages: invoking.Messages, Options: invoking.Options})
 			}
 			_, err := p.Invoking(ctx, invoking)
+			return err
+		}
+	case "text-search", "text-search-on-demand":
+		config := textsearch.Config{}
+		if strings.HasSuffix(name, "on-demand") {
+			config.SearchTime = textsearch.OnDemandFunctionCalling
+		}
+		p := textsearch.NewContextProvider(func(context.Context, string) ([]textsearch.Result, error) {
+			return nil, nil
+		}, config)
+		activate = func() error {
+			_, _, err := p.Invoking(ctx, invoking)
 			return err
 		}
 	case "compaction-context":

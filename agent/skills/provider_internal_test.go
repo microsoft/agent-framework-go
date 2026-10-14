@@ -20,8 +20,8 @@ func TestProvider_CacheWaiterBuildPanicIsReturnedAsError(t *testing.T) {
 		sources: []Source{SourceFunc(func(context.Context) ([]*Skill, error) {
 			panic("boom")
 		})},
-		logger:  slog.New(slog.DiscardHandler),
-		loading: loading,
+		logger: slog.New(slog.DiscardHandler),
+		caches: map[string]*providerCache{"": {loading: loading}},
 	}
 
 	defer func() {

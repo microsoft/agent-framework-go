@@ -81,7 +81,11 @@ func NewAgent(aclient anthropic.Client, config AgentConfig) *agent.Agent {
 }
 
 func (a *client) formatOf(v any) (agent.ResponseFormat, error) {
-	return jsonformat.ForType(reflect.TypeOf(v))
+	format, err := jsonformat.ForType(reflect.TypeOf(v))
+	if err != nil {
+		return agent.ResponseFormat{}, err
+	}
+	return jsonformat.WrapNonObjectSchema(format)
 }
 
 func (a *client) unmarshal(f agent.ResponseFormat, data []byte, v any) error {
@@ -89,7 +93,7 @@ func (a *client) unmarshal(f agent.ResponseFormat, data []byte, v any) error {
 	if err != nil {
 		return err
 	}
-	return format.Unmarshal(data, v)
+	return format.UnmarshalStructuredOutput(data, v)
 }
 
 func (a *client) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {

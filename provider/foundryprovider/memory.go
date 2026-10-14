@@ -221,6 +221,9 @@ func (p *MemoryProvider) provide(ctx context.Context, invoking agent.InvokingCon
 	}
 	result, err := p.client.SearchMemories(ctx, p.memoryStoreName, scope, searchOptions)
 	if err != nil {
+		if isCallerCancellation(ctx, err) {
+			return nil, nil, ctx.Err()
+		}
 		p.log(ctx, slog.LevelError, "foundrymemory: failed to search memories", "memory_store", p.memoryStoreName, "error", err)
 		return nil, nil, nil
 	}
@@ -250,11 +253,18 @@ func (p *MemoryProvider) store(ctx context.Context, invoked agent.InvokedContext
 		UpdateDelay: &p.config.UpdateDelay,
 	}
 	if _, err := p.client.BeginUpdateMemories(ctx, p.memoryStoreName, scope, updateOptions); err != nil {
+		if isCallerCancellation(ctx, err) {
+			return ctx.Err()
+		}
 		p.log(ctx, slog.LevelError, "foundrymemory: failed to update memories", "memory_store", p.memoryStoreName, "count", len(items), "error", err)
 		return nil
 	}
 	p.log(ctx, slog.LevelInfo, "foundrymemory: submitted memory update", "memory_store", p.memoryStoreName, "count", len(items))
 	return nil
+}
+
+func isCallerCancellation(ctx context.Context, err error) bool {
+	return ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
 }
 
 func (p *MemoryProvider) log(ctx context.Context, level slog.Level, msg string, args ...any) {

@@ -3,10 +3,15 @@
 package compaction_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"runtime"
 	"slices"
+	"strconv"
+	"sync"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -194,6 +199,47 @@ func TestTruncationStrategy_PreservesRawJSONBelowTokenLimit(t *testing.T) {
 			}
 			if got, want := len(index.IncludedMessages()), len(messages); got != want {
 				t.Errorf("retained %d messages, want %d", got, want)
+			}
+		})
+	}
+}
+
+func TestTruncationStrategy_PreservesDataContentBelowTokenLimit(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		size int
+	}{
+		{name: "empty"},
+		{name: "no padding", size: 3000},
+		{name: "two padding characters", size: 3001},
+		{name: "one padding character", size: 3002},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := message.NewDataContent(bytes.Repeat([]byte("x"), tt.size), "text/plain")
+			if err != nil {
+				t.Fatal(err)
+			}
+			data.Name = "notes.txt"
+			messages := []*message.Message{
+				{Role: message.RoleUser, Contents: []message.Content{data}},
+				textMessage(message.RoleAssistant, "Received."),
+				textMessage(message.RoleUser, "Summarize it."),
+			}
+			index := compaction.CreateMessageIndex(messages, nil)
+			want := tt.size + len(data.MediaType) + len(data.Name)
+			want += len(messages[1].String()) + len(messages[2].String())
+			if got := index.TotalByteCount(); got != want {
+				t.Errorf("TotalByteCount = %d, want %d", got, want)
+			}
+			strategy := &compaction.TruncationStrategy{
+				Trigger:                compaction.TokensExceed(900),
+				MinimumPreservedGroups: new(1),
+			}
+			if compacted, err := strategy.Compact(t.Context(), index); err != nil || compacted {
+				t.Fatalf("Compact = %t, %v; want no compaction below the token limit", compacted, err)
+			}
+			if !slices.Equal(index.IncludedMessages(), messages) {
+				t.Error("compaction did not preserve the original messages")
 			}
 		})
 	}
@@ -688,6 +734,26 @@ func TestSummarizationStrategy_PropagatesCancellation(t *testing.T) {
 	}
 }
 
+func TestNewContextProvider_PanicsWithBlankStateKey(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config compaction.ContextProviderConfig
+	}{
+		{name: "explicit state key", config: compaction.ContextProviderConfig{StateKey: " "}},
+		{name: "default state key from source ID", config: compaction.ContextProviderConfig{SourceID: "\t"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected blank compaction state key to panic at construction")
+				}
+			}()
+			tc.config.Strategy = new(compaction.TruncationStrategy)
+			compaction.NewContextProvider(tc.config)
+		})
+	}
+}
+
 func TestNewProvider_CompactsAndPersistsIndex(t *testing.T) {
 	session := agenttest.CreateSession()
 	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
@@ -722,6 +788,69 @@ func TestNewProvider_CompactsAndPersistsIndex(t *testing.T) {
 	}
 	if len(state.MessageGroups) != 6 {
 		t.Fatalf("expected persisted index to preserve all groups, got %d", len(state.MessageGroups))
+	}
+}
+
+func TestNewProvider_ConcurrentInvokingPreservesState(t *testing.T) {
+	session := agenttest.CreateSession()
+	const invocations = 64
+	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
+		SourceID: "concurrent-compaction",
+		Strategy: strategyFunc(func(_ context.Context, index *compaction.MessageIndex) (bool, error) {
+			if len(index.Groups) != 1 {
+				return false, fmt.Errorf("groups = %d, want one user group", len(index.Groups))
+			}
+			previous := 0
+			if index.Groups[0].ExcludeReason != "" {
+				var err error
+				previous, err = strconv.Atoi(index.Groups[0].ExcludeReason)
+				if err != nil {
+					return false, err
+				}
+			}
+			runtime.Gosched()
+			index.Groups[0].ExcludeReason = strconv.Itoa(previous + 1)
+			return true, nil
+		}),
+	})
+
+	start := make(chan struct{})
+	errs := make(chan error, invocations)
+	var wg sync.WaitGroup
+	wg.Add(invocations)
+	for range invocations {
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _, err := invokeProvider(provider, context.Background(), []*message.Message{textMessage(message.RoleUser, "request")}, agent.WithSession(session))
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		MessageGroups []*compaction.MessageGroup `json:"messagegroups"`
+	}
+	if ok, err := restored.Get("concurrent-compaction", &state); err != nil || !ok || len(state.MessageGroups) != 1 {
+		t.Fatalf("stored groups = %v, found = %v, err = %v; want one group", state.MessageGroups, ok, err)
+	}
+	if got := state.MessageGroups[0].ExcludeReason; got != strconv.Itoa(invocations) {
+		t.Fatalf("compaction updates = %q, want %d", got, invocations)
 	}
 }
 

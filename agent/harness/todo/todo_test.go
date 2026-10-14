@@ -651,6 +651,57 @@ func TestProvide_CustomTodoListMessageBuilder(t *testing.T) {
 	}
 }
 
+func TestProvide_CustomBuilderReadsStableTodoSnapshot(t *testing.T) {
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	block := false
+	p := todo.New(&todo.Options{
+		TodoListMessageBuilder: func(items []todo.Item) string {
+			if !block {
+				return "initial"
+			}
+			close(ready)
+			<-release
+			if len(items) != 1 {
+				return fmt.Sprintf("unexpected todo count: %d", len(items))
+			}
+			return fmt.Sprintf("complete: %v", items[0].IsComplete)
+		},
+	})
+	opts := sessionOpts()
+	_, outOpts, err := invokeProvider(p, t.Context(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Task A"}]}`)
+
+	block = true
+	type result struct {
+		messages []*message.Message
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		messages, _, err := invokeProvider(p, t.Context(), newMessages("next"), opts...)
+		done <- result{messages: messages, err: err}
+	}()
+	<-ready
+	func() {
+		defer close(release)
+		callTool(t, outOpts, "todos_complete", `{"Arg0":[{"id":1,"reason":"done"}]}`)
+	}()
+	received := <-done
+	if received.err != nil {
+		t.Fatal(received.err)
+	}
+	if len(received.messages) != 2 || received.messages[1].String() != "complete: false" {
+		t.Fatalf("todo summary = %v, want snapshot before completion", received.messages)
+	}
+	if remaining := p.RemainingTodos(mustSession(t, opts)); len(remaining) != 0 {
+		t.Fatalf("remaining todos = %v, want none", remaining)
+	}
+}
+
 // 22. ProvideAIContextAsync_SuppressWinsOverBuilder
 func TestProvide_SuppressWinsOverBuilder(t *testing.T) {
 	var builderCalled bool

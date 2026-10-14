@@ -5,10 +5,12 @@ package openaiprovider_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -313,6 +315,294 @@ func TestChatResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
 	a := newTestClient(server)
 	if _, err := a.RunText(t.Context(), "hello", agent.WithResponseFormat(format)).Collect(); err != nil {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+type structuredOutputAnimal struct {
+	ID       int                     `json:"id"`
+	FullName string                  `json:"fullName"`
+	Species  structuredOutputSpecies `json:"species"`
+}
+
+type structuredOutputSpecies string
+
+type structuredOutputCase struct {
+	property, propertyType, response string
+	newTarget                        func() any
+	want                             any
+}
+
+func TestStructuredOutputObjectEndToEnd(t *testing.T) {
+	testStructuredOutputEndToEnd(t, structuredOutputCase{
+		property: "id", propertyType: "integer", response: `{"id":99,"fullName":"Leo","species":"Bear"}`,
+		newTarget: func() any { return new(structuredOutputAnimal) },
+		want:      &structuredOutputAnimal{ID: 99, FullName: "Leo", Species: "Bear"},
+	})
+}
+
+func TestStructuredOutputPrimitiveEndToEnd(t *testing.T) {
+	testStructuredOutputEndToEnd(t, structuredOutputCase{
+		property: "data", propertyType: "integer", response: `{"data":123}`,
+		newTarget: func() any { return new(int) }, want: new(123),
+	})
+}
+
+func TestStructuredOutputArrayEndToEnd(t *testing.T) {
+	testStructuredOutputEndToEnd(t, structuredOutputCase{
+		property: "data", propertyType: "array", response: `{"data":["one","two","three"]}`,
+		newTarget: func() any { return new([]string) }, want: &[]string{"one", "two", "three"},
+	})
+}
+
+func TestStructuredOutputEnumEndToEnd(t *testing.T) {
+	testStructuredOutputEndToEnd(t, structuredOutputCase{
+		property: "data", propertyType: "string", response: `{"data":"Bear"}`,
+		newTarget: func() any { return new(structuredOutputSpecies) }, want: new(structuredOutputSpecies("Bear")),
+	})
+}
+
+func TestStructuredOutputNestedArrayEndToEnd(t *testing.T) {
+	type item struct {
+		Label string `json:"label"`
+	}
+	testStructuredOutputEndToEnd(t, structuredOutputCase{
+		property: "data", propertyType: "array", response: `{"data":[{"label":"value"}]}`,
+		newTarget: func() any { return new([]item) }, want: &[]item{{Label: "value"}},
+	})
+}
+
+func TestStructuredOutputIgnoresExtraEnvelopeProperties(t *testing.T) {
+	testStructuredOutputEndToEnd(t, structuredOutputCase{
+		property: "data", propertyType: "integer", response: `{"data":42,"extra":true}`,
+		newTarget: func() any { return new(int) }, want: new(42),
+	})
+}
+
+func TestStructuredOutputUsesFirstUnwrappedJSONValue(t *testing.T) {
+	type payload struct {
+		Value int `json:"value"`
+	}
+	testStructuredOutputEndToEnd(t, structuredOutputCase{
+		property: "value", propertyType: "integer", response: `{"value":42} {"value":99}`,
+		newTarget: func() any { return new(payload) }, want: &payload{Value: 42},
+	})
+}
+
+func testStructuredOutputEndToEnd(t *testing.T, tc structuredOutputCase) {
+	for _, provider := range []struct {
+		name     string
+		newAgent func(*httptest.Server) *agent.Agent
+	}{
+		{name: "chat", newAgent: newTestClient},
+		{name: "responses", newAgent: func(server *httptest.Server) *agent.Agent {
+			return newTestResponsesClient(server, "gpt-4o-mini")
+		}},
+	} {
+		t.Run(provider.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					ResponseFormat struct {
+						JSONSchema struct {
+							Schema json.RawMessage `json:"schema"`
+							Strict bool            `json:"strict"`
+						} `json:"json_schema"`
+					} `json:"response_format"`
+					Text struct {
+						Format struct {
+							Schema json.RawMessage `json:"schema"`
+							Strict bool            `json:"strict"`
+						} `json:"format"`
+					} `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("decode request: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				rawSchema := request.ResponseFormat.JSONSchema.Schema
+				strict := request.ResponseFormat.JSONSchema.Strict
+				if provider.name == "responses" {
+					rawSchema = request.Text.Format.Schema
+					strict = request.Text.Format.Strict
+				}
+				var schema struct {
+					Type                 string                     `json:"type"`
+					Properties           map[string]json.RawMessage `json:"properties"`
+					Required             []string                   `json:"required"`
+					AdditionalProperties *bool                      `json:"additionalProperties"`
+				}
+				if err := json.Unmarshal(rawSchema, &schema); err != nil {
+					t.Errorf("decode response schema: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if !strict || schema.Type != "object" || schema.AdditionalProperties == nil || *schema.AdditionalProperties {
+					t.Errorf("wire format strict=%v, schema=%s, want strict closed object", strict, rawSchema)
+				}
+				property, ok := schema.Properties[tc.property]
+				if !ok {
+					t.Errorf("schema property %q missing: %s", tc.property, rawSchema)
+				} else {
+					var nested struct {
+						Type any `json:"type"`
+					}
+					if err := json.Unmarshal(property, &nested); err != nil {
+						t.Errorf("decode property %q: %v", tc.property, err)
+					} else if types, ok := nested.Type.([]any); ok {
+						if !slices.Contains(types, any(tc.propertyType)) {
+							t.Errorf("property %q type = %v, want %s", tc.property, nested.Type, tc.propertyType)
+						}
+					} else if nested.Type != tc.propertyType {
+						t.Errorf("property %q type = %v, want %s", tc.property, nested.Type, tc.propertyType)
+					}
+				}
+				if tc.property == "data" {
+					if !reflect.DeepEqual(schema.Required, []string{"data"}) {
+						t.Errorf("required = %v, want [data]", schema.Required)
+					}
+				} else if _, ok := schema.Properties["data"]; ok {
+					t.Error("object schema unexpectedly wrapped in data")
+				}
+				text, err := json.Marshal(tc.response)
+				if err != nil {
+					t.Errorf("encode response text: %v", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if provider.name == "chat" {
+					_, err = fmt.Fprintf(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1727888631,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":%s},"finish_reason":"stop"}]}`, text)
+				} else {
+					_, err = fmt.Fprintf(w, `{"id":"resp_001","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[{"type":"message","id":"msg_001","status":"completed","role":"assistant","content":[{"type":"output_text","text":%s,"annotations":[]}]}]}`, text)
+				}
+				if err != nil {
+					t.Errorf("write response: %v", err)
+				}
+			}))
+			defer server.Close()
+
+			out := tc.newTarget()
+			response, err := provider.newAgent(server).RunText(t.Context(), "hello", agent.WithStructuredOutput(out)).Collect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(out, tc.want) {
+				t.Errorf("structured output = %#v, want %#v", out, tc.want)
+			}
+			if got := response.String(); got != tc.response {
+				t.Errorf("response text = %q, want %q", got, tc.response)
+			}
+		})
+	}
+}
+
+func TestStructuredOutputNonObjectStreaming(t *testing.T) {
+	for _, provider := range []struct {
+		name     string
+		newAgent func(*httptest.Server) *agent.Agent
+	}{
+		{name: "chat", newAgent: newTestClient},
+		{name: "responses", newAgent: func(server *httptest.Server) *agent.Agent {
+			return newTestResponsesClient(server, "gpt-4o-mini")
+		}},
+	} {
+		t.Run(provider.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Stream         bool `json:"stream"`
+					ResponseFormat struct {
+						JSONSchema struct {
+							Schema json.RawMessage `json:"schema"`
+							Strict bool            `json:"strict"`
+						} `json:"json_schema"`
+					} `json:"response_format"`
+					Text struct {
+						Format struct {
+							Schema json.RawMessage `json:"schema"`
+							Strict bool            `json:"strict"`
+						} `json:"format"`
+					} `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("decode request: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if !request.Stream {
+					t.Error("streaming request did not set stream=true")
+				}
+				rawSchema, strict := request.ResponseFormat.JSONSchema.Schema, request.ResponseFormat.JSONSchema.Strict
+				if provider.name == "responses" {
+					rawSchema, strict = request.Text.Format.Schema, request.Text.Format.Strict
+				}
+				var schema struct {
+					Type                 string                     `json:"type"`
+					Properties           map[string]json.RawMessage `json:"properties"`
+					Required             []string                   `json:"required"`
+					AdditionalProperties *bool                      `json:"additionalProperties"`
+				}
+				if err := json.Unmarshal(rawSchema, &schema); err != nil {
+					t.Errorf("decode streaming response schema: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				var dataSchema struct {
+					Type string `json:"type"`
+				}
+				if err := json.Unmarshal(schema.Properties["data"], &dataSchema); err != nil {
+					t.Errorf("decode data schema: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if !strict || schema.Type != "object" || !slices.Equal(schema.Required, []string{"data"}) ||
+					schema.AdditionalProperties == nil || *schema.AdditionalProperties || dataSchema.Type != "integer" {
+					t.Errorf("streaming response format strict=%v, schema=%s, want closed object with required integer data", strict, rawSchema)
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				if provider.name == "chat" {
+					for _, part := range []string{`{"data":`, `42}`} {
+						if _, err := fmt.Fprintf(w, "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1727889370,\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":null}]}\n\n", part); err != nil {
+							t.Errorf("write chat stream: %v", err)
+							return
+						}
+					}
+					_, _ = io.WriteString(w, "data: [DONE]\n\n")
+					return
+				}
+				events := []string{
+					`event: response.created
+data: {"type":"response.created","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}`,
+					`event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_001","status":"in_progress","role":"assistant","content":[]}}`,
+				}
+				for _, event := range events {
+					if _, err := fmt.Fprintf(w, "%s\n\n", event); err != nil {
+						t.Errorf("write responses event: %v", err)
+						return
+					}
+				}
+				for _, part := range []string{`{"data":`, `42}`} {
+					if _, err := fmt.Fprintf(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_001\",\"output_index\":0,\"content_index\":0,\"delta\":%q}\n\n", part); err != nil {
+						t.Errorf("write responses delta: %v", err)
+						return
+					}
+				}
+				_, _ = io.WriteString(w, `event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[]}}
+
+`)
+			}))
+			defer server.Close()
+
+			var output int
+			response, err := provider.newAgent(server).RunText(t.Context(), "hello", agent.WithStructuredOutput(&output), agent.Stream(true)).Collect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if output != 42 || response.String() != `{"data":42}` {
+				t.Fatalf("streamed output = %d, response text = %q; want 42 and wrapped JSON", output, response.String())
+			}
+		})
 	}
 }
 
