@@ -1,13 +1,14 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// Package filestore provides root-confined text storage for agents.
+// Package filestore provides SDK-internal root-confined text storage for agents.
 //
 // Store paths are relative to a store root. An empty directory names the root.
 // FileSystemStore creates missing directories and confines operations to its
 // root, rejecting absolute paths and paths that escape the root. Relative
 // symbolic links are followed only when they remain within the root.
 // Read and Delete report missing files with errors wrapping fs.ErrNotExist.
-// ListChildren returns only direct regular files, not directories or symbolic links.
+// ListChildren returns only direct regular files, not directories, symbolic links,
+// or names that cannot be addressed through the store's path normalization.
 //
 // Contexts are checked before filesystem operations and during enumeration.
 // A filesystem call already in progress cannot be interrupted.
@@ -46,6 +47,7 @@ type Store interface {
 	// ListChildren returns sorted names of regular files directly under directory.
 	// Names are relative to that directory, without path separators. An empty
 	// directory selects the root; a missing directory returns an empty list.
+	// Names that cannot be addressed through the store's paths are omitted.
 	ListChildren(ctx context.Context, directory string) ([]string, error)
 
 	// CreateDirectory ensures a directory and its parents exist.
@@ -149,7 +151,8 @@ func (s *FileSystemStore) Delete(ctx context.Context, name string) error {
 }
 
 // ListChildren returns sorted names of regular files directly under directory.
-// Directories and symbolic links are omitted. A missing directory is empty.
+// Directories, symbolic links and unaddressable names are omitted.
+// A missing directory is empty.
 func (s *FileSystemStore) ListChildren(ctx context.Context, directory string) ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -181,11 +184,8 @@ func (s *FileSystemStore) ListChildren(ctx context.Context, directory string) ([
 		}
 		if info.Mode().IsRegular() {
 			name, err := storepaths.Normalize(entry.Name(), false)
-			if err != nil {
-				return nil, fmt.Errorf("filestore: %w", err)
-			}
-			if name != entry.Name() {
-				return nil, fmt.Errorf("filestore: unsupported file name %q: %w", entry.Name(), fs.ErrInvalid)
+			if err != nil || name != entry.Name() {
+				continue
 			}
 			names = append(names, name)
 		}

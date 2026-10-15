@@ -13511,10 +13511,10 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "filememory.New(store, filememory.Config{})",
+          "go": "filememory.New(rootDirectory, filememory.Config{})",
           "go_symbols": ["agent/harness/filememory.New", "agent/harness/filememory.Provider"],
-          "status": "adapted",
-          "note": "The Go context provider supplies seven memory tools, session working-folder state and index injection. It uses the minimal filestore.Store contract and shared text helpers rather than an inheritable storage/search base class. Description sidecars append _description.md to the full filename to avoid collisions across extensions."
+          "status": "partial",
+          "note": "The Go context provider supplies seven memory tools, session working-folder state and index injection over SDK-internal filesystem storage. Public custom-store injection is deferred while the experimental storage contract remains internal. Description sidecars append _description.md to the full filename to avoid collisions across extensions."
         },
         "properties": {
           "StateKeys": {
@@ -13524,18 +13524,18 @@
         },
         "methods": {
           "Dispose() -> void": {
-            "go": "",
-            "go_symbols": [],
-            "status": "intentional",
-            "note": "Go provider synchronization needs no disposal. The caller owns the backing store and closes its filesystem handle; the provider does not dispose a shared store."
+            "go": "provider.Close()",
+            "go_symbols": ["agent/harness/filememory.Provider.Close"],
+            "status": "adapted",
+            "note": "The Go provider owns and closes its filesystem root handle. Its synchronization needs no separate disposal."
           }
         },
         "constructors": {
           "FileMemoryProvider(AgentFileStore, Func<AgentSession, FileMemoryState>, FileMemoryProviderOptions)": {
-            "go": "filememory.New(store, filememory.Config{Instructions: new(\"Remember useful notes.\"), StateInitializer: initializeState})",
-            "go_symbols": ["agent/harness/filememory.New", "agent/harness/filememory.Config", "agent/harness/filememory.Config.Instructions", "agent/harness/filememory.Config.StateInitializer", "agent/harness/filememory.State", "agent/harness/filestore.Store"],
-            "status": "adapted",
-            "note": "The mandatory store is a Go interface. Optional instructions and the synchronous state-initializer callback are supplied in a value Config; the initializer returns State by value."
+            "go": "filememory.New(rootDirectory, filememory.Config{Instructions: new(\"Remember useful notes.\"), StateInitializer: initializeState})",
+            "go_symbols": ["agent/harness/filememory.New", "agent/harness/filememory.Config", "agent/harness/filememory.Config.Instructions", "agent/harness/filememory.Config.StateInitializer", "agent/harness/filememory.State"],
+            "status": "partial",
+            "note": "The constructor takes a filesystem root directory, returns an error if storage cannot be opened, and owns the storage lifetime. Optional instructions and the synchronous state-initializer callback use a value Config. Public custom-store injection is deferred while the experimental storage contract remains internal."
           }
         },
         "constants": {

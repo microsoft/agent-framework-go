@@ -11,7 +11,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/microsoft/agent-framework-go/agent/harness/filestore"
+	"github.com/microsoft/agent-framework-go/internal/filestore"
 	"github.com/microsoft/agent-framework-go/internal/storepaths"
 )
 
@@ -115,9 +115,18 @@ func compileGlob(pattern string) (*regexp.Regexp, error) {
 		return nil, nil
 	}
 	pattern = strings.ReplaceAll(pattern, "\\", "/")
-	// Searches are flat; a leading **/ can also match a direct child.
-	for strings.HasPrefix(pattern, "**/") {
-		pattern = strings.TrimPrefix(pattern, "**/")
+	// These prefixes all select the working folder for a flat search.
+	for {
+		pattern = strings.TrimLeft(pattern, "/")
+		if strings.HasPrefix(pattern, "./") {
+			pattern = strings.TrimPrefix(pattern, "./")
+			continue
+		}
+		if strings.HasPrefix(pattern, "**/") {
+			pattern = strings.TrimPrefix(pattern, "**/")
+			continue
+		}
+		break
 	}
 	if pattern == "*.*" {
 		pattern = "*"

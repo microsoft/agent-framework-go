@@ -36,7 +36,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/compaction"
 	"github.com/microsoft/agent-framework-go/agent/harness/agentmode"
 	"github.com/microsoft/agent-framework-go/agent/harness/filememory"
-	"github.com/microsoft/agent-framework-go/agent/harness/filestore"
 	"github.com/microsoft/agent-framework-go/agent/harness/loop"
 	"github.com/microsoft/agent-framework-go/agent/harness/todo"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
@@ -423,16 +422,15 @@ func runFeatureActivation(t *testing.T, name string) {
 		p := todo.New(nil)
 		activate = func() error { _, _, err := p.Invoking(ctx, invoking); return err }
 	case "file-memory":
-		store, err := filestore.NewFileSystemStore(t.TempDir())
+		p, err := filememory.New(t.TempDir(), filememory.Config{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
-			if err := store.Close(); err != nil {
+			if err := p.Close(); err != nil {
 				t.Error(err)
 			}
 		})
-		p := filememory.New(store, filememory.Config{})
 		activate = func() error { _, _, err := p.Invoking(ctx, invoking); return err }
 	case "agent-mode":
 		p := agentmode.New(agentmode.Config{})

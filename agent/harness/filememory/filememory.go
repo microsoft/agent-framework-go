@@ -4,7 +4,7 @@
 // file-based agent memory.
 //
 // Memory files have flat names within a working folder supplied by session
-// state. The default folder is the store root, so sessions share memories unless
+// state. The default folder is the root directory, so sessions share memories unless
 // a StateInitializer selects separate folders. Descriptions are stored in hidden
 // companion files named by appending "_description.md" to the full memory
 // filename. A hidden memories.md index summarizes up to 50 files and is supplied
@@ -13,17 +13,20 @@
 // Searches are non-recursive and use Go regular expressions and case-insensitive
 // filename patterns. Filename patterns support literal text and * wildcards;
 // ? and brackets are literal characters. Backslashes are path separators, not
-// escape characters. A leading **/ can match a direct file, and *.* matches all
-// filenames, including those without extensions. Search matches and line edits
-// share 1-based line numbering and preserve each line's LF, CRLF, or CR terminator.
+// escape characters. Leading separators, ./ and **/ select the working folder;
+// *.* matches all filenames, including those without extensions.
+// Search matches and line edits share 1-based line numbering. Search results
+// retain each line's LF, CRLF or CR terminator. Edits insert replacement text
+// verbatim, so callers include any terminator they want to keep. An empty
+// replacement deletes the whole line, including its terminator.
 package filememory
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
-	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -31,7 +34,7 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/harness/filestore"
+	"github.com/microsoft/agent-framework-go/internal/filestore"
 	"github.com/microsoft/agent-framework-go/internal/storepaths"
 	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
@@ -77,7 +80,7 @@ const memoryIndexIntroduction = "The following is your memory index \u2014 a lis
 // Config configures a file memory provider.
 type Config struct {
 	// Instructions replaces the built-in instructions. Nil uses the defaults;
-	// a pointer to an empty string omits the provider's instructions.
+	// an empty or whitespace-only string omits the provider's instructions.
 	Instructions *string
 
 	// StateInitializer supplies state when the session has none. Nil uses an
@@ -88,6 +91,7 @@ type Config struct {
 
 // State holds the working folder for a session, relative to the store root.
 // Its zero value selects the store root.
+// Tools use the working folder selected at the start of each invocation.
 type State struct {
 	WorkingFolder string `json:"workingFolder"`
 }
@@ -102,7 +106,7 @@ type ListEntry struct {
 var _ agent.ContextProvider = (*Provider)(nil)
 
 // Provider supplies memory tools, instructions, and the current memory index.
-// Use New to create a provider. The caller owns the backing store's lifetime.
+// Use [New] to create a provider and [Provider.Close] to release its filesystem handle.
 // Provider is safe for concurrent use, including concurrent tool calls.
 type Provider struct {
 	provider         agent.ContextProvider
@@ -113,18 +117,26 @@ type Provider struct {
 	writeLock        *semaphore.Weighted
 }
 
-// New creates a file memory provider backed by store.
-// A zero Config uses built-in instructions and the store root as the working
-// folder. It panics if store is nil. Closing a filesystem store remains the
-// caller's responsibility.
+// New creates a file memory provider rooted at rootDirectory, creating the
+// directory if needed. New directories use permission 0700 and new files use
+// 0600; existing permissions are unchanged. The provider confines file access
+// to this root. Call [Provider.Close] when the provider is no longer needed.
+//
+// A zero Config uses built-in instructions and the root directory as the
+// working folder.
 //
 // Register the provider in [agent.Config.ContextProviders]. Custom backends
 // using automatic tool-invocation middleware must apply that middleware through
 // [agent.ProviderConfig.Middlewares], after context providers have supplied tools.
-func New(store filestore.Store, cfg Config) *Provider {
-	if store == nil || reflect.ValueOf(store).Kind() == reflect.Pointer && reflect.ValueOf(store).IsNil() {
-		panic("filememory: store is required")
+func New(rootDirectory string, cfg Config) (*Provider, error) {
+	store, err := filestore.NewFileSystemStore(rootDirectory)
+	if err != nil {
+		return nil, fmt.Errorf("filememory: create store: %w", err)
 	}
+	return newProvider(store, cfg), nil
+}
+
+func newProvider(store filestore.Store, cfg Config) *Provider {
 	p := &Provider{
 		store:            store,
 		instructions:     defaultInstructions,
@@ -139,6 +151,15 @@ func New(store filestore.Store, cfg Config) *Provider {
 		Provide:  p.provide,
 	})
 	return p
+}
+
+// Close releases the provider's filesystem handle. It is safe to call more than
+// once. Subsequent storage operations return an error wrapping [fs.ErrClosed].
+func (p *Provider) Close() error {
+	if store, ok := p.store.(io.Closer); ok {
+		return store.Close()
+	}
+	return nil
 }
 
 // Invoking adds memory instructions, tools and any existing memory index to
@@ -195,9 +216,11 @@ func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) 
 			return nil, nil, fmt.Errorf("filememory: create working folder: %w", err)
 		}
 	}
-	tools := p.createTools(session)
+	tools := p.createTools(state)
 	options := make([]agent.Option, 0, len(tools)+1)
-	options = append(options, agent.WithInstructions(p.instructions))
+	if strings.TrimSpace(p.instructions) != "" {
+		options = append(options, agent.WithInstructions(p.instructions))
+	}
 	for _, t := range tools {
 		options = append(options, agent.WithTool(t))
 	}
@@ -214,7 +237,7 @@ func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) 
 	return []*message.Message{message.NewText(memoryIndexIntroduction + index)}, options, nil
 }
 
-func (p *Provider) createTools(session *agent.Session) []tool.FuncTool {
+func (p *Provider) createTools(state State) []tool.FuncTool {
 	type fileInput struct {
 		FileName string `json:"fileName" jsonschema:"Flat memory filename, without directory separators."`
 	}
@@ -244,30 +267,26 @@ func (p *Provider) createTools(session *agent.Session) []tool.FuncTool {
 		functool.MustNew(functool.Config{
 			Name: WriteToolName, Description: "Write a memory file with the given name and content. Overwrites an existing file. An optional description helps with discovery.",
 		}, func(ctx context.Context, input writeInput) (string, error) {
-			return p.write(ctx, session, input.FileName, input.Content, input.Description)
+			return p.write(ctx, state, input.FileName, input.Content, input.Description)
 		}),
 		functool.MustNew(functool.Config{
 			Name: ReadFileToolName, Description: "Read a memory file. Returns its content or a not-found message. Line numbers count LF, CRLF, or lone CR terminators without an extra empty final line.",
 		}, func(ctx context.Context, input fileInput) (string, error) {
-			return p.read(ctx, session, input.FileName)
+			return p.read(ctx, state, input.FileName)
 		}),
 		functool.MustNew(functool.Config{
 			Name: DeleteFileToolName, Description: "Delete a memory file and its companion description file.",
 		}, func(ctx context.Context, input fileInput) (string, error) {
-			return p.delete(ctx, session, input.FileName)
+			return p.delete(ctx, state, input.FileName)
 		}),
 		functool.MustNew(functool.Config{
 			Name: LsToolName, Description: "List memory files with optional descriptions. Optionally filter names by globPattern using * wildcards and literal filename text. Description files and the memory index are hidden.",
 		}, func(ctx context.Context, input listInput) ([]ListEntry, error) {
-			return p.list(ctx, session, input.GlobPattern)
+			return p.list(ctx, state, input.GlobPattern)
 		}),
 		functool.MustNew(functool.Config{
 			Name: GrepToolName, Description: "Search memory files with a case-insensitive Go regular expression and optional filename pattern using * wildcards. Returns filenames, snippets, and 1-based matching lines with their original terminators.",
 		}, func(ctx context.Context, input grepInput) ([]searchResult, error) {
-			state, err := p.getState(ctx, session)
-			if err != nil {
-				return nil, err
-			}
 			results, err := searchFiles(ctx, p.store, state.WorkingFolder, input.RegexPattern, input.GlobPattern)
 			if err != nil {
 				return nil, err
@@ -277,22 +296,18 @@ func (p *Provider) createTools(session *agent.Session) []tool.FuncTool {
 		functool.MustNew(functool.Config{
 			Name: ReplaceToolName, Description: "Replace literal text in a memory file. Fails if oldString is absent or occurs more than once unless replaceAll is true. Returns the replacement count.",
 		}, func(ctx context.Context, input replaceInput) (string, error) {
-			return p.replace(ctx, session, input.FileName, input.OldString, input.NewString, input.ReplaceAll)
+			return p.replace(ctx, state, input.FileName, input.OldString, input.NewString, input.ReplaceAll)
 		}),
 		functool.MustNew(functool.Config{
 			Name: ReplaceLinesToolName, Description: "Replace lines by 1-based line_number. new_line is literal text including any desired trailing newline; empty text deletes the whole line. Optional expected_line rejects stale edits. Duplicate and out-of-range line numbers fail.",
 		}, func(ctx context.Context, input replaceLinesInput) (string, error) {
-			return p.replaceLines(ctx, session, input.FileName, input.Edits)
+			return p.replaceLines(ctx, state, input.FileName, input.Edits)
 		}),
 	}
 }
 
-func (p *Provider) write(ctx context.Context, session *agent.Session, fileName, content, description string) (string, error) {
+func (p *Provider) write(ctx context.Context, state State, fileName, content, description string) (string, error) {
 	name, err := validateMemoryFileName(fileName)
-	if err != nil {
-		return "", err
-	}
-	state, err := p.getState(ctx, session)
 	if err != nil {
 		return "", err
 	}
@@ -321,12 +336,8 @@ func (p *Provider) write(ctx context.Context, session *agent.Session, fileName, 
 	return fmt.Sprintf("File '%s' written.", fileName), nil
 }
 
-func (p *Provider) read(ctx context.Context, session *agent.Session, fileName string) (string, error) {
+func (p *Provider) read(ctx context.Context, state State, fileName string) (string, error) {
 	name, err := validateMemoryFileName(fileName)
-	if err != nil {
-		return "", err
-	}
-	state, err := p.getState(ctx, session)
 	if err != nil {
 		return "", err
 	}
@@ -340,12 +351,8 @@ func (p *Provider) read(ctx context.Context, session *agent.Session, fileName st
 	return content, nil
 }
 
-func (p *Provider) delete(ctx context.Context, session *agent.Session, fileName string) (string, error) {
+func (p *Provider) delete(ctx context.Context, state State, fileName string) (string, error) {
 	name, err := validateMemoryFileName(fileName)
-	if err != nil {
-		return "", err
-	}
-	state, err := p.getState(ctx, session)
 	if err != nil {
 		return "", err
 	}
@@ -370,21 +377,13 @@ func (p *Provider) delete(ctx context.Context, session *agent.Session, fileName 
 	return fmt.Sprintf("File '%s' not found.", fileName), nil
 }
 
-func (p *Provider) list(ctx context.Context, session *agent.Session, globPattern string) ([]ListEntry, error) {
+func (p *Provider) list(ctx context.Context, state State, globPattern string) ([]ListEntry, error) {
 	if _, err := matchesGlob("", globPattern); err != nil {
-		return nil, err
-	}
-	state, err := p.getState(ctx, session)
-	if err != nil {
 		return nil, err
 	}
 	names, err := p.memoryNames(ctx, state.WorkingFolder)
 	if err != nil {
 		return nil, err
-	}
-	available := make(map[string]string, len(names))
-	for _, name := range names {
-		available[strings.ToLower(name)] = name
 	}
 	entries := make([]ListEntry, 0)
 	for _, name := range names {
@@ -402,23 +401,17 @@ func (p *Provider) list(ctx context.Context, session *agent.Session, globPattern
 			continue
 		}
 		entry := ListEntry{Name: name, Type: "file"}
-		if descriptionName, found := available[strings.ToLower(descriptionFileName(name))]; found {
-			entry.Description, err = p.store.Read(ctx, memoryPath(state.WorkingFolder, descriptionName))
-			if err != nil && !errors.Is(err, fs.ErrNotExist) {
-				return nil, fmt.Errorf("filememory: read description: %w", err)
-			}
+		entry.Description, err = p.store.Read(ctx, memoryPath(state.WorkingFolder, descriptionFileName(name)))
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("filememory: read description: %w", err)
 		}
 		entries = append(entries, entry)
 	}
 	return entries, nil
 }
 
-func (p *Provider) replace(ctx context.Context, session *agent.Session, fileName, oldString, newString string, replaceAll bool) (string, error) {
+func (p *Provider) replace(ctx context.Context, state State, fileName, oldString, newString string, replaceAll bool) (string, error) {
 	name, err := validateMemoryFileName(fileName)
-	if err != nil {
-		return "", err
-	}
-	state, err := p.getState(ctx, session)
 	if err != nil {
 		return "", err
 	}
@@ -443,12 +436,8 @@ func (p *Provider) replace(ctx context.Context, session *agent.Session, fileName
 	return fmt.Sprintf("Replaced %d occurrence(s) in '%s'.", count, fileName), nil
 }
 
-func (p *Provider) replaceLines(ctx context.Context, session *agent.Session, fileName string, edits []lineEdit) (string, error) {
+func (p *Provider) replaceLines(ctx context.Context, state State, fileName string, edits []lineEdit) (string, error) {
 	name, err := validateMemoryFileName(fileName)
-	if err != nil {
-		return "", err
-	}
-	state, err := p.getState(ctx, session)
 	if err != nil {
 		return "", err
 	}

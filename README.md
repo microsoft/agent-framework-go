@@ -151,6 +151,7 @@ func main() {
 
 - [Getting Started](./examples/01-get-started): progressive tutorial from hello world to workflows
 - [Agent Concepts](./examples/02-agents): deep-dive samples by topic, including tools, middleware, providers, observability, A2A, AG-UI, MCP, and skills
+- [File memory](./examples/02-agents/agents/step24_filememory): persist per-user memories across separate conversations. Run `go run ./examples/02-agents/agents/step24_filememory` from the repository root with `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL` set, after authenticating with `az login`. Files remain in `agent-memory/users/UID1` between runs.
 - [Workflows](./examples/03-workflows): multi-agent patterns, routing, checkpointing, observability, and workflow orchestration
 - [End-to-End](./examples/05-end-to-end): full applications and demos
 - [Feature Comparison](./docs/dotnet-go-sdk-feature-comparison.md): .NET and Go SDK feature parity notes

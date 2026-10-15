@@ -8,14 +8,17 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"unicode/utf8"
 
-	"github.com/microsoft/agent-framework-go/agent/harness/filestore"
+	"github.com/microsoft/agent-framework-go/internal/filestore"
 	"github.com/microsoft/agent-framework-go/internal/storepaths"
 )
 
@@ -157,7 +160,15 @@ func TestMatchesGlob(t *testing.T) {
 		{name: "notes.md", pattern: "research*"},
 		{name: "notes.md", pattern: "**/*.md", match: true},
 		{name: "notes.md", pattern: "**/**/notes.md", match: true},
+		{name: "notes.md", pattern: "./*.md", match: true},
+		{name: "notes.md", pattern: "/*.md", match: true},
+		{name: "notes.md", pattern: `\*.md`, match: true},
+		{name: "notes.md", pattern: "/./**/./*.md", match: true},
+		{name: "notes.md", pattern: ".//**//./*.md", match: true},
+		{name: "README", pattern: "/*.*", match: true},
+		{name: "README", pattern: `.\*.*`, match: true},
 		{name: "notes.md", pattern: "nested/*.md"},
+		{name: "notes.md", pattern: "nested/./*.md"},
 		{name: "anything", match: true},
 		{name: "anything", pattern: " \t", match: true},
 		{name: "\u03c2.md", pattern: "\u03a3.md", match: true},
@@ -264,6 +275,55 @@ func TestSearchFiles_UnicodeCaseInsensitiveGlob(t *testing.T) {
 	results, err := searchFiles(t.Context(), store, "", "matching", "\u03a3.md")
 	if err != nil || len(results) != 1 || results[0].FileName != "\u03c2.md" {
 		t.Fatalf("Unicode glob search = %+v, %v", results, err)
+	}
+}
+
+func TestSearchFiles_NormalizesPatternPrefixes(t *testing.T) {
+	store := &memoryStore{files: map[string]string{"notes.md": "match", "README": "match"}}
+	for _, pattern := range []string{"./*.md", "/*.md", `\*.md`, "/./**/*.md"} {
+		results, err := searchFiles(t.Context(), store, "", "match", pattern)
+		if err != nil || len(results) != 1 || results[0].FileName != "notes.md" {
+			t.Fatalf("search pattern %q = %+v, %v", pattern, results, err)
+		}
+	}
+	results, err := searchFiles(t.Context(), store, "", "match", "/*.*")
+	if err != nil || len(results) != 2 {
+		t.Fatalf("all-files pattern must include extensionless files: %+v, %v", results, err)
+	}
+	results, err = searchFiles(t.Context(), store, "", "match", "nested/*.md")
+	if err != nil || len(results) != 0 {
+		t.Fatalf("flat search must not match nested pattern: %+v, %v", results, err)
+	}
+}
+
+func TestSearchFiles_SkipsUnaddressableFilesystemEntries(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses filenames that Windows does not permit")
+	}
+	root := t.TempDir()
+	store, err := filestore.NewFileSystemStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	for _, name := range []string{`draft\notes.md`, "   "} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("match"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.Write(t.Context(), "notes.md", "match"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Write(t.Context(), "C:notes.md", "match"); err != nil {
+		t.Fatal(err)
+	}
+	results, err := searchFiles(t.Context(), store, "", "match", "*.md")
+	if err != nil || len(results) != 2 || results[0].FileName != "C:notes.md" || results[1].FileName != "notes.md" {
+		t.Fatalf("unsupported entries prevented a valid search: %+v, %v", results, err)
 	}
 }
 

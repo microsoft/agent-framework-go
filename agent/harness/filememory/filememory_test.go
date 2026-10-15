@@ -15,11 +15,13 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/harness/filestore"
+	"github.com/microsoft/agent-framework-go/agent/harness/todo"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
+	"github.com/microsoft/agent-framework-go/internal/filestore"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -45,7 +47,7 @@ func newMemoryFixture(t *testing.T, cfg Config) (*Provider, *memoryStore, *agent
 	t.Helper()
 	store := &memoryStore{files: make(map[string]string)}
 	session := &agent.Session{}
-	p := New(store, cfg)
+	p := newProvider(store, cfg)
 	return p, store, session, providerTools(t, p, session)
 }
 
@@ -89,17 +91,73 @@ func writeMemory(t *testing.T, tools map[string]tool.FuncTool, name, content, de
 	return callMemoryTool(t, tools, WriteToolName, string(args))
 }
 
-func TestNew_RequiresStore(t *testing.T) {
-	var typedNil *filestore.FileSystemStore
-	for _, store := range []filestore.Store{nil, typedNil} {
-		func() {
-			defer func() {
-				if recover() == nil {
-					t.Error("expected panic for nil store")
-				}
-			}()
-			New(store, Config{})
-		}()
+func TestNew_InvalidRoot(t *testing.T) {
+	for _, root := range []string{"", " \t\n"} {
+		p, err := New(root, Config{})
+		if p != nil || !errors.Is(err, fs.ErrInvalid) {
+			t.Fatalf("New(%q) = %v, %v, want nil and fs.ErrInvalid", root, p, err)
+		}
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := New(file, Config{}); p != nil || err == nil {
+		t.Fatalf("New(file) = %v, %v, want an error", p, err)
+	}
+}
+
+func TestProvider_PersistsAfterClose(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "agent-memory")
+	p, err := New(root, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := p.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	tools := providerTools(t, p, &agent.Session{})
+	writeMemory(t, tools, "notes.md", "remembered content", "summary")
+	for range 2 {
+		if err := p.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, args := range map[string]string{
+		WriteToolName:        `{"fileName":"notes.md","content":"changed"}`,
+		ReadFileToolName:     `{"fileName":"notes.md"}`,
+		DeleteFileToolName:   `{"fileName":"notes.md"}`,
+		LsToolName:           `{}`,
+		GrepToolName:         `{"regexPattern":"remembered"}`,
+		ReplaceToolName:      `{"fileName":"notes.md","oldString":"remembered","newString":"changed"}`,
+		ReplaceLinesToolName: `{"fileName":"notes.md","edits":[{"line_number":1,"new_line":"changed"}]}`,
+	} {
+		if _, err := tools[name].Call(t.Context(), args); !errors.Is(err, fs.ErrClosed) {
+			t.Fatalf("%s after Close returned %v, want fs.ErrClosed", name, err)
+		}
+	}
+	if _, _, err := p.Invoking(t.Context(), agent.InvokingContext{}); !errors.Is(err, fs.ErrClosed) {
+		t.Fatalf("invoking after Close returned %v, want fs.ErrClosed", err)
+	}
+	reopened, err := New(root, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	session := &agent.Session{}
+	reopenedTools := providerTools(t, reopened, session)
+	if got := callMemoryTool(t, reopenedTools, ReadFileToolName, `{"fileName":"notes.md"}`); got != "remembered content" {
+		t.Fatalf("reopened memory = %v", got)
+	}
+	messages, _, err := reopened.Invoking(t.Context(), agent.InvokingContext{Options: []agent.Option{agent.WithSession(session)}})
+	if err != nil || len(messages) != 1 || !strings.Contains(messages[0].Contents.Text(), "- **notes.md**: summary") {
+		t.Fatalf("reopened index = %v, %v", messages, err)
 	}
 }
 
@@ -144,9 +202,10 @@ func TestProvider_Instructions(t *testing.T) {
 		{name: "default", want: defaultInstructions},
 		{name: "custom", value: new("Track engineering memories."), want: "Track engineering memories."},
 		{name: "empty", value: new("")},
+		{name: "whitespace", value: new(" \t\r\n")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			p := New(&memoryStore{files: make(map[string]string)}, Config{Instructions: tc.value})
+			p := newProvider(&memoryStore{files: make(map[string]string)}, Config{Instructions: tc.value})
 			input := message.NewText("request")
 			opts := []agent.Option{agent.WithInstructions("caller instructions")}
 			messages, out, err := p.Invoking(t.Context(), agent.InvokingContext{Messages: []*message.Message{input}, Options: opts})
@@ -154,11 +213,24 @@ func TestProvider_Instructions(t *testing.T) {
 				t.Fatal(err)
 			}
 			instructions := slices.Collect(agent.AllOptions(out, agent.WithInstructions))
-			if !slices.Equal(instructions, []string{"caller instructions", tc.want}) {
+			want := []string{"caller instructions"}
+			if tc.want != "" {
+				want = append(want, tc.want)
+			}
+			if !slices.Equal(instructions, want) {
 				t.Fatalf("instructions = %q", instructions)
 			}
 			if len(opts) != 1 || len(messages) != 1 || messages[0] != input {
 				t.Fatal("provider changed the caller's input")
+			}
+			if tc.want == "" {
+				_, out, err := p.Invoking(t.Context(), agent.InvokingContext{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if instructions := slices.Collect(agent.AllOptions(out, agent.WithInstructions)); len(instructions) != 0 {
+					t.Fatalf("blank provider instructions added options: %q", instructions)
+				}
 			}
 		})
 	}
@@ -271,6 +343,25 @@ func TestProvider_DescriptionsDoNotCollide(t *testing.T) {
 	}
 }
 
+func TestProvider_CaseSensitiveDescriptions(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	writeMemory(t, tools, "Notes.md", "upper", "Uppercase summary")
+	writeMemory(t, tools, "notes.md", "lower", "Lowercase summary")
+	want := `[{"name":"Notes.md","type":"file","description":"Uppercase summary"},{"name":"notes.md","type":"file","description":"Lowercase summary"}]`
+	if got := resultJSON(t, callMemoryTool(t, tools, LsToolName, `{}`)); got != want {
+		t.Fatalf("listing = %s, want %s", got, want)
+	}
+	wantIndex := "# Memory Index\n\n- **Notes.md**: Uppercase summary\n- **notes.md**: Lowercase summary\n"
+	if got := readStore(t, store, "memories.md"); got != wantIndex {
+		t.Fatalf("index = %q, want %q", got, wantIndex)
+	}
+	callMemoryTool(t, tools, DeleteFileToolName, `{"fileName":"Notes.md"}`)
+	want = `[{"name":"notes.md","type":"file","description":"Lowercase summary"}]`
+	if got := resultJSON(t, callMemoryTool(t, tools, LsToolName, `{}`)); got != want {
+		t.Fatalf("listing after deletion = %s, want %s", got, want)
+	}
+}
+
 func TestProvider_ReadAndDelete(t *testing.T) {
 	_, store, _, tools := newMemoryFixture(t, Config{})
 	writeMemory(t, tools, "empty.md", "", "")
@@ -309,7 +400,7 @@ func TestProvider_IndexOrderingAndLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	p := New(store, Config{})
+	p := newProvider(store, Config{})
 	tools := providerTools(t, p, &agent.Session{})
 	writeMemory(t, tools, "file00.md", "changed", "")
 	index := readStore(t, store, "memories.md")
@@ -486,7 +577,7 @@ func TestProvider_ReplaceTools(t *testing.T) {
 func TestProvider_StatePersistenceAndSessionBinding(t *testing.T) {
 	store := &memoryStore{files: make(map[string]string)}
 	var initializations atomic.Int32
-	p := New(store, Config{StateInitializer: func(session *agent.Session) State {
+	p := newProvider(store, Config{StateInitializer: func(session *agent.Session) State {
 		initializations.Add(1)
 		return State{WorkingFolder: "sessions/" + session.ServiceID()}
 	}})
@@ -532,33 +623,74 @@ func TestProvider_DefaultRootSharesMemories(t *testing.T) {
 	}
 }
 
+func TestProvider_ToolsCaptureWorkingFolder(t *testing.T) {
+	p, store, session, tools := newMemoryFixture(t, Config{StateInitializer: func(*agent.Session) State {
+		return State{WorkingFolder: "original"}
+	}})
+	writeMemory(t, tools, "notes.md", "first\nsecond\n", "")
+	if err := store.Write(t.Context(), "changed/other.md", "other memory"); err != nil {
+		t.Fatal(err)
+	}
+	session.Set(p.StateKeys()[0], State{WorkingFolder: "changed"})
+	if got := callMemoryTool(t, tools, ReadFileToolName, `{"fileName":"notes.md"}`); got != "first\nsecond\n" {
+		t.Fatalf("read used a changed working folder: %v", got)
+	}
+	if got := resultJSON(t, callMemoryTool(t, tools, LsToolName, `{}`)); got != `[{"name":"notes.md","type":"file"}]` {
+		t.Fatalf("list used a changed working folder: %s", got)
+	}
+	results := callMemoryTool(t, tools, GrepToolName, `{"regexPattern":"first"}`).([]searchResult)
+	if len(results) != 1 || results[0].FileName != "notes.md" {
+		t.Fatalf("grep used a changed working folder: %+v", results)
+	}
+	callMemoryTool(t, tools, ReplaceToolName, `{"fileName":"notes.md","oldString":"first","newString":"updated"}`)
+	callMemoryTool(t, tools, ReplaceLinesToolName, `{"fileName":"notes.md","edits":[{"line_number":2,"new_line":"last\n"}]}`)
+	if got := readStore(t, store, "original/notes.md"); got != "updated\nlast\n" {
+		t.Fatalf("replacement tools used a changed working folder: %q", got)
+	}
+	writeMemory(t, tools, "new.md", "new memory", "")
+	if got := readStore(t, store, "original/new.md"); got != "new memory" {
+		t.Fatalf("write used a changed working folder: %q", got)
+	}
+	callMemoryTool(t, tools, DeleteFileToolName, `{"fileName":"notes.md"}`)
+	if _, err := store.Read(t.Context(), "original/notes.md"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("delete used a changed working folder: %v", err)
+	}
+	nextTools := providerTools(t, p, session)
+	if got := callMemoryTool(t, nextTools, ReadFileToolName, `{"fileName":"other.md"}`); got != "other memory" {
+		t.Fatalf("next invocation did not use the changed working folder: %v", got)
+	}
+}
+
 func TestProvider_WorkingFolderCreatedOnInvocation(t *testing.T) {
 	root := t.TempDir()
-	store, err := filestore.NewFileSystemStore(root)
+	p, err := New(root, Config{StateInitializer: func(*agent.Session) State {
+		return State{WorkingFolder: `users\alice/`}
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := store.Close(); err != nil {
+		if err := p.Close(); err != nil {
 			t.Error(err)
 		}
 	})
-	p := New(store, Config{StateInitializer: func(*agent.Session) State {
-		return State{WorkingFolder: `users\alice/`}
-	}})
 	tools := providerTools(t, p, &agent.Session{})
 	if info, err := os.Stat(filepath.Join(root, "users", "alice")); err != nil || !info.IsDir() {
 		t.Fatalf("working folder was not created: %v", err)
 	}
 	writeMemory(t, tools, "notes.md", "content", "summary")
-	if got := readStore(t, store, "users/alice/notes.md"); got != "content" {
+	got, err := os.ReadFile(filepath.Join(root, "users", "alice", "notes.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "content" {
 		t.Fatalf("wrong working folder: %q", got)
 	}
 }
 
 func TestProvider_RejectsInvalidWorkingFolder(t *testing.T) {
 	store := &memoryStore{files: make(map[string]string)}
-	p := New(store, Config{StateInitializer: func(*agent.Session) State {
+	p := newProvider(store, Config{StateInitializer: func(*agent.Session) State {
 		return State{WorkingFolder: "../outside"}
 	}})
 	session := &agent.Session{}
@@ -574,7 +706,9 @@ func TestProvider_RejectsInvalidWorkingFolder(t *testing.T) {
 func TestProvider_WithoutSession(t *testing.T) {
 	store := &memoryStore{files: make(map[string]string)}
 	var sawNil bool
-	p := New(store, Config{StateInitializer: func(session *agent.Session) State {
+	var initializations int
+	p := newProvider(store, Config{StateInitializer: func(session *agent.Session) State {
+		initializations++
 		sawNil = session == nil
 		return State{WorkingFolder: "stateless"}
 	}})
@@ -582,6 +716,9 @@ func TestProvider_WithoutSession(t *testing.T) {
 	writeMemory(t, tools, "notes.md", "content", "")
 	if !sawNil || readStore(t, store, "stateless/notes.md") != "content" {
 		t.Fatal("nil-session initializer was not used")
+	}
+	if initializations != 1 {
+		t.Fatalf("initializer called %d times, want once per invocation", initializations)
 	}
 }
 
@@ -627,7 +764,7 @@ func TestProvider_BackendErrorsArePropagated(t *testing.T) {
 	for _, operation := range []string{"read", "create directory"} {
 		t.Run("invoking "+operation, func(t *testing.T) {
 			store := &failingMemoryStore{Store: &memoryStore{files: make(map[string]string)}, operation: operation, failure: failure}
-			p := New(store, Config{StateInitializer: func(*agent.Session) State { return State{WorkingFolder: "work"} }})
+			p := newProvider(store, Config{StateInitializer: func(*agent.Session) State { return State{WorkingFolder: "work"} }})
 			if _, _, err := p.Invoking(t.Context(), agent.InvokingContext{Options: []agent.Option{agent.WithSession(&agent.Session{})}}); !errors.Is(err, failure) {
 				t.Fatalf("error = %v, want original storage error", err)
 			}
@@ -656,7 +793,7 @@ func TestProvider_BackendErrorsArePropagated(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			base := &memoryStore{files: map[string]string{"notes.md": "text"}}
 			store := &failingMemoryStore{Store: base}
-			p := New(store, Config{})
+			p := newProvider(store, Config{})
 			tools := providerTools(t, p, &agent.Session{})
 			store.operation, store.path, store.failure = tc.operation, tc.path, failure
 			if result, err := tools[tc.tool].Call(t.Context(), tc.args); !errors.Is(err, failure) || result != nil {
@@ -693,42 +830,34 @@ func TestProvider_CancelledOperations(t *testing.T) {
 }
 
 func TestProvider_CancellationDoesNotWaitForWriteLock(t *testing.T) {
-	store := &memoryStore{files: make(map[string]string)}
-	ready := make(chan struct{})
-	var signal atomic.Bool
-	p := New(store, Config{StateInitializer: func(*agent.Session) State {
-		if signal.Load() {
-			close(ready)
+	synctest.Test(t, func(t *testing.T) {
+		p, store, _, tools := newMemoryFixture(t, Config{})
+		if err := p.writeLock.Acquire(t.Context(), 1); err != nil {
+			t.Fatal(err)
 		}
-		return State{}
-	}})
-	tools := providerTools(t, p, nil)
-	if err := p.writeLock.Acquire(t.Context(), 1); err != nil {
-		t.Fatal(err)
-	}
-	defer p.writeLock.Release(1)
-	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	signal.Store(true)
-	result := make(chan error, 1)
-	go func() {
-		_, err := tools[WriteToolName].Call(ctx, `{"fileName":"notes.md","content":"text"}`)
-		result <- err
-	}()
-	<-ready
-	cancel()
-	if err := <-result; !errors.Is(err, context.Canceled) {
-		t.Fatalf("error = %v, want cancellation while the write lock remains held", err)
-	}
-	if names, err := store.ListChildren(t.Context(), ""); err != nil || len(names) != 0 {
-		t.Fatalf("cancelled write changed files: %v, %v", names, err)
-	}
+		defer p.writeLock.Release(1)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		result := make(chan error, 1)
+		go func() {
+			_, err := tools[WriteToolName].Call(ctx, `{"fileName":"notes.md","content":"text"}`)
+			result <- err
+		}()
+		synctest.Wait()
+		cancel()
+		if err := <-result; !errors.Is(err, context.Canceled) {
+			t.Fatalf("error = %v, want cancellation while the write lock remains held", err)
+		}
+		if names, err := store.ListChildren(t.Context(), ""); err != nil || len(names) != 0 {
+			t.Fatalf("cancelled write changed files: %v, %v", names, err)
+		}
+	})
 }
 
 func TestProvider_EmptyIndexIsNotInjected(t *testing.T) {
 	for _, index := range []string{"", " \t\n"} {
 		store := &memoryStore{files: map[string]string{"memories.md": index}}
-		p := New(store, Config{})
+		p := newProvider(store, Config{})
 		messages, _, err := p.Invoking(t.Context(), agent.InvokingContext{})
 		if err != nil || len(messages) != 0 {
 			t.Fatalf("blank index injected context: %v, %v", messages, err)
@@ -758,7 +887,7 @@ func TestProvider_AgentRunsUseMemoryToolsAndIndex(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
 			store := &memoryStore{files: make(map[string]string)}
-			p := New(store, Config{})
+			p := newProvider(store, Config{})
 			assertResult := func(callID, want string) func(context.Context, []*message.Message, ...agent.Option) {
 				return func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
 					for _, msg := range messages {
@@ -803,6 +932,63 @@ func TestProvider_AgentRunsUseMemoryToolsAndIndex(t *testing.T) {
 				if err != nil || response.String() != want {
 					t.Fatalf("agent response = %v, %v, want %s", response, err, want)
 				}
+			}
+		})
+	}
+}
+
+func TestProvider_ConcurrentToolsWithTodo(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			p, store, _, _ := newMemoryFixture(t, Config{})
+			todos := todo.New(nil)
+			builder := agenttest.NewResponseBuilder()
+			const count = 20
+			for i := range count {
+				builder.
+					AddFunctionCall(fmt.Sprintf("todo-%d", i), "todos_add", fmt.Sprintf(`{"Arg0":[{"title":"Task %d"}]}`, i)).
+					AddFunctionCall(fmt.Sprintf("memory-%d", i), WriteToolName, fmt.Sprintf(`{"fileName":"note%02d.md","content":"remembered"}`, i))
+			}
+			builder.NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+				var results int
+				for _, msg := range messages {
+					for _, content := range msg.Contents {
+						if result, ok := content.(*message.FunctionResultContent); ok {
+							results++
+							if result.Error != nil {
+								t.Errorf("tool %s failed: %v", result.CallID, result.Error)
+							}
+						}
+					}
+				}
+				if results != 2*count {
+					t.Errorf("received %d tool results, want %d", results, 2*count)
+				}
+			}).AddText("saved")
+			runner := &agenttest.Runner{Responses: builder.Build()}
+			a := agent.New(agent.ProviderConfig{
+				Run: runner.Run,
+				Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{
+					AllowConcurrentInvocations: true,
+				})},
+			}, agent.Config{
+				ContextProviders: []agent.ContextProvider{p, todos},
+			})
+			session := &agent.Session{}
+			response, err := a.RunText(t.Context(), "save memories and add tasks", agent.WithSession(session), agent.Stream(stream)).Collect()
+			if err != nil || response.String() != "saved" {
+				t.Fatalf("agent response = %v, %v", response, err)
+			}
+			if items := todos.AllTodos(session); len(items) != count {
+				t.Fatalf("saved %d todos, want %d", len(items), count)
+			}
+			for i := range count {
+				if got := readStore(t, store, fmt.Sprintf("note%02d.md", i)); got != "remembered" {
+					t.Fatalf("memory %d = %q", i, got)
+				}
+			}
+			if index := readStore(t, store, memoryIndexName); strings.Count(index, "- **") != count {
+				t.Fatalf("concurrent tool calls lost index entries: %q", index)
 			}
 		})
 	}
