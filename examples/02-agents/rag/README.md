@@ -66,7 +66,9 @@ Step 04 embeds the upstream
 [knowledge-base file](./step04_foundry_service_rag/contoso-outdoors-knowledge-base.md),
 so it works independently of the current working directory.
 
-It creates a file, a vector store, and a version of the agent named `AskContoso`.
+It creates a file and a vector store, waits up to five minutes for the file to
+finish indexing, and then creates a version of the agent named `AskContoso`.
+Failed or cancelled ingestion stops provisioning and triggers cleanup.
 It invokes that exact version through the project Responses API using an
 `agent_reference`, without overriding server-owned instructions or tools.
 
@@ -94,7 +96,9 @@ for graph setup guidance.
 The provider uses the ten most recent nonblank user/assistant messages,
 the upstream stop-word list, read-routed Cypher, limits before and after graph
 enrichment, and the same score/metadata formatting. It does not generate
-embeddings for this full-text sample.
+embeddings for this full-text sample. Retrieved graph context is excluded from
+retained history so later searches use conversation turns rather than prior
+search results. The driver is closed before reporting operation or cleanup errors.
 
 ## Go implementation notes
 
@@ -104,7 +108,7 @@ embeddings for this full-text sample.
 - Examples use the shared `demo.NewLogger` middleware and `demo.Response` output.
   `demo.FoundryEmbeddingModel` holds the embedding deployment resolved at startup.
 - Model-backed agents use `foundryprovider.NewAgent`. Local conversation history
-  is enabled explicitly with `DisableStoreOutput`; Steps 01 and 02 exclude
+  is enabled explicitly with `DisableStoreOutput`; Steps 01, 02, and 05 exclude
   retrieved context from retained history.
 - Steps 01 and 02 use `foundryprovider.NewEmbeddingGenerator` for embeddings.
   It derives the resource OpenAI endpoint from the project URL, configures

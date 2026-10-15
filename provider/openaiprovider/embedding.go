@@ -30,11 +30,13 @@ type EmbeddingGeneratorConfig struct {
 }
 
 // NewEmbeddingGenerator creates a text embedding generator using the client's
-// Embeddings API. Results preserve the service's response order and contain
+// Embeddings API. Results follow input order using the service's indexes and contain
 // float32 [embedding.VectorOf] vectors, the response model ID, and a local UTC
 // creation timestamp for each embedding. Reported prompt and total token usage
 // are preserved; omitted counters default to zero and malformed counters return
-// an error. Empty batches return an error without an HTTP request.
+// an error. Responses must contain one embedding per input with unique, in-range
+// indexes. A single-input response may omit its index. Empty batches return an
+// error without an HTTP request.
 //
 // The [embedding.Options.RawRepresentationFactory] may return an
 // [openai.EmbeddingNewParams] value or pointer. Nil or other return types use
@@ -119,20 +121,32 @@ func (g *embeddingGenerator) Generate(ctx context.Context, values []string, opti
 	if response == nil || !response.JSON.Data.Valid() && response.JSON.Data.Raw() != "" {
 		return nil, fmt.Errorf("openaiprovider: invalid embedding response data")
 	}
+	if len(response.Data) != len(values) {
+		return nil, fmt.Errorf("openaiprovider: expected %d embeddings, got %d", len(values), len(response.Data))
+	}
 	result := &embedding.GeneratedOf[float32]{
-		Embeddings: make([]*embedding.Of[float32], len(response.Data)),
+		Embeddings: make([]*embedding.Of[float32], len(values)),
 	}
 	for i, item := range response.Data {
 		var index int64
-		if raw := item.JSON.Index.Raw(); raw != "" &&
-			(!item.JSON.Index.Valid() || json.Unmarshal([]byte(raw), &index) != nil) {
-			return nil, fmt.Errorf("openaiprovider: invalid embedding response index %d", item.Index)
+		if raw := item.JSON.Index.Raw(); raw != "" {
+			if !item.JSON.Index.Valid() || json.Unmarshal([]byte(raw), &index) != nil {
+				return nil, fmt.Errorf("openaiprovider: invalid embedding response index at position %d", i)
+			}
+		} else if len(values) > 1 {
+			return nil, fmt.Errorf("openaiprovider: missing embedding response index at position %d", i)
+		}
+		if index < 0 || index >= int64(len(values)) {
+			return nil, fmt.Errorf("openaiprovider: embedding response index %d is out of range", index)
+		}
+		if result.Embeddings[index] != nil {
+			return nil, fmt.Errorf("openaiprovider: duplicate embedding response index %d", index)
 		}
 		vector, err := openAIEmbeddingVector(item)
 		if err != nil {
 			return nil, fmt.Errorf("openaiprovider: embedding at position %d: %w", i, err)
 		}
-		result.Embeddings[i] = &embedding.Of[float32]{
+		result.Embeddings[index] = &embedding.Of[float32]{
 			Vector: vector, ModelID: response.Model, CreatedAt: time.Now().UTC(),
 		}
 	}

@@ -91,7 +91,7 @@ func TestOpenAIEmbeddingGenerator_RequestAndResponse(t *testing.T) {
 	if len(result.Embeddings) != 2 {
 		t.Fatalf("embeddings = %d, want 2", len(result.Embeddings))
 	}
-	for i, want := range []embedding.VectorOf[float32]{{-0.5, 0.25, 2}, {1, 2, 3}} {
+	for i, want := range []embedding.VectorOf[float32]{{1, 2, 3}, {-0.5, 0.25, 2}} {
 		got := result.Embeddings[i]
 		if !slices.Equal(got.Vector, want) || got.Dimensions() != 3 || got.ModelID != "served-model" {
 			t.Fatalf("embedding[%d] = %+v", i, got)
@@ -99,9 +99,6 @@ func TestOpenAIEmbeddingGenerator_RequestAndResponse(t *testing.T) {
 		if got.CreatedAt.Before(before) || got.CreatedAt.After(after) || got.CreatedAt.Location() != time.UTC {
 			t.Errorf("creation time = %v, want local UTC creation time", got.CreatedAt)
 		}
-	}
-	if result.Embeddings[1].CreatedAt.Before(result.Embeddings[0].CreatedAt) {
-		t.Error("creation times must follow response conversion order")
 	}
 	if result.Usage == nil || result.Usage.InputTokenCount != 42 || result.Usage.TotalTokenCount != 42 || result.Usage.OutputTokenCount != 0 {
 		t.Fatalf("usage = %+v", result.Usage)
@@ -468,6 +465,14 @@ func TestOpenAIEmbeddingGenerator_MalformedResponses(t *testing.T) {
 		{"float32 overflow", `{"data":[{"index":0,"embedding":[1e100]}]}`, 1},
 		{"null index", `{"data":[{"index":null,"embedding":[1]}]}`, 1},
 		{"fractional index", `{"data":[{"index":0.5,"embedding":[1]}]}`, 1},
+		{"negative index", `{"data":[{"index":-1,"embedding":[1]}]}`, 1},
+		{"out-of-range index", `{"data":[{"index":1,"embedding":[1]}]}`, 1},
+		{"duplicate indexes", `{"data":[{"index":0,"embedding":[1]},{"index":0,"embedding":[2]}]}`, 2},
+		{"missing batch index", `{"data":[{"embedding":[1]},{"index":1,"embedding":[2]}]}`, 2},
+		{"empty data", `{"data":[]}`, 1},
+		{"omitted data", `{}`, 1},
+		{"too few embeddings", `{"data":[{"index":0,"embedding":[1]}]}`, 2},
+		{"too many embeddings", `{"data":[{"index":0,"embedding":[1]},{"index":1,"embedding":[2]}]}`, 1},
 		{"invalid usage", `{"data":[{"index":0,"embedding":[1]}],"usage":"wrong"}`, 1},
 		{"invalid total tokens", `{"data":[{"index":0,"embedding":[1]}],"usage":{"prompt_tokens":1,"total_tokens":"wrong"}}`, 1},
 	} {
@@ -488,19 +493,14 @@ func TestOpenAIEmbeddingGenerator_MalformedResponses(t *testing.T) {
 	}
 }
 
-func TestOpenAIEmbeddingGenerator_PreservesResponseSequence(t *testing.T) {
+func TestOpenAIEmbeddingGenerator_GenerateAndZipPreservesInputOrder(t *testing.T) {
 	for _, test := range []struct {
 		name     string
 		response string
-		want     []float32
 	}{
-		{"response order", `{"data":[{"index":1,"embedding":[2]},{"index":0,"embedding":[1]}]}`, []float32{2, 1}},
-		{"missing index", `{"data":[{"embedding":[3]}]}`, []float32{3}},
-		{"negative index", `{"data":[{"index":-1,"embedding":[3]}]}`, []float32{3}},
-		{"large index", `{"data":[{"index":99,"embedding":[3]}]}`, []float32{3}},
-		{"duplicate indexes", `{"data":[{"index":0,"embedding":[1]},{"index":0,"embedding":[2]}]}`, []float32{1, 2}},
-		{"empty data", `{"data":[]}`, []float32{}},
-		{"omitted data", `{}`, []float32{}},
+		{"numeric", `{"data":[{"index":1,"embedding":[2]},{"index":0,"embedding":[1]}]}`},
+		{"base64", fmt.Sprintf(`{"data":[{"index":1,"embedding":%q},{"index":0,"embedding":%q}]}`,
+			base64Embedding([]float32{2}), base64Embedding([]float32{1}))},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := openAIEmbeddingTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
@@ -508,28 +508,33 @@ func TestOpenAIEmbeddingGenerator_PreservesResponseSequence(t *testing.T) {
 				_, _ = io.WriteString(w, test.response)
 			})
 			g := openaiprovider.NewEmbeddingGenerator(client, openaiprovider.EmbeddingGeneratorConfig{Model: "default"})
-			result, err := g.Generate(t.Context(), []string{"hello"}, nil)
-			if err != nil || result == nil {
-				t.Fatalf("Generate = %+v, %v", result, err)
+			values := []string{"first", "second"}
+			pairs, err := embedding.GenerateAndZip(t.Context(), g, values, nil)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if len(result.Embeddings) != len(test.want) {
-				t.Fatalf("embeddings = %d, want %d", len(result.Embeddings), len(test.want))
+			if len(pairs) != len(values) {
+				t.Fatalf("pairs = %d, want %d", len(pairs), len(values))
 			}
-			for i, e := range result.Embeddings {
-				vector := e.Vector
-				if !slices.Equal(vector, []float32{test.want[i]}) {
-					t.Errorf("embedding[%d] = %v, want [%v]", i, vector, test.want[i])
-				}
-			}
-			if len(test.want) != 1 {
-				if _, err := embedding.Generate(t.Context(), g, "hello", nil); err == nil {
-					t.Error("single-input helper must still check result count")
-				}
-				if _, err := embedding.GenerateAndZip(t.Context(), g, []string{"hello"}, nil); err == nil {
-					t.Error("pairing helper must still check result count")
+			for i, pair := range pairs {
+				if pair.Value != values[i] || pair.Embedding == nil ||
+					!slices.Equal(pair.Embedding.Vector, []float32{float32(i + 1)}) {
+					t.Errorf("pair[%d] = %+v; want input %q with vector [%d]", i, pair, values[i], i+1)
 				}
 			}
 		})
+	}
+}
+
+func TestOpenAIEmbeddingGenerator_AllowsMissingSingleIndex(t *testing.T) {
+	client := openAIEmbeddingTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"data":[{"embedding":[3]}]}`)
+	})
+	g := openaiprovider.NewEmbeddingGenerator(client, openaiprovider.EmbeddingGeneratorConfig{Model: "default"})
+	vector, err := embedding.GenerateVector(t.Context(), g, "hello", nil)
+	if err != nil || !slices.Equal(vector, []float32{3}) {
+		t.Fatalf("GenerateVector = %v, %v", vector, err)
 	}
 }
 

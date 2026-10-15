@@ -155,15 +155,18 @@ adapts the OpenAI Embeddings API to
 Go client, model and dimension defaults, and per-request options.
 The raw-options factory can supply native `openai.EmbeddingNewParams`; native
 settings take precedence over shared options and configured defaults. Results use
-float32 vectors in service response order, the served model, a local UTC creation
+float32 vectors in input order, the served model, a local UTC creation
 timestamp per embedding, and reported prompt/total usage. The default wire encoding
 is base64; native parameters can request float encoding. Base64 decoding preserves
 all float32 bit patterns, including NaN and infinity. Empty batches are rejected
 without a request. Unrecognized raw-options factory results use default parameters.
 Omitted usage counters default to zero; malformed or fractional counters return an
-error, with valid counts retained at Go's 64-bit precision. The adapter preserves
-the service's result count and sequence; single-input and pairing helpers validate
-counts. It does not own the client, does not require cleanup, and can be passed to
+error, with valid counts retained at Go's 64-bit precision. The adapter validates
+one result per input and uses unique, in-range response indexes to restore input
+order; a single-input response may omit its index. This intentionally differs
+from the upstream adapter's response-sequence enumeration so batch pairing cannot
+associate an input with another input's vector.
+It does not own the client, does not require cleanup, and can be passed to
 the optional telemetry wrapper. These behaviors were checked against
 [the .NET adapter at `6c527a8`](https://github.com/dotnet/extensions/blob/6c527a8d9a0bcc89a40c61e8365c1afc565117e8/src/Libraries/Microsoft.Extensions.AI.OpenAI/OpenAIEmbeddingGenerator.cs)
 and OpenAI .NET 2.14.0. Explicit zero dimensions and read-only shared options remain

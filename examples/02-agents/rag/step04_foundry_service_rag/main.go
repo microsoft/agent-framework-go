@@ -111,6 +111,15 @@ func provision(ctx context.Context, client openai.Client, endpoint, model string
 		return resources, fmt.Errorf("vector store creation returned no store ID")
 	}
 	resources.vectorStoreID = store.ID
+	indexCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	indexedFile, err := client.VectorStores.Files.PollStatus(indexCtx, store.ID, file.ID, 0)
+	cancel()
+	if err != nil {
+		return resources, fmt.Errorf("wait for knowledge-base indexing: %w", err)
+	}
+	if indexedFile.Status != openai.VectorStoreFileStatusCompleted {
+		return resources, fmt.Errorf("knowledge-base indexing ended with status %q: %s", indexedFile.Status, indexedFile.LastError.Message)
+	}
 	var version struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`

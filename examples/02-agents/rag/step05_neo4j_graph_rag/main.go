@@ -9,9 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
+	"github.com/microsoft/agent-framework-go/message/messagefilter"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/neo4j/neo4j-go-driver/v5/neo4j"
 )
@@ -43,13 +45,21 @@ func main() {
 	if uri == "" || password == "" {
 		demo.Panicf("NEO4J_URI and NEO4J_PASSWORD must be set")
 	}
+	credential := demo.FoundryTokenCredential()
 	driver, err := neo4j.NewDriverWithContext(uri, neo4j.BasicAuth(cmp.Or(os.Getenv("NEO4J_USERNAME"), "neo4j"), password, ""))
 	if err != nil {
 		demo.Panic(err)
 	}
-	defer func() { err = errors.Join(err, driver.Close(context.WithoutCancel(ctx))) }()
-	if err := driver.VerifyConnectivity(ctx); err != nil {
-		demo.Panic(err)
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		err = errors.Join(err, driver.Close(closeCtx))
+		cancel()
+		if err != nil {
+			demo.Panic(err)
+		}
+	}()
+	if err = driver.VerifyConnectivity(ctx); err != nil {
+		return
 	}
 	provider := newGraphContextProvider(func(ctx context.Context, query string, parameters map[string]any) ([]*neo4j.Record, error) {
 		result, err := neo4j.ExecuteQuery(ctx, driver, query, parameters,
@@ -60,19 +70,24 @@ func main() {
 		return result.Records, nil
 	}, cmp.Or(os.Getenv("NEO4J_FULLTEXT_INDEX_NAME"), "search_chunks"))
 
-	a := foundryprovider.NewAgent(demo.FoundryProjectEndpoint, demo.FoundryTokenCredential(),
+	a := foundryprovider.NewAgent(demo.FoundryProjectEndpoint, credential,
 		foundryprovider.ModelDeployment(demo.FoundryModel), foundryprovider.AgentConfig{
 			Instructions: "You are a helpful assistant that answers questions using Neo4j graph context.",
 			Config: agent.Config{
 				ContextProviders: []agent.ContextProvider{provider},
 				Middlewares:      []agent.Middleware{logger},
+				HistoryProvider: agent.NewInMemoryHistoryProvider(agent.InMemoryHistoryProviderConfig{
+					StoreInputRequestMessageFilter: messagefilter.NotSourceTypes(
+						agent.SourceTypeContextProvider, agent.SourceTypeHistoryProvider,
+					),
+				}),
 			},
 			DisableStoreOutput: true,
 		})
 
 	session, err := a.CreateSession(ctx)
 	if err != nil {
-		demo.Panic(err)
+		return
 	}
 	for i, question := range []string{
 		"What products does Microsoft offer?",
@@ -83,9 +98,10 @@ func main() {
 			fmt.Println()
 		}
 		fmt.Printf(">> %s\n\n", question)
-		response, err := a.RunText(ctx, question, agent.WithSession(session)).Collect()
-		if err != nil {
-			demo.Panic(err)
+		response, runErr := a.RunText(ctx, question, agent.WithSession(session)).Collect()
+		if runErr != nil {
+			err = runErr
+			return
 		}
 		demo.Response(response, nil)
 	}
