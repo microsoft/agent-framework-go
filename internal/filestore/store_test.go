@@ -15,7 +15,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/microsoft/agent-framework-go/agent/harness/filestore"
+	"github.com/microsoft/agent-framework-go/internal/filestore"
 )
 
 func newStore(t *testing.T) (*filestore.FileSystemStore, string) {
@@ -160,6 +160,97 @@ func TestFileSystemStore_ListChildren(t *testing.T) {
 	}
 }
 
+func TestFileSystemStore_ListChildrenSkipsUnaddressableNames(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fixture uses filenames that Windows does not permit")
+	}
+	store, root := newStore(t)
+	for _, name := range []string{`draft\notes.md`, "   "} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("external file"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"C:notes.md", "notes.md", "other.txt"} {
+		if err := store.Write(t.Context(), name, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	names, err := store.ListChildren(t.Context(), "")
+	if err != nil || !slices.Equal(names, []string{"C:notes.md", "notes.md", "other.txt"}) {
+		t.Fatalf("ListChildren() = %v, %v, want only addressable files", names, err)
+	}
+	for _, name := range names {
+		if got, err := store.Read(t.Context(), name); err != nil || got != name {
+			t.Fatalf("listed file %q cannot be read: %q, %v", name, got, err)
+		}
+		if err := store.Delete(t.Context(), name); err != nil {
+			t.Fatalf("listed file %q cannot be deleted: %v", name, err)
+		}
+	}
+}
+
+func TestFileSystemStore_RejectsUnaddressablePathComponents(t *testing.T) {
+	store, _ := newStore(t)
+	for _, name := range []string{"work/ ", "work/ \t/notes.md"} {
+		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
+			if err := store.Write(t.Context(), name, "unaddressable"); !errors.Is(err, fs.ErrInvalid) {
+				t.Fatalf("Write(%q) = %v, want fs.ErrInvalid", name, err)
+			}
+			if err := store.CreateDirectory(t.Context(), name); !errors.Is(err, fs.ErrInvalid) {
+				t.Fatalf("CreateDirectory(%q) = %v, want fs.ErrInvalid", name, err)
+			}
+		})
+	}
+	if err := store.Write(t.Context(), "./work/notes.md", "content"); err != nil {
+		t.Fatal(err)
+	}
+	for _, directory := range []string{"work", "./work"} {
+		names, err := store.ListChildren(t.Context(), directory)
+		if err != nil || !slices.Equal(names, []string{"notes.md"}) {
+			t.Fatalf("ListChildren(%q) = %v, %v", directory, names, err)
+		}
+		if content, err := store.Read(t.Context(), directory+"/"+names[0]); err != nil || content != "content" {
+			t.Fatalf("listed file cannot be read: %q, %v", content, err)
+		}
+	}
+}
+
+func TestFileSystemStore_VolumeNamesFollowHostRules(t *testing.T) {
+	for _, name := range []string{"C:notes.md", "./C:notes.md", "work/D:notes.md", "C:/notes.md", `C:\notes.md`} {
+		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
+			store, _ := newStore(t)
+			if runtime.GOOS == "windows" {
+				for operation, call := range storeOperations(store, name) {
+					if err := call(t.Context()); !errors.Is(err, fs.ErrInvalid) {
+						t.Fatalf("%s(%q) = %v, want fs.ErrInvalid", operation, name, err)
+					}
+				}
+				return
+			}
+			if err := store.Write(t.Context(), name, "content"); err != nil {
+				t.Fatal(err)
+			}
+			canonical := filepath.ToSlash(filepath.Clean(strings.ReplaceAll(name, "\\", "/")))
+			if got, err := store.Read(t.Context(), canonical); err != nil || got != "content" {
+				t.Fatalf("Read(%q) = %q, %v", canonical, got, err)
+			}
+			names, err := store.ListChildren(t.Context(), filepath.Dir(canonical))
+			if err != nil || !slices.Equal(names, []string{filepath.Base(canonical)}) {
+				t.Fatalf("ListChildren() = %v, %v", names, err)
+			}
+			if got, err := store.Read(t.Context(), name); err != nil || got != "content" {
+				t.Fatalf("original path did not round-trip: %q, %v", got, err)
+			}
+			if err := store.Delete(t.Context(), canonical); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.Read(t.Context(), name); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("deleted file returned %v, want fs.ErrNotExist", err)
+			}
+		})
+	}
+}
+
 func TestFileSystemStore_NormalizesPaths(t *testing.T) {
 	store, _ := newStore(t)
 	ctx := t.Context()
@@ -200,8 +291,7 @@ func TestFileSystemStore_RejectsInvalidPaths(t *testing.T) {
 	store, _ := newStore(t)
 	for _, name := range []string{
 		"..", "../escape.md", "work/../../escape.md",
-		"/absolute.md", `\absolute.md`, `\\server\file.md`, `C:\notes.md`,
-		"C:/notes.md", "D:notes.md", "notes\x00.md",
+		"/absolute.md", `\absolute.md`, `\\server\file.md`, "notes\x00.md",
 	} {
 		t.Run(fmt.Sprintf("%q", name), func(t *testing.T) {
 			for operation, call := range storeOperations(store, name) {

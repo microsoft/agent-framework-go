@@ -8,15 +8,15 @@ import (
 	"io/fs"
 	"path/filepath"
 	"strings"
-	"unicode"
-	"unicode/utf8"
 )
 
 // Normalize cleans a local relative path and returns forward-slash separators.
-// Backslashes are accepted as separators on every platform. Rooted paths, drive
-// prefixes, paths escaping the root and NUL bytes return an error wrapping
+// Backslashes are accepted as separators on every platform. Rooted paths, paths
+// invalid on the host platform, root escapes and NUL bytes return an error wrapping
 // [fs.ErrInvalid]. Empty or whitespace-only paths select the root only when
 // directory is true. A cleaned "." also selects the root only for directories.
+// Non-empty path components must not be whitespace-only. Volume names and
+// reserved names follow the host platform's filepath.IsLocal rules.
 func Normalize(name string, directory bool) (string, error) {
 	invalid := func() (string, error) {
 		return "", fmt.Errorf("invalid relative path %q: %w", name, fs.ErrInvalid)
@@ -31,15 +31,18 @@ func Normalize(name string, directory bool) (string, error) {
 		return invalid()
 	}
 	normalized := strings.ReplaceAll(name, "\\", "/")
-	first, size := utf8.DecodeRuneInString(normalized)
-	if unicode.IsLetter(first) && len(normalized) > size && normalized[size] == ':' {
+	for _, component := range strings.Split(normalized, "/") {
+		if component == "" {
+			continue
+		}
+		if strings.TrimSpace(component) == "" {
+			return invalid()
+		}
+	}
+	if !filepath.IsLocal(normalized) {
 		return invalid()
 	}
-	local := filepath.FromSlash(normalized)
-	if !filepath.IsLocal(local) {
-		return invalid()
-	}
-	normalized = filepath.ToSlash(filepath.Clean(local))
+	normalized = filepath.ToSlash(filepath.Clean(normalized))
 	if normalized == "." {
 		if !directory {
 			return invalid()

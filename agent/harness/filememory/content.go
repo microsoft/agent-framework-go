@@ -6,9 +6,12 @@
 // files using Go regular expressions and case-insensitive filename patterns.
 // Filename patterns support literal text and * wildcards; ? and brackets are
 // literal characters. Backslashes are path separators, not escape characters.
-// A leading **/ can match a direct file, and *.* matches files without extensions.
-// Search matches and line edits share 1-based line numbering and preserve each
-// line's LF, CRLF, or CR terminator.
+// Leading separators, ./ and **/ select the working folder; *.* matches all
+// filenames, including those without extensions.
+// Search matches and line edits share 1-based line numbering. Search results
+// retain each line's LF, CRLF or CR terminator. Edits insert replacement text
+// verbatim, so callers include any terminator they want to keep. An empty
+// replacement deletes the whole line, including its terminator.
 package filememory
 
 import (
@@ -20,7 +23,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/microsoft/agent-framework-go/agent/harness/filestore"
+	"github.com/microsoft/agent-framework-go/internal/filestore"
 	"github.com/microsoft/agent-framework-go/internal/storepaths"
 )
 
@@ -124,9 +127,18 @@ func compileGlob(pattern string) (*regexp.Regexp, error) {
 		return nil, nil
 	}
 	pattern = strings.ReplaceAll(pattern, "\\", "/")
-	// Searches are flat; a leading **/ can also match a direct child.
-	for strings.HasPrefix(pattern, "**/") {
-		pattern = strings.TrimPrefix(pattern, "**/")
+	// These prefixes all select the working folder for a flat search.
+	for {
+		pattern = strings.TrimLeft(pattern, "/")
+		if strings.HasPrefix(pattern, "./") {
+			pattern = strings.TrimPrefix(pattern, "./")
+			continue
+		}
+		if strings.HasPrefix(pattern, "**/") {
+			pattern = strings.TrimPrefix(pattern, "**/")
+			continue
+		}
+		break
 	}
 	if pattern == "*.*" {
 		pattern = "*"
