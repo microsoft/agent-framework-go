@@ -103,8 +103,8 @@ search results. The driver is closed before reporting operation or cleanup error
 ## Go implementation notes
 
 - Each example contains its own instructions, questions, and conversation loop;
-  there is no shared RAG support package. Step 01 keeps its in-memory store
-  alongside its entrypoint.
+  there is no shared RAG support package. Step 01 keeps its document schema and
+  seed data alongside its entrypoint.
 - Examples use the shared `demo.NewLogger` middleware and `demo.Response` output.
   `demo.FoundryEmbeddingModel` holds the embedding deployment resolved at startup.
 - Model-backed agents use `foundryprovider.NewAgent`. Local conversation history
@@ -119,11 +119,12 @@ search results. The driver is closed before reporting operation or cleanup error
 - Step 04 uses the native SDK's generic HTTP methods for agent administration
   and an explicit version reference, rather than attaching to a potentially
   different version selected by an agent endpoint.
-- The sample-only in-memory `TextSearchStore` implements the path exercised by
-  Step 01. Its default cosine similarity and descending top-k ranking were
-  verified against CommunityToolkit.VectorData.InMemory 1.0.1. It is not a port
-  of the entire generic vector-store framework or the helper's unused
-  hybrid-search, namespace-filter, or external-text-hydration options.
+- Step 01 uses the SDK's [in-memory connector](../../../vectordata/inmemory/)
+  for storage, batch embedding generation, and cosine top-1 search. Its
+  [document schema](./step01_basic_text_rag/main.go) declares a
+  3072-dimensional vector generated from the text. `embedding.Bind` connects the
+  Foundry generator to the collection options. UUID keys are generated for each
+  upload; source IDs remain metadata, so repeated uploads create separate records.
 - Qdrant and Neo4j use native Go connectors, not mock substitutes.
 - Neo4j retrieval helpers follow `Neo4j.AgentFramework.GraphRAG`
   `0.1.0-preview.2`; its MIT notice is included in

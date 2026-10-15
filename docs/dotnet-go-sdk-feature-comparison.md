@@ -189,6 +189,40 @@ support project administration calls without changing subsequent OpenAI requests
 Both the native client and embedding generator retain the SDK's credential origin
 and redirect protections.
 
+The [vector data package](../vectordata/) is based on
+[Microsoft.Extensions.VectorData.Abstractions 10.10.0](https://github.com/dotnet/extensions/tree/294665a5ec4eceaa245388cfb70883ea01881081/src/Libraries/Microsoft.Extensions.VectorData.Abstractions).
+Go differences:
+
+- Stores fix key/record types through generics. `Get` returns
+  `(record, found, error)`; `iter.Seq2` replaces async enumerables, and variadic
+  `Upsert` replaces separate single/batch methods.
+- Struct tags replace attributes; dynamic records use `map[string]any`.
+  [`providerservices.Build`](../vectordata/providerservices/builder.go) combines
+  typed and dynamic model construction.
+- Property accessors distinguish missing from nil, use Go assignability, and
+  clear nil-capable fields when assigned nil.
+- Built-in index and distance identifiers use lowercase snake case.
+- Embedding configuration uses explicit [`embedding.Bind`](../embedding/bind.go)
+  bindings to retain generic input/output types.
+- A portable `Filter` tree replaces LINQ expressions. Provider services are
+  experimental; CLR service lookup, obsolete filters, and the full builder,
+  serializer, and embedding-dispatch machinery are not ported.
+
+The [in-memory connector](../vectordata/inmemory/) ports
+[CommunityToolkit.VectorData.InMemory 1.0.1](https://github.com/CommunityToolkit/AI/tree/7a48d308df63d85427a772f031616889905a0fdf/MEVD/src/InMemory)
+(tag `mevd/InMemory/v1.0.1`). Additional differences:
+
+- Plain structs follow Go value semantics; use pointers or maps to observe
+  generated UUIDs on input. Keys follow Go equality and reject nil and NaN.
+- Strings sort lexicographically. Custom comparisons use `Compare(T) int` and
+  `Equal(T) bool`; equality otherwise uses `reflect.DeepEqual`.
+- Batch dictionary updates are atomic; mutations to input records are not rolled
+  back on failure.
+- Snapshots use Go JSON, not the .NET format. Vector scores may differ through
+  floating-point rounding.
+
+These packages remain outside the catalog's extraction scope.
+
 The separate [dotnetsymbols command](../_catalog/cmd/dotnetsymbols/README.md) extracts an inventory from compiled .NET assemblies using `go-winmd`. By default, `go -C _catalog run ./cmd/dotnetsymbols` resolves the latest stable MAF release and downloads its prebuilt core NuGet packages, without Git or a .NET SDK. Pin a version with `-release 1.22.0` for reproducible reruns. Select additional packages with `-package` and an exact target framework with `-framework`. Package versions, hashes, source metadata, and assembly identities are recorded; the release is not assumed to match this catalog's commit baseline.
 
 For unpublished source, build the relevant upstream library projects separately and pass their reference or implementation assemblies with `-assembly`. Both modes include types, declared members, overloads, events, generic constraints, and experimental/compiler-generated markers without executing assembly code. Extraction omits metadata not used for reconciliation, such as parameter names/defaults, constant values, raw attribute lists and unused API flags. No per-symbol paths or line numbers are stored.

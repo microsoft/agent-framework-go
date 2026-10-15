@@ -7,6 +7,8 @@
 // a single input, [GenerateVector] for its vector, or [GenerateAndZip] to pair
 // a batch of inputs with their embeddings. Generators and their wrappers must
 // support concurrent calls; inputs and options must be treated as read-only.
+// [Bind] adapts a typed generator to [BoundGenerator] for heterogeneous callers
+// while preserving its declared input and output types.
 //
 // An [Embedding] contains metadata and a statically typed [Vector]. Numeric
 // vectors use [VectorOf], and bit vectors use [Binary]. Their slices are borrowed,
