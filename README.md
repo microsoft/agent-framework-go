@@ -54,12 +54,14 @@ For a detailed .NET-to-Go feature comparison, see the [.NET and Go SDK feature c
 - **Microsoft Foundry Agents**: Build project-backed Foundry agents, invoke existing server-side Foundry agents, pass Foundry client headers, capture served-model metadata, and use Foundry memory. Foundry-hosted deployment is not implemented yet in the Go SDK.
   - [Foundry examples](./examples/02-agents/providers/foundry/) | [Foundry provider](./provider/foundryprovider/)
 - **Observability**: OpenTelemetry integration for distributed tracing, monitoring, and debugging.
-  - [Agent OpenTelemetry](./provider/otelprovider/) | [Workflow OpenTelemetry](./workflow/observability/opentelemetry/)
+  - [Agent and embedding OpenTelemetry](./provider/otelprovider/) | [Workflow OpenTelemetry](./workflow/observability/opentelemetry/)
 - **Declarative Agents**: Not implemented yet in the Go SDK.
 - **Agent Skills**: Build domain-specific knowledge bases from files, inline definitions, and scripts for agents to discover and use.
   - [Skills examples](./examples/02-agents/skills/) | [Skills package](./agent/skills/)
 - **Text Search (RAG)**: Retrieve and cite external knowledge automatically before agent runs or through an on-demand search tool, with optional session-backed recent-message memory.
-  - [Text search package](./agent/textsearch/) | [RAG sample](./examples/02-agents/rag/step03_custom_rag_data_source/)
+  - [Text search package](./agent/textsearch/) | [RAG examples](./examples/02-agents/rag/)
+- **Embeddings**: Provider-independent batch generation, numeric and binary vectors, request options, usage metadata, and single-input/vector/batch-pair helpers, with an OpenAI/Foundry adapter and opt-in OpenTelemetry instrumentation.
+  - [Embedding package](./embedding/) | [OpenAI embedding generator](./provider/openaiprovider/embedding.go) | [Foundry embedding generator](./provider/foundryprovider/embedding.go)
 - **AF Labs**: Not implemented yet in the Go SDK.
 - **DevUI**: Not implemented yet in the Go SDK.
 

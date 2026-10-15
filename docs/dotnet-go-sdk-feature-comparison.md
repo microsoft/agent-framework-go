@@ -97,6 +97,95 @@ The `go-only` view returns the original baseline and a paged `go_only` object. I
 
 The [mapping catalog](../_catalog/dotnet-go-sdk-symbol-mapping.json) contains public declarations from the three core MAF 1.22.0 packages at `net8.0` and 6,750 test method declarations from 45 upstream test assemblies. API package metadata retain version provenance under `dotnet`; test assemblies record source commits, target frameworks, and hashes under `dotnet.tests`. Public APIs from every provider integration or external dependency are not included; existing out-of-scope assessments are retained without extracted declaration metadata.
 
+The [embedding package](../embedding/) ports the core embedding abstraction family from
+[Microsoft.Extensions.AI.Abstractions](https://github.com/dotnet/extensions/tree/b10f9c0a081b5dbb7755b8f5592e1d3c3f550a3a/src/Libraries/Microsoft.Extensions.AI.Abstractions/Embeddings),
+which is not currently in the extracted API or test scope. It includes generation,
+numeric and binary embeddings, options, results, embedding metadata, and generation
+helpers. Generator metadata, service-query helpers, and delegating-generator helpers
+are intentionally not implemented. Optional caching, logging, and
+dependency-injection pipelines are not included.
+
+This port uses Go interfaces rather than inheritance, slices rather than collection
+interfaces, and contexts and errors for cancellation and failures. Resource-owning
+generator implementations may expose `Close`; cleanup is not required by the
+generation interface. Each `Embedding[TVector]` holds metadata and a statically
+typed vector; numeric `VectorOf[T]` and binary vectors provide the data.
+`Of[T]` is an exact alias for `Embedding[VectorOf[T]]` for shorter numeric type names.
+`GeneratedOf[T]` aliases `Generated[*Of[T]]` for batches of numeric embedding pointers.
+`Embedding[Vector]` holds vectors polymorphically. `Generator` retains input and
+output type parameters and returns `Generated[TEmbedding]`. The output
+representation is caller-selected rather than constrained to a base class.
+`GenerateVector` accepts a generator of `*Of[T]`, infers the element
+type, and returns its slice without copying or a runtime type assertion.
+Nil batch slices represent empty input.
+Options are read-only under the Go SDK ownership convention. Unlike the upstream
+positive-only dimension setter, Go preserves explicit zero dimensions and leaves
+service-specific constraints to providers. Local JSON uses `Type` discriminators
+and Go field names, not the .NET `$type` format. `Embedding` implements the standard
+JSON interfaces, so fields, slices, and results round-trip without a separate
+decoder. Typed decoding rejects discriminator/type mismatches without changing
+the receiver; `Embedding[Vector]` selects the vector type dynamically.
+Nil interface vectors serialize as null without a discriminator; typed nil numeric
+slices serialize as null with their discriminator. Numeric JSON supports `uint8`,
+`int8`, `float32`, and `float64`; there is no built-in float16 equivalent. These adaptations
+are not a claim of exact API or serialization parity. The catalog remains unchanged
+until its declaration scope is explicitly expanded.
+
+Embedding telemetry is available through
+[`otelprovider.WrapEmbeddingGenerator`](../provider/otelprovider/embedding.go), ported
+from [OpenTelemetryEmbeddingGenerator at `6c527a8`](https://github.com/dotnet/extensions/blob/6c527a8d9a0bcc89a40c61e8365c1afc565117e8/src/Libraries/Microsoft.Extensions.AI/Embeddings/OpenTelemetryEmbeddingGenerator.cs).
+It emits GenAI v1.41 client spans, operation-duration histograms, and input-token
+histograms. Provider, endpoint, and default model metadata are configured directly,
+without service queries. Response model tags use only the first result and are
+available for `Embedding` values and pointers using `Vector` or the built-in JSON
+vector types; custom generic outputs retain usage and duration telemetry.
+A non-nil usage object reports its input count,
+including zero. Token counts retain Go's 64-bit precision, and error type names use
+the SDK's shared Go convention. Additional request/response properties are opt-in
+through configuration or `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true`;
+raw inputs and vectors are not captured. Failures set the span status and duration
+error tag, preserve the original error, and optionally produce a warning through
+the configured logger. The wrapper preserves `io.Closer` only when the inner
+generator implements it, forwarding explicit close calls and their errors.
+Generation does not close the inner generator or shut down telemetry providers.
+
+[`openaiprovider.NewEmbeddingGenerator`](../provider/openaiprovider/embedding.go)
+adapts the OpenAI Embeddings API to
+`Generator[string, *Of[float32]]`. It accepts an existing OpenAI
+Go client, model and dimension defaults, and per-request options.
+The raw-options factory can supply native `openai.EmbeddingNewParams`; native
+settings take precedence over shared options and configured defaults. Results use
+float32 vectors in service response order, the served model, a local UTC creation
+timestamp per embedding, and reported prompt/total usage. The default wire encoding
+is base64; native parameters can request float encoding. Base64 decoding preserves
+all float32 bit patterns, including NaN and infinity. Empty batches are rejected
+without a request. Unrecognized raw-options factory results use default parameters.
+Omitted usage counters default to zero; malformed or fractional counters return an
+error, with valid counts retained at Go's 64-bit precision. The adapter preserves
+the service's result count and sequence; single-input and pairing helpers validate
+counts. It does not own the client, does not require cleanup, and can be passed to
+the optional telemetry wrapper. These behaviors were checked against
+[the .NET adapter at `6c527a8`](https://github.com/dotnet/extensions/blob/6c527a8d9a0bcc89a40c61e8365c1afc565117e8/src/Libraries/Microsoft.Extensions.AI.OpenAI/OpenAIEmbeddingGenerator.cs)
+and OpenAI .NET 2.14.0. Explicit zero dimensions and read-only shared options remain
+intentional Go adaptations.
+
+[`foundryprovider.NewEmbeddingGenerator`](../provider/foundryprovider/embedding.go)
+accepts a Foundry project endpoint, Azure token credential, and embedding
+configuration. It derives the resource origin from that project URL, shares the
+Foundry provider's authenticated client setup, uses the resource
+`/openai/v1/embeddings` route without an `api-version` query, and delegates
+generation to the OpenAI adapter. Per-request model and dimension
+options retain the OpenAI adapter's precedence and response conversion behavior.
+The generator does not take ownership of the credential or transport.
+
+[`foundryprovider.NewOpenAIClient`](../provider/foundryprovider/client.go) exposes
+the authenticated native OpenAI SDK client. A resource endpoint supports model
+APIs such as embeddings; a project endpoint supports project-scoped operations
+such as files and vector stores. Per-request base-URL and API-version options
+support project administration calls without changing subsequent OpenAI requests.
+Both the native client and embedding generator retain the SDK's credential origin
+and redirect protections.
+
 The separate [dotnetsymbols command](../_catalog/cmd/dotnetsymbols/README.md) extracts an inventory from compiled .NET assemblies using `go-winmd`. By default, `go -C _catalog run ./cmd/dotnetsymbols` resolves the latest stable MAF release and downloads its prebuilt core NuGet packages, without Git or a .NET SDK. Pin a version with `-release 1.22.0` for reproducible reruns. Select additional packages with `-package` and an exact target framework with `-framework`. Package versions, hashes, source metadata, and assembly identities are recorded; the release is not assumed to match this catalog's commit baseline.
 
 For unpublished source, build the relevant upstream library projects separately and pass their reference or implementation assemblies with `-assembly`. Both modes include types, declared members, overloads, events, generic constraints, and experimental/compiler-generated markers without executing assembly code. Extraction omits metadata not used for reconciliation, such as parameter names/defaults, constant values, raw attribute lists and unused API flags. No per-symbol paths or line numbers are stored.

@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -17,8 +18,8 @@ import (
 )
 
 var logger = demo.NewLogger(
-	"Text Search RAG",
-	"Demonstrates retrieval-augmented generation with a custom text search function.",
+	"Custom RAG Data Source",
+	"Demonstrates retrieval with a custom text search function.",
 	"Model", demo.FoundryModel,
 )
 
@@ -30,33 +31,35 @@ func main() {
 		RecentMessageMemoryLimit: 6,
 	})
 
-	a := foundryprovider.NewAgent(
-		demo.FoundryProjectEndpoint,
-		token,
-		foundryprovider.ModelDeployment(demo.FoundryModel),
+	a := foundryprovider.NewAgent(demo.FoundryProjectEndpoint, token, foundryprovider.ModelDeployment(demo.FoundryModel),
 		foundryprovider.AgentConfig{
 			Instructions: "You are a helpful support specialist for Contoso Outdoors. Answer questions using the provided context and cite the source document when available.",
 			Config: agent.Config{
-				Name:             "ContosoSupport",
 				ContextProviders: []agent.ContextProvider{searchProvider},
 				Middlewares:      []agent.Middleware{logger},
 			},
-		},
-	)
+			DisableStoreOutput: true,
+		})
 
 	ctx := context.Background()
 	session, err := a.CreateSession(ctx)
 	if err != nil {
 		demo.Panic(err)
 	}
-
-	for _, prompt := range []string{
-		"Hi! I need help understanding the return policy.",
-		"How long does standard shipping usually take?",
-		"What is the best way to maintain the TrailRunner tent fabric?",
+	for i, question := range []struct{ heading, text string }{
+		{"Asking about returns", "Hi! I need help understanding the return policy."},
+		{"Asking about shipping", "How long does standard shipping usually take?"},
+		{"Asking about product care", "What is the best way to maintain the TrailRunner tent fabric?"},
 	} {
-		resp, err := a.RunText(ctx, prompt, agent.WithSession(session)).Collect()
-		demo.Response(resp, err)
+		if i > 0 {
+			fmt.Println()
+		}
+		fmt.Printf(">> %s\n\n", question.heading)
+		response, err := a.RunText(ctx, question.text, agent.WithSession(session)).Collect()
+		if err != nil {
+			demo.Panic(err)
+		}
+		demo.Response(response, nil)
 	}
 }
 

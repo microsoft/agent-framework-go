@@ -30,7 +30,8 @@ mask produces no comment. Bit `index` is set when `mask & (1 << index)` is nonze
 Existing valid feature comments are replaced rather than duplicated; unrelated
 comments and header content are preserved.
 
-Only the OpenAI/Foundry Chat Completions and Responses adapters emit the comment,
+The OpenAI/Foundry Chat Completions and Responses adapters and the OpenAI embedding
+generator emit the comment,
 including streaming, tool follow-up, and continuation requests. The actual
 request URL must use HTTPS and its hostname must equal, or be a subdomain of,
 a reviewed suffix for that adapter family.
@@ -101,7 +102,7 @@ These switches do not configure OpenTelemetry or change service telemetry.
 | 48 | `foundry.chat_client` | Foundry model-deployment agent invocation |
 | 49 | `foundry.agent` | Foundry server-agent invocation |
 | 50 | `foundry.memory` | Foundry memory provider participation, provisioning, or deletion |
-| 54 | `openai` | OpenAI adapter invocation, including continuation |
+| 54 | `openai` | OpenAI adapter invocation, including continuation and non-empty embedding requests |
 | 55 | `anthropic` | Anthropic adapter invocation |
 | 57 | `github_copilot` | GitHub Copilot adapter invocation |
 | 62 | `a2a` | A2A client adapter invocation |

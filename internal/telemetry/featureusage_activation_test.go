@@ -106,6 +106,10 @@ var featureActivationCases = []struct {
 	{"gemini", []int{0}, nil},
 	{"copilot", []int{0, 57}, nil},
 	{"openai-chat", []int{0, 54}, nil},
+	{"embedding-openai", []int{54}, nil},
+	{"embedding-openai-empty-invalid", nil, nil},
+	{"embedding-foundry", []int{54}, nil},
+	{"embedding-foundry-empty-invalid", nil, nil},
 	{"openai-chat-stream", []int{0, 54}, nil},
 	{"openai-responses", []int{0, 54}, nil},
 	{"openai-responses-stream", []int{0, 54}, nil},
@@ -335,6 +339,43 @@ func runFeatureActivation(t *testing.T, name string) {
 	}
 	var activate func() error
 	switch name {
+	case "embedding-openai", "embedding-openai-empty-invalid", "embedding-foundry", "embedding-foundry-empty-invalid":
+		requests := 0
+		httpClient := &http.Client{Transport: activationTransport(func(req *http.Request) (*http.Response, error) {
+			requests++
+			header := req.Header.Get(userAgentKey)
+			if !strings.HasSuffix(header, " "+featureComment(54)) || strings.Count(header, "(feat=") != 1 {
+				t.Errorf("request User-Agent = %q, want current OpenAI feature comment", header)
+			}
+			return activationResponse(req, `{"data":[{"index":0,"embedding":[1]}],"model":"test"}`), nil
+		})}
+		client := openai.NewClient(
+			option.WithAPIKey("test"),
+			option.WithBaseURL("https://project.openai.azure.com/"),
+			option.WithMaxRetries(0),
+			option.WithHTTPClient(httpClient),
+		)
+		generator := openaiprovider.NewEmbeddingGenerator(client, openaiprovider.EmbeddingGeneratorConfig{Model: "test"})
+		if strings.HasPrefix(name, "embedding-foundry") {
+			generator = foundryprovider.NewEmbeddingGenerator("https://project.services.ai.azure.com/api/projects/test", &azfake.TokenCredential{},
+				foundryprovider.EmbeddingGeneratorConfig{
+					Model: "test", OpenAIOptions: []option.RequestOption{
+						option.WithHTTPClient(httpClient), option.WithMaxRetries(0),
+					},
+				})
+		}
+		activate = func() error {
+			var values []string
+			wantRequests := 0
+			if name == "embedding-openai" || name == "embedding-foundry" {
+				values, wantRequests = []string{"hello"}, 1
+			}
+			_, err := generator.Generate(ctx, values, nil)
+			if requests != wantRequests {
+				t.Fatalf("embedding requests = %d, want %d", requests, wantRequests)
+			}
+			return err
+		}
 	case "agent", "agent-session":
 		a := activationAgent()
 		activate = func() error {

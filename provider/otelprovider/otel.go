@@ -29,10 +29,15 @@ type MiddlewareConfig struct {
 // NewMiddleware creates a new middleware that adds OpenTelemetry tracing and metrics to agent runs.
 func NewMiddleware(cfg MiddlewareConfig) agent.Middleware {
 	name := cmp.Or(cfg.SourceName, "github.com/microsoft/agent-framework-go")
-	m := &mw{
-		tracer: otel.Tracer(name),
+	operationDuration, tokenUsage := newClientMetrics(otel.Meter(name))
+	return &mw{
+		tracer:            otel.Tracer(name),
+		operationDuration: operationDuration,
+		tokenUsage:        tokenUsage,
 	}
-	meter := otel.Meter(name)
+}
+
+func newClientMetrics(meter metric.Meter) (genaiconv.ClientOperationDuration, genaiconv.ClientTokenUsage) {
 	operationDuration, err := genaiconv.NewClientOperationDuration(
 		meter,
 		metric.WithExplicitBucketBoundaries(0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92),
@@ -40,7 +45,6 @@ func NewMiddleware(cfg MiddlewareConfig) agent.Middleware {
 	if err != nil {
 		otel.Handle(err)
 	}
-	m.operationDuration = operationDuration
 	tokenUsage, err := genaiconv.NewClientTokenUsage(
 		meter,
 		metric.WithExplicitBucketBoundaries(1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864),
@@ -48,8 +52,7 @@ func NewMiddleware(cfg MiddlewareConfig) agent.Middleware {
 	if err != nil {
 		otel.Handle(err)
 	}
-	m.tokenUsage = tokenUsage
-	return m
+	return operationDuration, tokenUsage
 }
 
 type mw struct {
