@@ -389,7 +389,10 @@ func TestLockstepRunEventStream_EarlyStopEndsWorkflowRunSpan(t *testing.T) {
 	stream := newLockstepRunEventStream(runner)
 	defer stream.Stop()
 
-	for range stream.TakeEventStream(t.Context(), false) {
+	for _, err := range stream.TakeEventStream(t.Context(), false) {
+		if err != nil {
+			t.Fatal(err)
+		}
 		break
 	}
 

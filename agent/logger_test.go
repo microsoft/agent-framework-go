@@ -164,7 +164,10 @@ func TestAgent_RunLogs_EarlyTermination(t *testing.T) {
 	})
 
 	consumedCount := 0
-	for range a.RunText(context.Background(), "hello") {
+	for _, err := range a.RunText(context.Background(), "hello") {
+		if err != nil {
+			t.Fatal(err)
+		}
 		consumedCount++
 		if consumedCount >= 2 {
 			break

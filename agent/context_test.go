@@ -305,7 +305,10 @@ func TestContextProviderMiddleware_Run_SuppressesInvokedErrorAfterConsumerStop(t
 	// returns an error; the middleware must not yield it because the consumer
 	// already stopped, otherwise Go panics with
 	// "range function continued iteration after loop body returned false".
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatalf("middleware returned an error: %v", err)
+		}
 		break
 	}
 }

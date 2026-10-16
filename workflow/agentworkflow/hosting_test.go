@@ -748,7 +748,10 @@ func TestHostedAgent_ForwardsIncomingMessages(t *testing.T) {
 			}}
 			sendStreamMessage(t, stream, ctx, input)
 			sendStreamMessage(t, stream, ctx, workflow.TurnToken{})
-			for range stream.WatchStream(ctx) {
+			for _, err := range stream.WatchStream(ctx) {
+				if err != nil {
+					t.Fatal(err)
+				}
 			}
 
 			// First call: incoming forwarded message (only when forwarding is enabled).

@@ -223,7 +223,10 @@ func TestOtel_Run_DoesNotRecordUnreportedTokenUsage(t *testing.T) {
 		}
 	}
 
-	for range mw.Run(next, t.Context(), nil) {
+	for _, err := range mw.Run(next, t.Context(), nil) {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	resourceMetrics := collectMetrics(t, reader)
@@ -244,7 +247,10 @@ func TestOtel_Run_DoesNotRecordEmptyUsageContent(t *testing.T) {
 		}
 	}
 
-	for range mw.Run(next, t.Context(), nil) {
+	for _, err := range mw.Run(next, t.Context(), nil) {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	resourceMetrics := collectMetrics(t, reader)
@@ -267,7 +273,10 @@ func TestOtel_Run_DoesNotRecordTokenMetricForOptionalCountersOnly(t *testing.T) 
 		}
 	}
 
-	for range mw.Run(next, t.Context(), nil) {
+	for _, err := range mw.Run(next, t.Context(), nil) {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	resourceMetrics := collectMetrics(t, reader)
@@ -288,7 +297,10 @@ func TestOtel_Run_MetricErrorAttributes(t *testing.T) {
 		}
 	}
 
-	for range mw.Run(next, t.Context(), nil) {
+	for _, err := range mw.Run(next, t.Context(), nil) {
+		if !errors.Is(err, testErr) {
+			t.Fatalf("middleware error = %v, want %v", err, testErr)
+		}
 	}
 
 	resourceMetrics := collectMetrics(t, reader)
@@ -339,7 +351,10 @@ func TestOtel_Run_RecordsMetricsOnEarlyBreak(t *testing.T) {
 		}
 	}
 
-	for range mw.Run(next, t.Context(), nil) {
+	for _, err := range mw.Run(next, t.Context(), nil) {
+		if err != nil {
+			t.Fatal(err)
+		}
 		break
 	}
 
@@ -368,7 +383,10 @@ func TestOtel_Run_CreatesSpan(t *testing.T) {
 	messages := []*message.Message{message.NewText("test message")}
 
 	seq := mw.Run(next, t.Context(), messages)
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if !nextCalled {
@@ -592,7 +610,10 @@ func TestOtel_Run_RecordsError(t *testing.T) {
 	messages := []*message.Message{message.NewText("test message")}
 
 	seq := mw.Run(next, t.Context(), messages)
-	for range seq {
+	for _, err := range seq {
+		if !errors.Is(err, testErr) {
+			t.Fatalf("middleware error = %v, want %v", err, testErr)
+		}
 	}
 
 	spans := exporter.GetSpans()
@@ -647,7 +668,10 @@ func TestOtel_Run_CustomSourceName(t *testing.T) {
 	}
 
 	seq := mw.Run(next, t.Context(), []*message.Message{})
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	spans := exporter.GetSpans()
@@ -673,7 +697,10 @@ func TestOtel_Run_DefaultSourceName(t *testing.T) {
 	}
 
 	seq := mw.Run(next, t.Context(), []*message.Message{})
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	spans := exporter.GetSpans()
@@ -701,7 +728,10 @@ func TestOtel_Run_PropagatesContext(t *testing.T) {
 	}
 
 	seq := mw.Run(next, t.Context(), []*message.Message{})
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if capturedCtx == nil {
@@ -737,7 +767,10 @@ func TestOtel_Run_HandlesMultipleUpdates(t *testing.T) {
 	}
 
 	seq := mw.Run(next, t.Context(), []*message.Message{})
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 		updateCount++
 	}
 
@@ -980,7 +1013,10 @@ func TestOtel_Run_HandlesEarlyBreak(t *testing.T) {
 	seq := mw.Run(next, t.Context(), []*message.Message{})
 
 	count := 0
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 		count++
 		if count >= 3 {
 			break
@@ -1011,7 +1047,10 @@ func TestOtel_Run_UnknownProviderWhenNoMetadata(t *testing.T) {
 
 	// Use context without metadata
 	seq := mw.Run(next, t.Context(), []*message.Message{})
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	spans := exporter.GetSpans()
@@ -1049,7 +1088,14 @@ func TestOtel_Run_RecordsMultipleErrors(t *testing.T) {
 	}
 
 	seq := mw.Run(next, t.Context(), []*message.Message{})
-	for range seq {
+	wantErrors := []error{err1, err2}
+	for _, err := range seq {
+		if callCount >= len(wantErrors) {
+			t.Fatalf("received more than %d errors", len(wantErrors))
+		}
+		if !errors.Is(err, wantErrors[callCount]) {
+			t.Errorf("error %d = %v, want %v", callCount, err, wantErrors[callCount])
+		}
 		callCount++
 	}
 

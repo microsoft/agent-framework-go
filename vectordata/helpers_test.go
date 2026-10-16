@@ -204,7 +204,10 @@ func TestGetBatch_NativeStopsOnConsumerBreakAndError(t *testing.T) {
 				}
 			}
 		}}
-		for range vectordata.GetBatch(t.Context(), collection, []string{"first", "second"}, nil) {
+		for _, err := range vectordata.GetBatch(t.Context(), collection, []string{"first", "second"}, nil) {
+			if !errors.Is(err, failure) {
+				t.Fatalf("GetBatch error = %v, want %v", err, failure)
+			}
 			break
 		}
 		if calls != 1 {
@@ -216,7 +219,10 @@ func TestGetBatch_NativeStopsOnConsumerBreakAndError(t *testing.T) {
 func TestBatchHelpers_EmptyAndInvalidInputs(t *testing.T) {
 	collection := &nativeCollection{}
 	for _, keys := range [][]string{nil, {}} {
-		for range vectordata.GetBatch(t.Context(), collection, keys, nil) {
+		for _, err := range vectordata.GetBatch(t.Context(), collection, keys, nil) {
+			if err != nil {
+				t.Fatal(err)
+			}
 			t.Fatal("empty retrieval yielded a value")
 		}
 		if err := vectordata.DeleteBatch(t.Context(), collection, keys); err != nil {
