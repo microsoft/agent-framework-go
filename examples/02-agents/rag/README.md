@@ -26,10 +26,8 @@ $env:FOUNDRY_EMBEDDING_MODEL = "text-embedding-3-large"
 The examples use the shared `demo.FoundryModel`, which defaults to `gpt-4o-mini`
 when `FOUNDRY_MODEL` is unset or blank. Set it as above to match the upstream
 sample's `gpt-5.4-mini` choice. Steps 01 and 02 also use
-`FOUNDRY_EMBEDDING_MODEL`. Set it to `text-embedding-3-large` as above for their
-3072-dimensional vector schemas. The shared demo default, `text-embedding-ada-002`,
-produces 1536-dimensional vectors; using it requires changing the corresponding
-store/schema dimensions to 1536. Deployment names must match those in your resource.
+`FOUNDRY_EMBEDDING_MODEL`, which defaults to `text-embedding-3-large` for their
+3072-dimensional vector schemas. Deployment names must match those in your resource.
 
 For production, choose a specific credential appropriate to the deployment,
 rather than the development-oriented `DefaultAzureCredential` chain.

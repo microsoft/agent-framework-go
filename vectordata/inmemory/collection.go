@@ -16,46 +16,54 @@ import (
 )
 
 // Collection is a configured handle to an in-memory collection. Construct one
-// with [Store.Collection] or [NewCollection]. Its schema is fixed at construction.
+// with [NewCollection]. Its schema is fixed at construction. A shared [Store]
+// also creates collections through its embedded [vectordata.Store].
 type Collection[K comparable, R any] struct {
-	store  *Store[K, R]
-	name   string
-	model  *providerservices.CollectionModel
-	schema recordSchema
+	store      *store
+	name       string
+	model      *providerservices.CollectionModel
+	schema     recordSchema
+	keyType    reflect.Type
+	recordType reflect.Type
 }
 
 // NewCollection creates a handle backed by its own independent store.
+// A nil definition uses the record's vectordata tags.
 // The collection does not exist until [Collection.EnsureExists] is called.
-func NewCollection[K comparable, R any](name string, options vectordata.CollectionOptions) (*Collection[K, R], error) {
-	return new(Store[K, R]).collection(name, options)
+func NewCollection[K comparable, R any](name string, definition *vectordata.Definition) (*Collection[K, R], error) {
+	return newCollection[K, R](new(store), name, reflect.TypeFor[K](), reflect.TypeFor[R](), definition)
 }
 
-func (s *Store[K, R]) collection(name string, options vectordata.CollectionOptions) (*Collection[K, R], error) {
+func newCollection[K comparable, R any](s *store, name string, keyType, recordType reflect.Type, definition *vectordata.Definition) (*Collection[K, R], error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, failure(name, "Collection", fmt.Errorf("collection name is required"))
 	}
-	if options.EmbeddingGenerator == nil {
-		options.EmbeddingGenerator = s.generator
+	s.mu.RLock()
+	data := s.collections[name]
+	s.mu.RUnlock()
+	if data != nil && data.recordType != recordType {
+		return nil, failure(name, "Collection", incompatibleCollection(name, data.recordType, recordType))
 	}
-	model, err := providerservices.Build[K, R](options, providerservices.Config{
+	model, err := providerservices.Build(keyType, recordType, definition, providerservices.Config{
 		SupportsMultipleVectors: true,
 		SupportsKeyType:         reflect.Type.Comparable,
 		SupportsDataType:        func(reflect.Type) bool { return true },
-		SupportsVectorType:      vectorTypeSupported,
+		SupportsVectorType:      providerservices.SupportsVector[float32],
 		SupportsKeyAutoGeneration: func(typ reflect.Type) bool {
 			return typ == reflect.TypeFor[uuid.UUID]()
 		},
+		DefaultEmbeddingGenerator: s.generator,
 	})
 	if err != nil {
 		return nil, failure(name, "Collection", err)
 	}
-	schema := newRecordSchema(reflect.TypeFor[R](), model)
+	schema := newRecordSchema(recordType, model)
 	for _, field := range schema.vectors {
 		if field.vector.Type != field.vector.EmbeddingType && field.vector.EmbeddingGenerator == nil {
 			return nil, failure(name, "Collection", fmt.Errorf("property %q requires an embedding generator; in-memory storage cannot generate embeddings itself", field.name))
 		}
 	}
-	return &Collection[K, R]{store: s, name: name, model: model, schema: schema}, nil
+	return &Collection[K, R]{store: s, name: name, model: model, schema: schema, keyType: keyType, recordType: recordType}, nil
 }
 
 // Name returns the collection name.
@@ -74,10 +82,14 @@ func (c *Collection[K, R]) EnsureExists(ctx context.Context) error {
 		return failure(c.name, "EnsureExists", err)
 	}
 	if c.store.collections == nil {
-		c.store.collections = make(map[string]map[K]*storedRecord[R])
+		c.store.collections = make(map[string]*collectionData)
 	}
-	if _, exists := c.store.collections[c.name]; !exists {
-		c.store.collections[c.name] = make(map[K]*storedRecord[R])
+	if data, exists := c.store.collections[c.name]; exists {
+		if data.recordType != c.recordType {
+			return failure(c.name, "EnsureExists", incompatibleCollection(c.name, data.recordType, c.recordType))
+		}
+	} else {
+		c.store.collections[c.name] = &collectionData{recordType: c.recordType, records: make(map[any]*storedRecord)}
 	}
 	return nil
 }
@@ -103,19 +115,29 @@ func (c *Collection[K, R]) Get(ctx context.Context, key K, options *vectordata.R
 		return zero, false, failure(c.name, "Get", err)
 	}
 	c.store.mu.RLock()
-	records, exists := c.store.collections[c.name]
-	record, found := records[key]
+	data, exists := c.store.collections[c.name]
+	var record *storedRecord
+	if exists && data.recordType == c.recordType {
+		record = data.records[key]
+	}
 	c.store.mu.RUnlock()
 	if !exists {
 		return zero, false, failure(c.name, "Get", missingCollection(c.name))
 	}
-	if !found {
+	if data.recordType != c.recordType {
+		return zero, false, failure(c.name, "Get", incompatibleCollection(c.name, data.recordType, c.recordType))
+	}
+	if record == nil {
 		return zero, false, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return zero, false, failure(c.name, "Get", err)
 	}
-	return record.Record, true, nil
+	result, err := collectionRecord[R](record.Record)
+	if err != nil {
+		return zero, false, failure(c.name, "Get", err)
+	}
+	return result, true, nil
 }
 
 // Delete deletes a record if it exists. A missing collection is an error.
@@ -131,11 +153,14 @@ func (c *Collection[K, R]) Delete(ctx context.Context, key K) error {
 	if err := ctx.Err(); err != nil {
 		return failure(c.name, "Delete", err)
 	}
-	records, exists := c.store.collections[c.name]
+	data, exists := c.store.collections[c.name]
 	if !exists {
 		return failure(c.name, "Delete", missingCollection(c.name))
 	}
-	delete(records, key)
+	if data.recordType != c.recordType {
+		return failure(c.name, "Delete", incompatibleCollection(c.name, data.recordType, c.recordType))
+	}
+	delete(data.records, key)
 	return nil
 }
 
@@ -155,15 +180,24 @@ func (c *Collection[K, R]) Upsert(ctx context.Context, records ...R) error {
 	if len(records) == 0 {
 		return nil
 	}
-	batch := make([]*storedRecord[R], len(records))
+	batch := make([]*storedRecord, len(records))
 	for i, record := range records {
 		if err := ctx.Err(); err != nil {
 			return failure(c.name, "Upsert", err)
 		}
-		if err := c.schema.validateRecord(reflect.ValueOf(record)); err != nil {
+		value := reflect.ValueOf(record)
+		if !value.IsValid() || !value.Type().AssignableTo(c.recordType) {
+			return failure(c.name, "Upsert", fmt.Errorf("record %d has type %T, want %v", i, record, c.recordType))
+		}
+		if value.Type() != c.recordType {
+			typed := reflect.New(c.recordType).Elem()
+			typed.Set(value)
+			value = typed
+		}
+		if err := c.schema.validateRecord(value); err != nil {
 			return failure(c.name, "Upsert", fmt.Errorf("record %d: %w", i, err))
 		}
-		batch[i] = &storedRecord[R]{Record: record}
+		batch[i] = &storedRecord{Record: value.Interface()}
 	}
 	for _, field := range c.schema.vectors {
 		if field.vector.Type == field.vector.EmbeddingType {
@@ -174,7 +208,7 @@ func (c *Collection[K, R]) Upsert(ctx context.Context, records ...R) error {
 			return failure(c.name, "Upsert", err)
 		}
 		for i, output := range result.Embeddings {
-			vector, ok := nativeVector(output)
+			vector, ok := providerservices.AsVector[float32](output)
 			if !ok || vector == nil {
 				return failure(c.name, "Upsert", fmt.Errorf("property %q: generator returned an invalid embedding at index %d", field.name, i))
 			}
@@ -194,12 +228,12 @@ func (c *Collection[K, R]) Upsert(ctx context.Context, records ...R) error {
 	if !exists {
 		return failure(c.name, "Upsert", missingCollection(c.name))
 	}
-	updates := make(map[K]*storedRecord[R], len(batch))
+	updates := make(map[any]*storedRecord, len(batch))
 	for i, record := range batch {
 		if err := ctx.Err(); err != nil {
 			return failure(c.name, "Upsert", err)
 		}
-		value := reflect.ValueOf(&record.Record).Elem()
+		value := reflect.ValueOf(record.Record)
 		if c.schema.keyAutoGenerated {
 			key, _, err := c.schema.key.read(value)
 			if err != nil {
@@ -212,14 +246,19 @@ func (c *Collection[K, R]) Upsert(ctx context.Context, records ...R) error {
 				}
 				target := value
 				if target.Kind() == reflect.Struct {
-					target = target.Addr()
+					target = reflect.New(value.Type())
+					target.Elem().Set(value)
 				}
 				if err := c.schema.key.property.SetValue(target.Interface(), id); err != nil {
 					return failure(c.name, "Upsert", err)
 				}
+				if value.Kind() == reflect.Struct {
+					value = target.Elem()
+					record.Record = value.Interface()
+				}
 			}
 		}
-		key, err := recordKey[K](c.schema.key, value)
+		key, err := recordKey(c.schema.key, value, c.keyType)
 		if err != nil {
 			return failure(c.name, "Upsert", fmt.Errorf("record %d: %w", i, err))
 		}
@@ -228,42 +267,31 @@ func (c *Collection[K, R]) Upsert(ctx context.Context, records ...R) error {
 	return c.commit(ctx, updates, false, "Upsert")
 }
 
-func (c *Collection[K, R]) commit(ctx context.Context, updates map[K]*storedRecord[R], create bool, operation string) error {
+func (c *Collection[K, R]) commit(ctx context.Context, updates map[any]*storedRecord, create bool, operation string) error {
 	c.store.mu.Lock()
 	defer c.store.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return failure(c.name, operation, err)
 	}
-	records, exists := c.store.collections[c.name]
+	data, exists := c.store.collections[c.name]
 	if !exists {
 		if !create {
 			return failure(c.name, operation, missingCollection(c.name))
 		}
 		if c.store.collections == nil {
-			c.store.collections = make(map[string]map[K]*storedRecord[R])
+			c.store.collections = make(map[string]*collectionData)
 		}
-		records = make(map[K]*storedRecord[R])
-		c.store.collections[c.name] = records
+		data = &collectionData{recordType: c.recordType, records: make(map[any]*storedRecord)}
+		c.store.collections[c.name] = data
+	} else if data.recordType != c.recordType {
+		return failure(c.name, operation, incompatibleCollection(c.name, data.recordType, c.recordType))
 	}
-	maps.Copy(records, updates)
+	maps.Copy(data.records, updates)
 	return nil
 }
 
-func (c *Collection[K, R]) snapshot(ctx context.Context) ([]*storedRecord[R], error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	c.store.mu.RLock()
-	defer c.store.mu.RUnlock()
-	records, exists := c.store.collections[c.name]
-	if !exists {
-		return nil, missingCollection(c.name)
-	}
-	result := make([]*storedRecord[R], 0, len(records))
-	for _, record := range records {
-		result = append(result, record)
-	}
-	return result, nil
+func (c *Collection[K, R]) snapshot(ctx context.Context) ([]*storedRecord, error) {
+	return c.store.snapshot(ctx, c.name, c.recordType)
 }
 
 func (c *Collection[K, R]) validateRetrieval(includeVectors bool) error {

@@ -19,17 +19,17 @@ import (
 // generated vectors. The snapshot contains a name and an array of records, not
 // a schema or generator configuration. Records must support encoding/json.
 // It does not close the writer. Record order in the snapshot is unspecified.
-func (s *Store[K, R]) Export(ctx context.Context, name string, writer io.Writer) error {
+func (s *Store) Export(ctx context.Context, name string, writer io.Writer) error {
 	if writer == nil {
 		return failure(name, "Export", fmt.Errorf("writer is required"))
 	}
-	records, err := (&Collection[K, R]{store: s, name: name}).snapshot(ctx)
+	records, err := s.provider.snapshot(ctx, name, nil)
 	if err != nil {
 		return failure(name, "Export", err)
 	}
 	snapshot := struct {
-		Name    string             `json:"name"`
-		Records []*storedRecord[R] `json:"records"`
+		Name    string          `json:"name"`
+		Records []*storedRecord `json:"records"`
 	}{name, records}
 	if err := json.NewEncoder(contextWriter{ctx, writer}).Encode(snapshot); err != nil {
 		return failure(name, "Export", err)
@@ -41,18 +41,22 @@ func (s *Store[K, R]) Export(ctx context.Context, name string, writer io.Writer)
 }
 
 // Import reads a JSON snapshot, creates its named collection if necessary, and
-// merges records, replacing matching keys. Configuration is supplied separately.
+// merges records, replacing matching keys. A nil definition uses the record's
+// vectordata tags; otherwise the supplied definition configures the collection.
 // Generated vectors are restored without invoking a generator. Invalid snapshots
 // do not modify the store. The reader is not closed.
 //
 // Dynamic properties are decoded using their schema types. Other interface
 // values follow encoding/json's usual decoding rules.
-func (s *Store[K, R]) Import(ctx context.Context, reader io.Reader, options vectordata.CollectionOptions) (vectordata.Collection[K, R], error) {
+func Import[K comparable, R any](ctx context.Context, s *Store, reader io.Reader, definition *vectordata.Definition) (vectordata.Collection[K, R], error) {
 	if err := ctx.Err(); err != nil {
 		return nil, failure("", "Import", err)
 	}
 	if reader == nil {
 		return nil, failure("", "Import", fmt.Errorf("reader is required"))
+	}
+	if s == nil || s.provider == nil {
+		return nil, failure("", "Import", fmt.Errorf("store is required"))
 	}
 	var snapshot struct {
 		Name    string `json:"name"`
@@ -76,11 +80,11 @@ func (s *Store[K, R]) Import(ctx context.Context, reader io.Reader, options vect
 	if snapshot.Records == nil {
 		return nil, failure(snapshot.Name, "Import", fmt.Errorf("snapshot records must be an array"))
 	}
-	collection, err := s.collection(snapshot.Name, options)
+	collection, err := newCollection[K, R](s.provider, snapshot.Name, reflect.TypeFor[K](), reflect.TypeFor[R](), definition)
 	if err != nil {
 		return nil, err
 	}
-	updates := make(map[K]*storedRecord[R], len(snapshot.Records))
+	updates := make(map[any]*storedRecord, len(snapshot.Records))
 	for i, source := range snapshot.Records {
 		if err := ctx.Err(); err != nil {
 			return nil, failure(snapshot.Name, "Import", err)
@@ -93,7 +97,7 @@ func (s *Store[K, R]) Import(ctx context.Context, reader io.Reader, options vect
 		if err := collection.schema.validateRecord(value); err != nil {
 			return nil, failure(snapshot.Name, "Import", err)
 		}
-		key, err := recordKey[K](collection.schema.key, value)
+		key, err := recordKey(collection.schema.key, value, collection.keyType)
 		if err != nil {
 			return nil, failure(snapshot.Name, "Import", err)
 		}
@@ -114,7 +118,7 @@ func (s *Store[K, R]) Import(ctx context.Context, reader io.Reader, options vect
 		if len(vectors) != len(source.Vectors) {
 			return nil, failure(snapshot.Name, "Import", fmt.Errorf("record %d contains unknown generated vectors", i))
 		}
-		updates[key] = &storedRecord[R]{Record: record, Vectors: vectors}
+		updates[key] = &storedRecord{Record: record, Vectors: vectors}
 	}
 	if err := collection.commit(ctx, updates, true, "Import"); err != nil {
 		return nil, err

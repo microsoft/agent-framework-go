@@ -28,7 +28,7 @@ type document struct {
 
 var allRecords = vectordata.Filter{Operator: vectordata.NotEqual, Property: "ID", Value: nil}
 
-func createCollection[K comparable, R any](t *testing.T, options vectordata.CollectionOptions) *inmemory.Collection[K, R] {
+func createCollection[K comparable, R any](t *testing.T, options *vectordata.Definition) *inmemory.Collection[K, R] {
 	t.Helper()
 	collection, err := inmemory.NewCollection[K, R]("records", options)
 	if err != nil {
@@ -70,18 +70,18 @@ func sequenceError[T any](t *testing.T, sequence iter.Seq2[T, error]) error {
 }
 
 func TestStore_LifecycleAndIsolation(t *testing.T) {
-	var store inmemory.Store[string, document]
+	store := inmemory.New(inmemory.Config{})
 	ctx := t.Context()
 	for _, name := range []string{"", " \t\n"} {
-		if _, err := store.Collection(name, vectordata.CollectionOptions{}); err == nil {
+		if _, err := vectordata.GetCollection[string, document](store.Store, name, nil); err == nil {
 			t.Fatalf("accepted collection name %q", name)
 		}
 	}
-	first, err := store.Collection("first", vectordata.CollectionOptions{})
+	first, err := vectordata.GetCollection[string, document](store.Store, "first", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	same, err := store.Collection("first", vectordata.CollectionOptions{})
+	same, err := vectordata.GetCollection[string, document](store.Store, "first", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestStore_LifecycleAndIsolation(t *testing.T) {
 	if record, found, err := same.Get(ctx, "id", nil); err != nil || !found || record.Text != "original" {
 		t.Fatalf("shared handle Get = %v, %v, %v", record, found, err)
 	}
-	other := inmemory.New[string, document](inmemory.Config{})
+	other := inmemory.New(inmemory.Config{})
 	if exists, err := other.CollectionExists(ctx, "first"); err != nil || exists {
 		t.Fatalf("independent store shares data: %v, %v", exists, err)
 	}
@@ -135,8 +135,228 @@ func TestStore_LifecycleAndIsolation(t *testing.T) {
 	}
 }
 
+func TestStore_HeterogeneousCollections(t *testing.T) {
+	store := inmemory.New(inmemory.Config{})
+	documents, err := vectordata.GetCollection[string, document](store.Store, "documents", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type counter struct {
+		ID    int `vectordata:"key"`
+		Value int `vectordata:"data"`
+	}
+	counters, err := vectordata.GetCollection[int, *counter](store.Store, "counters", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := dynamicDefinition(reflect.TypeFor[uuid.UUID]())
+	dynamic, err := store.DynamicCollection("dynamic", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, collection := range []interface{ EnsureExists(context.Context) error }{documents, counters, dynamic} {
+		if err := collection.EnsureExists(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	doc := document{ID: "one", Text: "document", Vector: []float32{1, 0, 0, 0}}
+	if err := documents.Upsert(t.Context(), doc); err != nil {
+		t.Fatal(err)
+	}
+	value := &counter{ID: 2, Value: 42}
+	if err := counters.Upsert(t.Context(), value); err != nil {
+		t.Fatal(err)
+	}
+	entry := map[string]any{"Text": "memory", "Vector": []float32{1, 0, 0, 0}}
+	if err := dynamic.Upsert(t.Context(), entry); err != nil {
+		t.Fatal(err)
+	}
+	key, ok := entry["ID"].(uuid.UUID)
+	if !ok || key == uuid.Nil {
+		t.Fatalf("dynamic collection did not generate a UUID: %v", entry)
+	}
+	otherHandle, err := store.DynamicCollection("dynamic", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := otherHandle.Get(t.Context(), key, nil)
+	if err != nil || !found || got["Text"] != "memory" {
+		t.Fatalf("dynamic Get = (%v, %v, %v)", got, found, err)
+	}
+	got["Text"] = "edited"
+	if entry["Text"] != "edited" {
+		t.Fatal("dynamic collection lost map identity")
+	}
+	if got, found, err := counters.Get(t.Context(), 2, nil); err != nil || !found || got != value {
+		t.Fatalf("typed pointer Get = (%v, %v, %v)", got, found, err)
+	}
+	if got, found, err := documents.Get(t.Context(), "one", nil); err != nil || !found || !reflect.DeepEqual(got, doc) {
+		t.Fatalf("typed value Get = (%v, %v, %v)", got, found, err)
+	}
+	results := collect(t, dynamic.Search(t.Context(), []float32{1, 0, 0, 0}, 1, nil))
+	if len(results) != 1 || results[0].Record["ID"] != key {
+		t.Fatalf("dynamic search results = %v", results)
+	}
+	names := collect(t, store.ListCollectionNames(t.Context()))
+	slices.Sort(names)
+	if !slices.Equal(names, []string{"counters", "documents", "dynamic"}) {
+		t.Fatalf("shared namespace = %v", names)
+	}
+	if err := store.EnsureCollectionDeleted(t.Context(), "dynamic"); err != nil {
+		t.Fatal(err)
+	}
+	if exists, err := otherHandle.Exists(t.Context()); err != nil || exists {
+		t.Fatalf("deleted dynamic handle exists = (%v, %v)", exists, err)
+	}
+	if got, found, err := documents.Get(t.Context(), "one", nil); err != nil || !found || got.ID != "one" {
+		t.Fatal("deleting dynamic collection changed another collection")
+	}
+	if _, err := store.DynamicCollection("no-schema", nil); err == nil {
+		t.Fatal("dynamic collection accepted no schema")
+	}
+}
+
+func TestStore_ConflictingRecordTypes(t *testing.T) {
+	store := inmemory.New(inmemory.Config{})
+	first, err := vectordata.GetCollection[string, document](store.Store, "records", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := vectordata.GetCollection[string, *document](store.Store, "records", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.EnsureExists(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.EnsureExists(t.Context()); err == nil {
+		t.Fatal("incompatible handle recreated an existing collection")
+	}
+	if _, err := vectordata.GetCollection[string, *document](store.Store, "records", nil); err == nil {
+		t.Fatal("opened an existing collection with an incompatible record type")
+	}
+	if err := first.EnsureDeleted(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.EnsureExists(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	input := &document{ID: "one", Text: "retained", Vector: []float32{1, 0, 0, 0}}
+	if err := second.Upsert(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := first.Get(t.Context(), "one", nil); err == nil {
+		t.Fatal("stale handle read incompatible records")
+	}
+	for _, err := range []error{
+		first.EnsureExists(t.Context()),
+		first.Upsert(t.Context(), document{ID: "one", Text: "changed"}),
+		first.Delete(t.Context(), "one"),
+		sequenceError(t, first.Search(t.Context(), []float32{1, 0, 0, 0}, 1, nil)),
+		sequenceError(t, first.GetFiltered(t.Context(), allRecords, 1, nil)),
+	} {
+		if err == nil {
+			t.Fatal("stale handle operated on an incompatible collection")
+		}
+	}
+	if got, found, err := second.Get(t.Context(), "one", nil); err != nil || !found || got != input || got.Text != "retained" {
+		t.Fatalf("stale operations changed the new collection: (%v, %v, %v)", got, found, err)
+	}
+}
+
+func TestStore_ConcurrentRecordTypes(t *testing.T) {
+	store := inmemory.New(inmemory.Config{})
+	first, err := vectordata.GetCollection[string, document](store.Store, "records", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := vectordata.GetCollection[string, *document](store.Store, "records", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, collection := range []interface{ EnsureExists(context.Context) error }{first, second} {
+		wg.Go(func() {
+			<-start
+			results <- collection.EnsureExists(t.Context())
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	successes := 0
+	for err := range results {
+		if err == nil {
+			successes++
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("concurrent creation allowed %d record types", successes)
+	}
+}
+
+func TestStore_GeneratedStructKeys(t *testing.T) {
+	type entry struct {
+		ID uuid.UUID `vectordata:"key"`
+	}
+	store := inmemory.New(inmemory.Config{})
+	collection, err := vectordata.GetCollection[uuid.UUID, entry](store.Store, "records", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collection.EnsureExists(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	input := entry{}
+	if err := collection.Upsert(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	records := collect(t, collection.GetFiltered(t.Context(), allRecords, 2, nil))
+	if len(records) != 1 || records[0].ID == uuid.Nil || input.ID != uuid.Nil {
+		t.Fatalf("generated struct keys = %v, input = %v", records, input)
+	}
+	if got, found, err := collection.Get(t.Context(), records[0].ID, nil); err != nil || !found || got != records[0] {
+		t.Fatalf("generated key lookup = (%v, %v, %v)", got, found, err)
+	}
+}
+
+func TestStore_AssignableDynamicKeys(t *testing.T) {
+	type key [2]int
+	type value [2]int
+	store := inmemory.New(inmemory.Config{})
+	options := dynamicDefinition(reflect.TypeFor[[2]int]())
+	collection, err := vectordata.GetCollection[key, map[string]any](store.Store, "typed", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dynamic, err := store.DynamicCollection("dynamic", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, collection := range []interface{ EnsureExists(context.Context) error }{collection, dynamic} {
+		if err := collection.EnsureExists(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input := map[string]any{"ID": value{1, 2}}
+	if err := collection.Upsert(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	if err := dynamic.Upsert(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	if got, found, err := collection.Get(t.Context(), key{1, 2}, nil); err != nil || !found || got["ID"] != (value{1, 2}) {
+		t.Fatalf("assignable typed key Get = (%v, %v, %v)", got, found, err)
+	}
+	if got, found, err := dynamic.Get(t.Context(), value{1, 2}, nil); err != nil || !found || got["ID"] != (value{1, 2}) {
+		t.Fatalf("dynamic key identity = (%v, %v, %v)", got, found, err)
+	}
+}
+
 func TestCollection_CRUD(t *testing.T) {
-	c := createCollection[string, document](t, vectordata.CollectionOptions{})
+	c := createCollection[string, document](t, nil)
 	ctx := t.Context()
 	input := document{ID: "first", Text: "initial", Vector: []float32{1, 2, 3, 4}}
 	if err := c.Upsert(ctx, input); err != nil {
@@ -178,7 +398,7 @@ func TestCollection_CRUD(t *testing.T) {
 }
 
 func TestCollection_MissingAndInvalidRecords(t *testing.T) {
-	c, err := inmemory.NewCollection[string, document]("missing", vectordata.CollectionOptions{})
+	c, err := inmemory.NewCollection[string, document]("missing", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +429,7 @@ func TestCollection_MissingAndInvalidRecords(t *testing.T) {
 	if _, found, err := c.Get(ctx, "valid", nil); err != nil || found {
 		t.Fatalf("invalid batch partially committed: %v, %v", found, err)
 	}
-	pointers := createCollection[string, *document](t, vectordata.CollectionOptions{})
+	pointers := createCollection[string, *document](t, nil)
 	if err := pointers.Upsert(ctx, nil); err == nil {
 		t.Fatal("accepted nil record")
 	}
@@ -237,7 +457,7 @@ func TestCollection_RetainsRecordReferences(t *testing.T) {
 		ID: "id", Root: root, Alias: root, Metadata: metadata,
 		Array: [1][]string{{"original"}}, When: time.Now(), private: 42,
 	}
-	c := createCollection[string, *record](t, vectordata.CollectionOptions{})
+	c := createCollection[string, *record](t, nil)
 	if err := c.Upsert(t.Context(), input); err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +486,7 @@ func TestCollection_AcceptsReferenceAndPrivateState(t *testing.T) {
 		Channel  chan int
 		hidden   *int
 	}
-	c := createCollection[string, record](t, vectordata.CollectionOptions{})
+	c := createCollection[string, record](t, nil)
 	called := false
 	input := record{
 		ID: "id", Channel: make(chan int), hidden: new(42),
@@ -283,7 +503,7 @@ func TestCollection_AcceptsReferenceAndPrivateState(t *testing.T) {
 }
 
 func TestCollection_ReturnsStoredRecordsWithVectors(t *testing.T) {
-	c := createCollection[string, *document](t, vectordata.CollectionOptions{})
+	c := createCollection[string, *document](t, nil)
 	input := &document{ID: "id", Vector: []float32{1, 0, 0, 0}}
 	if err := c.Upsert(t.Context(), input); err != nil {
 		t.Fatal(err)
@@ -304,17 +524,17 @@ func TestCollection_ReturnsStoredRecordsWithVectors(t *testing.T) {
 	}
 }
 
-func dynamicOptions(keyType reflect.Type) vectordata.CollectionOptions {
-	return vectordata.CollectionOptions{Definition: &vectordata.Definition{Properties: []vectordata.Property{
+func dynamicDefinition(keyType reflect.Type) *vectordata.Definition {
+	return &vectordata.Definition{Properties: []vectordata.Property{
 		&vectordata.KeyProperty{Name: "ID", Type: keyType},
 		&vectordata.DataProperty{Name: "Text", Type: reflect.TypeFor[string]()},
 		&vectordata.VectorProperty{Name: "Vector", Type: reflect.TypeFor[[]float32](), Dimensions: 4},
-	}}}
+	}}
 }
 
 func TestCollection_DynamicRecords(t *testing.T) {
 	type dynamic map[string]any
-	c := createCollection[string, dynamic](t, dynamicOptions(reflect.TypeFor[string]()))
+	c := createCollection[string, dynamic](t, dynamicDefinition(reflect.TypeFor[string]()))
 	input := dynamic{"ID": "id", "Text": "hello", "Vector": []float32{1, 2, 3, 4}, "Other": map[string]int{"value": 1}}
 	if err := c.Upsert(t.Context(), input); err != nil {
 		t.Fatal(err)
@@ -343,7 +563,7 @@ func TestCollection_DynamicRecords(t *testing.T) {
 			}
 		})
 	}
-	pointers := createCollection[string, *dynamic](t, dynamicOptions(reflect.TypeFor[string]()))
+	pointers := createCollection[string, *dynamic](t, dynamicDefinition(reflect.TypeFor[string]()))
 	if err := pointers.Upsert(t.Context(), nil); err == nil {
 		t.Fatal("accepted nil pointer to map")
 	}
@@ -367,9 +587,9 @@ func TestCollection_UUIDKeys(t *testing.T) {
 			name = fmt.Sprint(*auto)
 		}
 		t.Run(name, func(t *testing.T) {
-			options := vectordata.CollectionOptions{Definition: &vectordata.Definition{Properties: []vectordata.Property{
+			options := &vectordata.Definition{Properties: []vectordata.Property{
 				&vectordata.KeyProperty{Name: "ID", IsAutoGenerated: auto},
-			}}}
+			}}
 			c := createCollection[uuid.UUID, record](t, options)
 			input := record{Text: "generated"}
 			explicit := record{ID: uuid.New(), Text: "explicit"}
@@ -407,7 +627,7 @@ func TestCollection_UUIDKeys(t *testing.T) {
 			}
 		})
 	}
-	dynamic := createCollection[uuid.UUID, map[string]any](t, dynamicOptions(reflect.TypeFor[uuid.UUID]()))
+	dynamic := createCollection[uuid.UUID, map[string]any](t, dynamicDefinition(reflect.TypeFor[uuid.UUID]()))
 	input := map[string]any{"Text": "missing key"}
 	if err := dynamic.Upsert(t.Context(), input); err != nil {
 		t.Fatal(err)
@@ -417,7 +637,7 @@ func TestCollection_UUIDKeys(t *testing.T) {
 		t.Fatalf("dynamic key was not generated: %v", got)
 	}
 	type dynamicRecord map[string]any
-	pointers := createCollection[uuid.UUID, *dynamicRecord](t, dynamicOptions(reflect.TypeFor[uuid.UUID]()))
+	pointers := createCollection[uuid.UUID, *dynamicRecord](t, dynamicDefinition(reflect.TypeFor[uuid.UUID]()))
 	pointer := dynamicRecord{"Text": "pointer map"}
 	if err := pointers.Upsert(t.Context(), &pointer); err != nil {
 		t.Fatal(err)
@@ -435,7 +655,7 @@ func TestCollection_KeyTypes(t *testing.T) {
 	type record struct {
 		ID any `vectordata:"key"`
 	}
-	c := createCollection[any, record](t, vectordata.CollectionOptions{})
+	c := createCollection[any, record](t, nil)
 	valid := []any{
 		"string", 42, int64(43), uint64(44), true,
 		[2]int{1, 2},
@@ -466,7 +686,7 @@ func TestCollection_KeyTypes(t *testing.T) {
 	type pointerKey struct {
 		ID *int `vectordata:"key"`
 	}
-	pointers := createCollection[*int, pointerKey](t, vectordata.CollectionOptions{})
+	pointers := createCollection[*int, pointerKey](t, nil)
 	key := new(1)
 	if err := pointers.Upsert(t.Context(), pointerKey{ID: key}); err != nil {
 		t.Fatal(err)
@@ -479,11 +699,11 @@ func TestCollection_KeyTypes(t *testing.T) {
 
 func checkAssignableDynamicKey[K comparable](t *testing.T, typ reflect.Type, key K, value any) {
 	t.Helper()
-	c := createCollection[K, map[string]any](t, vectordata.CollectionOptions{
-		Definition: &vectordata.Definition{Properties: []vectordata.Property{
+	c := createCollection[K, map[string]any](t,
+		&vectordata.Definition{Properties: []vectordata.Property{
 			&vectordata.KeyProperty{Name: "ID", Type: typ},
 		}},
-	})
+	)
 	input := map[string]any{"ID": value}
 	if err := c.Upsert(t.Context(), input); err != nil {
 		t.Fatal(err)
@@ -531,7 +751,7 @@ func TestCollection_NativeVectorRepresentations(t *testing.T) {
 		Embedding embedding.Of[float32]       `vectordata:"vector,dimensions=2"`
 		Pointer   *embedding.Of[float32]      `vectordata:"vector,dimensions=2"`
 	}
-	c := createCollection[int, record](t, vectordata.CollectionOptions{})
+	c := createCollection[int, record](t, nil)
 	input := record{
 		ID: 1, Slice: []float32{1, 0}, Vector: embedding.VectorOf[float32]{1, 0},
 		Embedding: embedding.Of[float32]{Vector: embedding.VectorOf[float32]{1, 0}},
@@ -558,7 +778,7 @@ func TestCollection_EmbeddedFields(t *testing.T) {
 		fixed  [2]int
 		opaque any
 	}
-	c := createCollection[uuid.UUID, record](t, vectordata.CollectionOptions{})
+	c := createCollection[uuid.UUID, record](t, nil)
 	input := record{when: time.Now(), fixed: [2]int{1, 2}, opaque: "immutable"}
 	if err := c.Upsert(t.Context(), input); err != nil {
 		t.Fatal(err)
@@ -575,7 +795,7 @@ func TestCollection_EmbeddedFields(t *testing.T) {
 		ID string `vectordata:"key"`
 		*VectorFields
 	}
-	native := createCollection[string, nullable](t, vectordata.CollectionOptions{})
+	native := createCollection[string, nullable](t, nil)
 	if err := native.Upsert(t.Context(), nullable{ID: "nil"}, nullable{ID: "value", VectorFields: &VectorFields{Vector: []float32{1, 0}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -591,14 +811,14 @@ func TestCollection_EmbeddedFields(t *testing.T) {
 		ID uuid.UUID `vectordata:"key"`
 	}
 	type inaccessible struct{ *hiddenFields }
-	private := createCollection[uuid.UUID, inaccessible](t, vectordata.CollectionOptions{})
+	private := createCollection[uuid.UUID, inaccessible](t, nil)
 	if err := private.Upsert(t.Context(), inaccessible{}); err == nil {
 		t.Fatal("accepted generation through an inaccessible embedded pointer")
 	}
 }
 
 func TestCollection_ConcurrentCallsAndSnapshotIteration(t *testing.T) {
-	c := createCollection[string, document](t, vectordata.CollectionOptions{})
+	c := createCollection[string, document](t, nil)
 	ctx := t.Context()
 	var work sync.WaitGroup
 	for i := range 20 {
@@ -642,8 +862,8 @@ func TestCollection_ConcurrentCallsAndSnapshotIteration(t *testing.T) {
 }
 
 func TestCollection_Cancellation(t *testing.T) {
-	c := createCollection[string, document](t, vectordata.CollectionOptions{})
-	store := inmemory.New[string, document](inmemory.Config{})
+	c := createCollection[string, document](t, nil)
+	store := inmemory.New(inmemory.Config{})
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, _, getErr := c.Get(ctx, "id", nil)

@@ -118,8 +118,10 @@ type VectorProperty struct {
 // tags, while empty storage, index, and distance names retain tag settings.
 // Dynamic map[string]any records require explicit property types.
 //
-// A property generator takes precedence over EmbeddingGenerator, which takes
-// precedence over CollectionOptions.EmbeddingGenerator.
+// EmbeddingGenerator supplies the default generator for vector properties,
+// overriding any store default. A property's generator takes precedence.
+// Use [embedding.Bind] to configure typed generators; input and output types
+// may differ between vector properties.
 type Definition struct {
 	Properties         []Property
 	EmbeddingGenerator *embedding.BoundGenerator

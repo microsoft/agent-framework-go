@@ -3,8 +3,8 @@
 // Package vectordata defines provider-independent vector store contracts,
 // record schemas, retrieval options, and vector and keyword-hybrid searches.
 //
-// Store and Collection are implemented by database providers. They must support
-// concurrent calls, honor context cancellation, and treat caller-supplied schemas,
+// Store wraps a database provider and creates typed or dynamic collections.
+// Providers must support concurrent calls, honor context cancellation, and treat caller-supplied schemas,
 // filters, and options as read-only. Record ownership is provider-specific:
 // providers document whether records are copied or retained, whether returned
 // records share storage, and whether generated keys are written into inputs.
@@ -24,26 +24,7 @@ package vectordata
 import (
 	"context"
 	"iter"
-
-	"github.com/microsoft/agent-framework-go/embedding"
 )
-
-// Store contains collections sharing the same key and record types.
-// Providers may offer differently typed stores over the same client.
-type Store[TKey, TRecord any] interface {
-	// Collection returns a configured handle for the named collection without
-	// creating it. Call [Collection.EnsureExists] to create the collection.
-	Collection(name string, options CollectionOptions) (Collection[TKey, TRecord], error)
-
-	// ListCollectionNames returns the names of the collections in the store.
-	ListCollectionNames(ctx context.Context) iter.Seq2[string, error]
-
-	// CollectionExists reports whether the named collection exists in the store.
-	CollectionExists(ctx context.Context, name string) (bool, error)
-
-	// EnsureCollectionDeleted deletes the named collection if it exists.
-	EnsureCollectionDeleted(ctx context.Context, name string) error
-}
 
 // Collection manages a named collection and its records. Providers document
 // which key, data, vector, filter, and index types they support.
@@ -111,20 +92,6 @@ type KeywordHybridSearcher[TRecord any] interface {
 type SearchResult[TRecord any] struct {
 	Record TRecord
 	Score  *float64
-}
-
-// CollectionOptions configures a collection handle. Definition overrides schema
-// tags. EmbeddingGenerator is the provider's default embedding generator; vector
-// property and definition generators take precedence, in that order.
-//
-// Use [embedding.Bind] to configure a typed generator. The input and
-// output types may differ between vector properties. Providers resolve schema
-// configuration and validate input compatibility, supported representations, and
-// storage requirements when constructing a collection handle. The supplied
-// definition is configuration, not a resolved runtime model, and is read-only.
-type CollectionOptions struct {
-	Definition         *Definition
-	EmbeddingGenerator *embedding.BoundGenerator
 }
 
 // Error describes a vector store failure while preserving the original cause.

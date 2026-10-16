@@ -35,19 +35,24 @@ func (c *Collection[K, R]) Search(ctx context.Context, searchValue any, top int,
 				yield(vectordata.SearchResult[R]{}, failure(c.name, "Search", err))
 				return
 			}
-			if !yield(vectordata.SearchResult[R]{Record: result.record.Record, Score: new(float64(result.score))}, nil) {
+			record, err := collectionRecord[R](result.record.Record)
+			if err != nil {
+				yield(vectordata.SearchResult[R]{}, failure(c.name, "Search", err))
+				return
+			}
+			if !yield(vectordata.SearchResult[R]{Record: record, Score: new(float64(result.score))}, nil) {
 				return
 			}
 		}
 	}
 }
 
-type scoredRecord[R any] struct {
-	record *storedRecord[R]
+type scoredRecord struct {
+	record *storedRecord
 	score  float32
 }
 
-func (c *Collection[K, R]) search(ctx context.Context, searchValue any, top int, options *vectordata.SearchOptions) ([]scoredRecord[R], error) {
+func (c *Collection[K, R]) search(ctx context.Context, searchValue any, top int, options *vectordata.SearchOptions) ([]scoredRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -75,7 +80,7 @@ func (c *Collection[K, R]) search(ctx context.Context, searchValue any, top int,
 	if err != nil {
 		return nil, err
 	}
-	input, native := nativeVector(searchValue)
+	input, native := providerservices.AsVector[float32](searchValue)
 	if !native {
 		if property.SearchEmbeddingGenerator == nil {
 			return nil, fmt.Errorf("property %q has no compatible generator for search input %T", property.Name, searchValue)
@@ -84,7 +89,7 @@ func (c *Collection[K, R]) search(ctx context.Context, searchValue any, top int,
 		if err != nil {
 			return nil, err
 		}
-		input, native = nativeVector(output)
+		input, native = providerservices.AsVector[float32](output)
 	}
 	if !native || input == nil {
 		return nil, fmt.Errorf("search requires a non-nil float32 vector")
@@ -97,7 +102,7 @@ func (c *Collection[K, R]) search(ctx context.Context, searchValue any, top int,
 		return nil, err
 	}
 	field := c.schema.fields[property.Name]
-	results := make([]scoredRecord[R], 0, len(records))
+	results := make([]scoredRecord, 0, len(records))
 	for _, record := range records {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -118,7 +123,7 @@ func (c *Collection[K, R]) search(ctx context.Context, searchValue any, top int,
 			if !found || !value.IsValid() {
 				continue
 			}
-			vector, _ = nativeVector(value.Interface())
+			vector, _ = providerservices.AsVector[float32](value.Interface())
 			if vector == nil {
 				continue
 			}
@@ -136,9 +141,9 @@ func (c *Collection[K, R]) search(ctx context.Context, searchValue any, top int,
 				continue
 			}
 		}
-		results = append(results, scoredRecord[R]{record: record, score: score})
+		results = append(results, scoredRecord{record: record, score: score})
 	}
-	slices.SortStableFunc(results, func(a, b scoredRecord[R]) int {
+	slices.SortStableFunc(results, func(a, b scoredRecord) int {
 		if descending {
 			return cmp.Compare(b.score, a.score)
 		}
@@ -213,8 +218,15 @@ func (c *Collection[K, R]) filtered(ctx context.Context, filter vectordata.Filte
 				yield(zero, err)
 				return
 			}
-			if match && !yield(record.Record, nil) {
-				return
+			if match {
+				typed, err := collectionRecord[R](record.Record)
+				if err != nil {
+					yield(zero, err)
+					return
+				}
+				if !yield(typed, nil) {
+					return
+				}
 			}
 		}
 	}

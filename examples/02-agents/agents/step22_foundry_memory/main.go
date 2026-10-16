@@ -19,7 +19,7 @@ import (
 var (
 	chatDeployment      = demo.FoundryModel
 	memoryStoreName     = cmp.Or(os.Getenv("AZURE_AI_MEMORY_STORE_ID"), "memory-store-sample")
-	embeddingDeployment = cmp.Or(os.Getenv("AZURE_AI_EMBEDDING_DEPLOYMENT_NAME"), "text-embedding-ada-002")
+	embeddingDeployment = cmp.Or(os.Getenv("AZURE_AI_EMBEDDING_DEPLOYMENT_NAME"), "text-embedding-3-large")
 )
 
 const memoryScope = "sample-user-123"

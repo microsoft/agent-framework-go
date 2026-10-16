@@ -59,20 +59,41 @@ func modelConfig() providerservices.Config {
 	}
 }
 
-func buildModel[K, R any](options vectordata.CollectionOptions) (*providerservices.CollectionModel, error) {
-	return providerservices.Build[K, R](options, modelConfig())
+func buildModel[K, R any](definition *vectordata.Definition) (*providerservices.CollectionModel, error) {
+	return providerservices.Build(reflect.TypeFor[K](), reflect.TypeFor[R](), definition, modelConfig())
+}
+
+func TestBuild_Validation(t *testing.T) {
+	for _, types := range [][2]reflect.Type{
+		{nil, reflect.TypeFor[taggedRecord]()},
+		{reflect.TypeFor[string](), nil},
+		{reflect.TypeFor[int](), reflect.TypeFor[taggedRecord]()},
+		{reflect.TypeFor[string](), reflect.TypeFor[any]()},
+	} {
+		if _, err := providerservices.Build(types[0], types[1], nil, modelConfig()); err == nil {
+			t.Fatalf("accepted invalid runtime types %v", types)
+		}
+	}
+	model, err := providerservices.Build(reflect.TypeFor[string](), reflect.TypeFor[*taggedRecord](), nil, modelConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := &taggedRecord{ID: "one"}
+	if value, found, err := model.Properties[0].Value(input); err != nil || !found || value != "one" {
+		t.Fatalf("runtime model accessor = (%v, %v, %v)", value, found, err)
+	}
 }
 
 func TestPropertyModel_StructAccess(t *testing.T) {
 	for _, test := range []struct {
 		name  string
-		build func(vectordata.CollectionOptions) (*providerservices.CollectionModel, error)
+		build func(*vectordata.Definition) (*providerservices.CollectionModel, error)
 	}{
 		{"value model", buildModel[string, taggedRecord]},
 		{"pointer model", buildModel[string, *taggedRecord]},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			model, err := test.build(vectordata.CollectionOptions{})
+			model, err := test.build(nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -119,27 +140,27 @@ func TestPropertyModel_StructAccess(t *testing.T) {
 
 func TestPropertyModel_DynamicAccess(t *testing.T) {
 	type namedRecord map[string]any
-	options := vectordata.CollectionOptions{Definition: &vectordata.Definition{Properties: []vectordata.Property{
+	options := &vectordata.Definition{Properties: []vectordata.Property{
 		&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string](), StorageName: "id"},
 		&vectordata.DataProperty{Name: "Text", Type: reflect.TypeFor[string](), StorageName: "text"},
 		&vectordata.VectorProperty{Name: "Vector", Type: reflect.TypeFor[[]float32](), Dimensions: 3},
 		&vectordata.DataProperty{Name: "Optional", Type: reflect.TypeFor[*string]()},
 		&vectordata.DataProperty{Name: "Label", Type: reflect.TypeFor[fmt.Stringer]()},
-	}}}
+	}}
 	config := modelConfig()
 	config.SupportsDataType = func(reflect.Type) bool { return true }
 	for _, test := range []struct {
-		name   string
-		build  func(vectordata.CollectionOptions, providerservices.Config) (*providerservices.CollectionModel, error)
-		record func(map[string]any) any
+		name       string
+		recordType reflect.Type
+		record     func(map[string]any) any
 	}{
-		{"map", providerservices.Build[string, map[string]any], func(record map[string]any) any { return record }},
-		{"map pointer", providerservices.Build[string, *map[string]any], func(record map[string]any) any { return &record }},
-		{"named map", providerservices.Build[string, namedRecord], func(record map[string]any) any { return namedRecord(record) }},
-		{"named map pointer", providerservices.Build[string, *namedRecord], func(record map[string]any) any { return new(namedRecord(record)) }},
+		{"map", reflect.TypeFor[map[string]any](), func(record map[string]any) any { return record }},
+		{"map pointer", reflect.TypeFor[*map[string]any](), func(record map[string]any) any { return &record }},
+		{"named map", reflect.TypeFor[namedRecord](), func(record map[string]any) any { return namedRecord(record) }},
+		{"named map pointer", reflect.TypeFor[*namedRecord](), func(record map[string]any) any { return new(namedRecord(record)) }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			model, err := test.build(options, config)
+			model, err := providerservices.Build(reflect.TypeFor[string](), test.recordType, options, config)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -219,7 +240,7 @@ func TestPropertyModel_DynamicAccess(t *testing.T) {
 
 func TestPropertyModel_InvalidAccess(t *testing.T) {
 	record := taggedRecord{ID: "one", Text: "before"}
-	model, err := buildModel[string, taggedRecord](vectordata.CollectionOptions{})
+	model, err := buildModel[string, taggedRecord](nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,11 +271,11 @@ func TestPropertyModel_InvalidAccess(t *testing.T) {
 			t.Fatalf("%T allowed writing without Build", unconfigured)
 		}
 	}
-	dynamic, err := buildModel[string, map[string]any](vectordata.CollectionOptions{
-		Definition: &vectordata.Definition{Properties: []vectordata.Property{
+	dynamic, err := buildModel[string, map[string]any](
+		&vectordata.Definition{Properties: []vectordata.Property{
 			&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
 		}},
-	})
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +303,7 @@ func TestPropertyModel_NilAssignment(t *testing.T) {
 	}
 	config := modelConfig()
 	config.SupportsDataType = func(reflect.Type) bool { return true }
-	model, err := providerservices.Build[string, record](vectordata.CollectionOptions{}, config)
+	model, err := providerservices.Build(reflect.TypeFor[string](), reflect.TypeFor[record](), nil, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,7 +337,7 @@ func TestPropertyModel_EmbeddedAccess(t *testing.T) {
 	type Middle struct{ *Fields }
 	type Outer struct{ Middle }
 	type record struct{ *Outer }
-	model, err := buildModel[string, record](vectordata.CollectionOptions{})
+	model, err := buildModel[string, record](nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +372,7 @@ func TestPropertyModel_EmbeddedAccess(t *testing.T) {
 		ID string `vectordata:"key"`
 	}
 	type hiddenRecord struct{ *hiddenFields }
-	hidden, err := buildModel[string, hiddenRecord](vectordata.CollectionOptions{})
+	hidden, err := buildModel[string, hiddenRecord](nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +394,7 @@ func TestPropertyModel_EmbeddedAccess(t *testing.T) {
 
 func TestBuild_Tags(t *testing.T) {
 	generator := embedding.Bind(&taggedGenerator{name: "default"})
-	definition, err := buildModel[string, taggedRecord](vectordata.CollectionOptions{EmbeddingGenerator: generator})
+	definition, err := buildModel[string, taggedRecord](&vectordata.Definition{EmbeddingGenerator: generator})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -398,14 +419,13 @@ func TestBuild_Tags(t *testing.T) {
 		vector.EmbeddingType != vector.Type || vector.SearchEmbeddingGenerator != generator {
 		t.Fatalf("vector = %+v", vector)
 	}
-	fromPointer, err := buildModel[string, *taggedRecord](vectordata.CollectionOptions{})
+	fromPointer, err := buildModel[string, *taggedRecord](nil)
 	if err != nil || len(fromPointer.Properties) != 3 {
 		t.Fatalf("pointer definition = %+v, %v", fromPointer, err)
 	}
 }
 
 func TestBuild_DefinitionOverridesTags(t *testing.T) {
-	defaultGenerator := embedding.Bind(&taggedGenerator{name: "default"})
 	definitionGenerator := embedding.Bind(&taggedGenerator{name: "definition"})
 	propertyGenerator := embedding.Bind(&taggedGenerator{name: "property"})
 	input := &vectordata.Definition{
@@ -420,9 +440,7 @@ func TestBuild_DefinitionOverridesTags(t *testing.T) {
 			&vectordata.DataProperty{Name: "Other"},
 		},
 	}
-	definition, err := buildModel[string, taggedRecord](vectordata.CollectionOptions{
-		Definition: input, EmbeddingGenerator: defaultGenerator,
-	})
+	definition, err := buildModel[string, taggedRecord](input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,39 +473,75 @@ func TestBuild_EmbeddingGeneratorPrecedence(t *testing.T) {
 	for _, dynamic := range []bool{false, true} {
 		for _, test := range []struct {
 			name       string
+			fallback   *embedding.BoundGenerator
 			definition *embedding.BoundGenerator
 			property   *embedding.BoundGenerator
 			want       *embedding.BoundGenerator
 		}{
-			{"collection default", nil, nil, defaultGenerator},
-			{"definition default", definitionGenerator, nil, definitionGenerator},
-			{"property override", definitionGenerator, propertyGenerator, propertyGenerator},
+			{"no generator", nil, nil, nil, nil},
+			{"store default", defaultGenerator, nil, nil, defaultGenerator},
+			{"definition default", nil, definitionGenerator, nil, definitionGenerator},
+			{"definition override", defaultGenerator, definitionGenerator, nil, definitionGenerator},
+			{"property override", defaultGenerator, definitionGenerator, propertyGenerator, propertyGenerator},
+			{"property overrides store", defaultGenerator, nil, propertyGenerator, propertyGenerator},
+			{"definition overrides invalid store", &embedding.BoundGenerator{}, definitionGenerator, nil, definitionGenerator},
 		} {
 			t.Run(fmt.Sprintf("%s/dynamic=%t", test.name, dynamic), func(t *testing.T) {
+				source := &vectordata.VectorProperty{Name: "Vector", Type: reflect.TypeFor[embedding.VectorOf[float32]](), Dimensions: 3, EmbeddingGenerator: test.property}
 				input := &vectordata.Definition{
 					EmbeddingGenerator: test.definition,
 					Properties: []vectordata.Property{
 						&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
-						&vectordata.VectorProperty{Name: "Vector", Type: reflect.TypeFor[embedding.VectorOf[float32]](), Dimensions: 3, EmbeddingGenerator: test.property},
+						source,
 					},
 				}
-				options := vectordata.CollectionOptions{Definition: input, EmbeddingGenerator: defaultGenerator}
-				var definition *providerservices.CollectionModel
-				var err error
+				config := modelConfig()
+				config.DefaultEmbeddingGenerator = test.fallback
+				keyType, recordType := reflect.TypeFor[string](), reflect.TypeFor[taggedRecord]()
 				if dynamic {
-					definition, err = buildModel[any, map[string]any](options)
-				} else {
-					definition, err = buildModel[string, taggedRecord](options)
+					keyType, recordType = reflect.TypeFor[any](), reflect.TypeFor[map[string]any]()
 				}
+				definition, err := providerservices.Build(keyType, recordType, input, config)
 				if err != nil {
 					t.Fatal(err)
 				}
 				vector, err := definition.VectorProperty("")
-				if err != nil || vector.EmbeddingGenerator != test.want {
+				if err != nil || vector.EmbeddingGenerator != test.want || vector.SearchEmbeddingGenerator != test.want {
 					t.Fatalf("generator = %+v, %v; want %+v", vector, err, test.want)
+				}
+				if input.EmbeddingGenerator != test.definition || source.EmbeddingGenerator != test.property ||
+					source.EmbeddingType != nil || source.StorageName != "" || config.DefaultEmbeddingGenerator != test.fallback {
+					t.Fatal("default resolution changed caller configuration")
 				}
 			})
 		}
+	}
+}
+
+func TestBuild_DefaultEmbeddingGeneratorWithoutDefinition(t *testing.T) {
+	type record struct {
+		ID      string `vectordata:"key"`
+		Content string `vectordata:"vector,dimensions=3"`
+	}
+	generator := embedding.Bind(&taggedGenerator{})
+	config := modelConfig()
+	config.DefaultEmbeddingGenerator = generator
+	for _, input := range []*vectordata.Definition{nil, {}} {
+		model, err := providerservices.Build(reflect.TypeFor[string](), reflect.TypeFor[record](), input, config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		property, err := model.VectorProperty("")
+		if err != nil || property.EmbeddingGenerator != generator || property.SearchEmbeddingGenerator != generator ||
+			property.EmbeddingType != generator.EmbeddingType() || !model.EmbeddingGenerationRequired {
+			t.Fatalf("default generator model = %+v, %v", model, err)
+		}
+		if input != nil && input.EmbeddingGenerator != nil {
+			t.Fatal("default resolution changed the definition")
+		}
+	}
+	if _, err := providerservices.Build(reflect.TypeFor[string](), reflect.TypeFor[map[string]any](), nil, config); err == nil {
+		t.Fatal("a default generator replaced the required dynamic definition")
 	}
 }
 
@@ -520,19 +574,21 @@ func TestBuild_TypedEmbeddingProperties(t *testing.T) {
 	for _, dynamic := range []bool{false, true} {
 		t.Run(fmt.Sprintf("dynamic=%t", dynamic), func(t *testing.T) {
 			calls = 0
-			source := &vectordata.Definition{Properties: []vectordata.Property{
-				&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
-				&vectordata.VectorProperty{Name: "Text", Type: reflect.TypeFor[string](), Dimensions: 3},
-				&vectordata.VectorProperty{Name: "Image", Type: reflect.TypeFor[image](), Dimensions: 2, EmbeddingGenerator: imageGenerator},
-				&vectordata.VectorProperty{Name: "Dense", Type: reflect.TypeFor[[]float32](), Dimensions: 3},
-			}}
-			options := vectordata.CollectionOptions{Definition: source, EmbeddingGenerator: textGenerator}
+			source := &vectordata.Definition{
+				EmbeddingGenerator: textGenerator,
+				Properties: []vectordata.Property{
+					&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
+					&vectordata.VectorProperty{Name: "Text", Type: reflect.TypeFor[string](), Dimensions: 3},
+					&vectordata.VectorProperty{Name: "Image", Type: reflect.TypeFor[image](), Dimensions: 2, EmbeddingGenerator: imageGenerator},
+					&vectordata.VectorProperty{Name: "Dense", Type: reflect.TypeFor[[]float32](), Dimensions: 3},
+				},
+			}
 			var definition *providerservices.CollectionModel
 			var err error
 			if dynamic {
-				definition, err = buildModel[string, map[string]any](options)
+				definition, err = buildModel[string, map[string]any](source)
 			} else {
-				definition, err = buildModel[string, mixedRecord](options)
+				definition, err = buildModel[string, mixedRecord](source)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -598,13 +654,12 @@ func TestBuild_PregeneratedVectorsWithSearchGenerator(t *testing.T) {
 			config.SupportsVectorType = func(candidate reflect.Type) bool {
 				return candidate == typ || candidate == generator.EmbeddingType()
 			}
-			definition, err := providerservices.Build[string, map[string]any](vectordata.CollectionOptions{
-				EmbeddingGenerator: generator,
-				Definition: &vectordata.Definition{Properties: []vectordata.Property{
-					&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
-					&vectordata.VectorProperty{Name: "Vector", Type: typ, Dimensions: 3},
-				}},
-			}, config)
+			definition, err := providerservices.Build(reflect.TypeFor[string](), reflect.TypeFor[map[string]any](), &vectordata.Definition{EmbeddingGenerator: generator, Properties: []vectordata.Property{
+				&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
+				&vectordata.VectorProperty{Name: "Vector", Type: typ, Dimensions: 3},
+			}},
+
+				config)
 			if err != nil {
 				t.Fatalf("pregenerated type rejected: %v", err)
 			}
@@ -636,13 +691,10 @@ func TestBuild_GeneratorInputCompatibility(t *testing.T) {
 		{"non-vector array", reflect.TypeFor[[3]string](), stringsGenerator, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			definition, err := buildModel[string, map[string]any](vectordata.CollectionOptions{
-				EmbeddingGenerator: test.generator,
-				Definition: &vectordata.Definition{Properties: []vectordata.Property{
-					&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
-					&vectordata.VectorProperty{Name: "Content", Type: test.fieldType, Dimensions: 3},
-				}},
-			})
+			definition, err := buildModel[string, map[string]any](&vectordata.Definition{EmbeddingGenerator: test.generator, Properties: []vectordata.Property{
+				&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
+				&vectordata.VectorProperty{Name: "Content", Type: test.fieldType, Dimensions: 3},
+			}})
 			if test.wantError {
 				if err == nil || !strings.Contains(err.Error(), "Content") || definition != nil {
 					t.Fatalf("expected incompatible input error: %+v, %v", definition, err)
@@ -682,7 +734,7 @@ func testGeneratorInputIdentity[I, F any](t *testing.T, value F, wantError bool)
 			t.Run(fmt.Sprintf("dynamic=%t", dynamic), func(t *testing.T) {
 				calls := 0
 				want := &embedding.Of[float32]{Vector: embedding.VectorOf[float32]{1, 2, 3}}
-				options := vectordata.CollectionOptions{EmbeddingGenerator: embedding.Bind(&bindingGenerator[I, *embedding.Of[float32]]{
+				options := &vectordata.Definition{EmbeddingGenerator: embedding.Bind(&bindingGenerator[I, *embedding.Of[float32]]{
 					generate: func(_ context.Context, inputs []I, _ *embedding.Options) (*embedding.GeneratedOf[float32], error) {
 						calls++
 						if len(inputs) != 1 || !reflect.DeepEqual(inputs[0], value) {
@@ -691,13 +743,14 @@ func testGeneratorInputIdentity[I, F any](t *testing.T, value F, wantError bool)
 						return &embedding.GeneratedOf[float32]{Embeddings: []*embedding.Of[float32]{want}}, nil
 					},
 				})}
+
 				var definition *providerservices.CollectionModel
 				var err error
 				if dynamic {
-					options.Definition = &vectordata.Definition{Properties: []vectordata.Property{
+					options.Properties = []vectordata.Property{
 						&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
 						&vectordata.VectorProperty{Name: "Content", Type: reflect.TypeFor[F](), Dimensions: 3},
-					}}
+					}
 					definition, err = buildModel[string, map[string]any](options)
 				} else {
 					definition, err = buildModel[string, model](options)
@@ -736,12 +789,13 @@ func TestBuild_RejectsIncompatibleEmbeddingType(t *testing.T) {
 	for _, output := range []reflect.Type{
 		nil, reflect.TypeFor[*embedding.Of[float32]](), reflect.TypeFor[*embedding.Of[float64]](),
 	} {
-		input := &vectordata.Definition{Properties: []vectordata.Property{
-			&vectordata.VectorProperty{Name: "Content", Dimensions: 3, EmbeddingType: output},
-		}}
-		result, err := buildModel[string, model](vectordata.CollectionOptions{
-			Definition: input, EmbeddingGenerator: generator,
-		})
+		input := &vectordata.Definition{
+			EmbeddingGenerator: generator,
+			Properties: []vectordata.Property{
+				&vectordata.VectorProperty{Name: "Content", Dimensions: 3, EmbeddingType: output},
+			},
+		}
+		result, err := buildModel[string, model](input)
 		if output == reflect.TypeFor[*embedding.Of[float64]]() {
 			if err == nil || !strings.Contains(err.Error(), "Content") || result != nil {
 				t.Fatalf("incompatible output was accepted: %+v, %v", result, err)
@@ -767,22 +821,27 @@ func TestBuild_InvalidGeneratorBindings(t *testing.T) {
 		Content string `vectordata:"vector,dimensions=3"`
 	}
 	invalid := &embedding.BoundGenerator{}
-	for _, options := range []vectordata.CollectionOptions{
-		{EmbeddingGenerator: invalid},
-		{Definition: &vectordata.Definition{EmbeddingGenerator: invalid}},
-		{Definition: &vectordata.Definition{Properties: []vectordata.Property{
-			&vectordata.VectorProperty{Name: "Content", Dimensions: 3, EmbeddingGenerator: invalid},
-		}}},
+	config := modelConfig()
+	config.DefaultEmbeddingGenerator = invalid
+	for _, definition := range []*vectordata.Definition{
+		nil,
+		{Properties: []vectordata.Property{
+			&vectordata.VectorProperty{Name: "Content", Dimensions: 3, EmbeddingGenerator: embedding.Bind(&taggedGenerator{})},
+		}},
 	} {
-		if definition, err := buildModel[string, model](options); err == nil || definition != nil {
-			t.Fatalf("uninitialized binding accepted: %+v, %v", definition, err)
+		if result, err := providerservices.Build(reflect.TypeFor[string](), reflect.TypeFor[model](), definition, config); err == nil || result != nil {
+			t.Fatalf("uninitialized default binding accepted: %+v, %v", result, err)
 		}
 	}
-	valid := embedding.Bind(&taggedGenerator{})
-	if _, err := buildModel[string, model](vectordata.CollectionOptions{
-		EmbeddingGenerator: invalid, Definition: &vectordata.Definition{EmbeddingGenerator: valid},
-	}); err != nil {
-		t.Fatalf("an overridden default should not be selected: %v", err)
+	for _, definition := range []*vectordata.Definition{
+		{EmbeddingGenerator: invalid},
+		{Properties: []vectordata.Property{
+			&vectordata.VectorProperty{Name: "Content", Dimensions: 3, EmbeddingGenerator: invalid},
+		}},
+	} {
+		if model, err := buildModel[string, model](definition); err == nil || model != nil {
+			t.Fatalf("uninitialized binding accepted: %+v, %v", model, err)
+		}
 	}
 }
 
@@ -792,11 +851,11 @@ func TestBuild_NoGeneratorRequiresSupportedEmbeddingType(t *testing.T) {
 		Content string `vectordata:"vector,dimensions=3"`
 	}
 	for _, output := range []reflect.Type{nil, reflect.TypeFor[*embedding.Of[float32]](), reflect.TypeFor[*embedding.Of[uint8]]()} {
-		definition, err := buildModel[string, model](vectordata.CollectionOptions{
-			Definition: &vectordata.Definition{Properties: []vectordata.Property{
+		definition, err := buildModel[string, model](
+			&vectordata.Definition{Properties: []vectordata.Property{
 				&vectordata.VectorProperty{Name: "Content", Dimensions: 3, EmbeddingType: output},
 			}},
-		})
+		)
 		if output != reflect.TypeFor[*embedding.Of[float32]]() {
 			if err == nil || definition != nil || !strings.Contains(err.Error(), "Content") {
 				t.Fatalf("unsupported provider configuration accepted: %+v, %v", definition, err)
@@ -826,9 +885,9 @@ func TestBuild_DynamicAndOwnership(t *testing.T) {
 		Name: "Vector", Type: reflect.TypeFor[[]float32](), Dimensions: 3,
 		ProviderAnnotations: map[string]any{"index_setting": "value"},
 	}
-	definition, err := buildModel[string, dynamicRecord](vectordata.CollectionOptions{
-		Definition: &vectordata.Definition{Properties: []vectordata.Property{key, data, vector}},
-	})
+	definition, err := buildModel[string, dynamicRecord](
+		&vectordata.Definition{Properties: []vectordata.Property{key, data, vector}},
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -865,13 +924,13 @@ func TestBuild_MissingDynamicTypes(t *testing.T) {
 		case *vectordata.VectorProperty:
 			p.Type = nil
 		}
-		if _, err := buildModel[any, map[string]any](vectordata.CollectionOptions{
-			Definition: &vectordata.Definition{Properties: properties},
-		}); err == nil || !strings.Contains(err.Error(), "requires a type") {
+		if _, err := buildModel[any, map[string]any](
+			&vectordata.Definition{Properties: properties},
+		); err == nil || !strings.Contains(err.Error(), "requires a type") {
 			t.Fatalf("missing type at %d = %v", index, err)
 		}
 	}
-	if _, err := buildModel[any, map[string]any](vectordata.CollectionOptions{}); err == nil {
+	if _, err := buildModel[any, map[string]any](nil); err == nil {
 		t.Fatal("dynamic records without a definition were accepted")
 	}
 }
@@ -896,14 +955,14 @@ func TestBuild_InvalidDefinitions(t *testing.T) {
 		{"negative dimensions", []vectordata.Property{key, &vectordata.VectorProperty{Name: "Vector", Type: reflect.TypeFor[[]float32](), Dimensions: -1}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := buildModel[string, map[string]any](vectordata.CollectionOptions{
-				Definition: &vectordata.Definition{Properties: test.properties},
-			}); err == nil {
+			if _, err := buildModel[string, map[string]any](
+				&vectordata.Definition{Properties: test.properties},
+			); err == nil {
 				t.Fatal("invalid definition was accepted")
 			}
 		})
 	}
-	if _, err := buildModel[int, taggedRecord](vectordata.CollectionOptions{}); err == nil {
+	if _, err := buildModel[int, taggedRecord](nil); err == nil {
 		t.Fatal("mismatched collection key type was accepted")
 	}
 	for _, property := range []vectordata.Property{
@@ -912,20 +971,20 @@ func TestBuild_InvalidDefinitions(t *testing.T) {
 		&vectordata.DataProperty{Name: "ID"},
 		&vectordata.VectorProperty{Name: "Text", Dimensions: 3},
 	} {
-		if _, err := buildModel[string, taggedRecord](vectordata.CollectionOptions{
-			Definition: &vectordata.Definition{Properties: []vectordata.Property{property}},
-		}); err == nil {
+		if _, err := buildModel[string, taggedRecord](
+			&vectordata.Definition{Properties: []vectordata.Property{property}},
+		); err == nil {
 			t.Fatalf("invalid typed definition was accepted: %+v", property)
 		}
 	}
-	if _, err := buildModel[string, string](vectordata.CollectionOptions{}); err == nil {
+	if _, err := buildModel[string, string](nil); err == nil {
 		t.Fatal("non-record type was accepted")
 	}
-	if _, err := buildModel[string, map[int]string](vectordata.CollectionOptions{}); err == nil {
+	if _, err := buildModel[string, map[int]string](nil); err == nil {
 		t.Fatal("unsupported map type was accepted")
 	}
 	type recursive *recursive
-	if _, err := buildModel[string, recursive](vectordata.CollectionOptions{}); err == nil {
+	if _, err := buildModel[string, recursive](nil); err == nil {
 		t.Fatal("recursive pointer type was accepted")
 	}
 }
@@ -1036,7 +1095,7 @@ func TestBuild_InvalidTags(t *testing.T) {
 }
 
 func definitionError[TRecord any]() error {
-	_, err := buildModel[string, TRecord](vectordata.CollectionOptions{})
+	_, err := buildModel[string, TRecord](nil)
 	return err
 }
 
@@ -1048,7 +1107,7 @@ func TestBuild_TagSettings(t *testing.T) {
 	}
 	config := modelConfig()
 	config.SupportsKeyAutoGeneration = func(typ reflect.Type) bool { return typ == reflect.TypeFor[string]() }
-	definition, err := providerservices.Build[string, model](vectordata.CollectionOptions{}, config)
+	definition, err := providerservices.Build(reflect.TypeFor[string](), reflect.TypeFor[model](), nil, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1104,12 +1163,12 @@ func TestBuild_BuiltinVectorSettingNames(t *testing.T) {
 					} else {
 						property.DistanceFunction = vectordata.DistanceFunction(value)
 					}
-					definition, err := buildModel[string, map[string]any](vectordata.CollectionOptions{
-						Definition: &vectordata.Definition{Properties: []vectordata.Property{
+					definition, err := buildModel[string, map[string]any](
+						&vectordata.Definition{Properties: []vectordata.Property{
 							&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
 							property,
 						}},
-					})
+					)
 					if value != test.name {
 						if err == nil || definition != nil || !strings.Contains(err.Error(), fmt.Sprintf("must use %q", test.name)) {
 							t.Fatalf("noncanonical setting accepted: %+v, %v", definition, err)
@@ -1137,7 +1196,7 @@ func TestBuild_UnexportedAndEmbeddedFields(t *testing.T) {
 		embedded
 		Text string `vectordata:"data"`
 	}
-	definition, err := buildModel[string, withEmbedded](vectordata.CollectionOptions{})
+	definition, err := buildModel[string, withEmbedded](nil)
 	if err != nil || len(definition.Properties) != 2 {
 		t.Fatalf("embedded definition = %+v, %v", definition, err)
 	}
@@ -1145,7 +1204,7 @@ func TestBuild_UnexportedAndEmbeddedFields(t *testing.T) {
 		id string `vectordata:"key"`
 	}
 	_ = private{}.id
-	if _, err := buildModel[string, private](vectordata.CollectionOptions{}); err == nil {
+	if _, err := buildModel[string, private](nil); err == nil {
 		t.Fatal("unexported tagged field was accepted")
 	}
 }
@@ -1190,9 +1249,10 @@ func TestBuild_ProviderCapabilities(t *testing.T) {
 					Name: fmt.Sprintf("Vector%d", i), Type: reflect.TypeFor[[]float32](), Dimensions: 3,
 				})
 			}
-			model, err := providerservices.Build[string, map[string]any](vectordata.CollectionOptions{
-				Definition: &vectordata.Definition{Properties: properties},
-			}, config)
+			model, err := providerservices.Build(reflect.TypeFor[string](), reflect.TypeFor[map[string]any](),
+				&vectordata.Definition{Properties: properties},
+				config)
+
 			if test.wantError != "" {
 				if err == nil || model != nil || !strings.Contains(err.Error(), test.wantError) {
 					t.Fatalf("model = %+v, %v; want %q", model, err, test.wantError)
@@ -1211,20 +1271,20 @@ func TestBuild_ReservedKeyStorageName(t *testing.T) {
 	config.ReservedKeyStorageName = "ProviderID"
 	for _, explicit := range []bool{false, true} {
 		t.Run(fmt.Sprintf("explicit=%t", explicit), func(t *testing.T) {
-			options := vectordata.CollectionOptions{}
+			var definition *vectordata.Definition
 			if explicit {
-				options.Definition = &vectordata.Definition{Properties: []vectordata.Property{
+				definition = &vectordata.Definition{Properties: []vectordata.Property{
 					&vectordata.KeyProperty{Name: "ID", StorageName: "CallerID"},
 				}}
 			}
-			model, err := providerservices.Build[string, taggedRecord](options, config)
+			model, err := providerservices.Build(reflect.TypeFor[string](), reflect.TypeFor[taggedRecord](), definition, config)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if key := model.Properties[0].(*providerservices.KeyPropertyModel); key.StorageName != "ProviderID" {
 				t.Fatalf("reserved storage name = %q", key.StorageName)
 			}
-			if explicit && options.Definition.Properties[0].(*vectordata.KeyProperty).StorageName != "CallerID" {
+			if explicit && definition.Properties[0].(*vectordata.KeyProperty).StorageName != "CallerID" {
 				t.Fatal("provider policy modified caller configuration")
 			}
 		})
@@ -1246,15 +1306,15 @@ func TestBuild_KeyAutoGeneration(t *testing.T) {
 					input := &vectordata.KeyProperty{
 						Name: "ID", Type: reflect.TypeFor[string](), IsAutoGenerated: requested,
 					}
-					options := vectordata.CollectionOptions{Definition: &vectordata.Definition{
+					options := &vectordata.Definition{
 						Properties: []vectordata.Property{input},
-					}}
+					}
 					var model *providerservices.CollectionModel
 					var err error
 					if dynamic {
-						model, err = providerservices.Build[string, map[string]any](options, config)
+						model, err = providerservices.Build(reflect.TypeFor[string](), reflect.TypeFor[map[string]any](), options, config)
 					} else {
-						model, err = providerservices.Build[string, taggedRecord](options, config)
+						model, err = providerservices.Build(reflect.TypeFor[string](), reflect.TypeFor[taggedRecord](), options, config)
 					}
 					if !supported && requested != nil && *requested {
 						if err == nil || model != nil || !strings.Contains(err.Error(), "does not support auto-generation") {
@@ -1287,7 +1347,7 @@ func TestBuild_KeyAutoGeneration(t *testing.T) {
 	for _, supported := range []bool{false, true} {
 		config := modelConfig()
 		config.SupportsKeyAutoGeneration = func(reflect.Type) bool { return supported }
-		model, err := providerservices.Build[string, record](vectordata.CollectionOptions{}, config)
+		model, err := providerservices.Build(reflect.TypeFor[string](), reflect.TypeFor[record](), nil, config)
 		if err != nil || model.Properties[0].(*providerservices.KeyPropertyModel).IsAutoGenerated != supported {
 			t.Fatalf("tag default = %+v, %v; want %t", model, err, supported)
 		}
@@ -1305,12 +1365,13 @@ func TestBuild_NativeVectorSupportComesFromProvider(t *testing.T) {
 				config.SupportsVectorType = func(candidate reflect.Type) bool {
 					return supported && candidate == typ
 				}
-				model, err := providerservices.Build[string, map[string]any](vectordata.CollectionOptions{
-					Definition: &vectordata.Definition{Properties: []vectordata.Property{
+				model, err := providerservices.Build(reflect.TypeFor[string](), reflect.TypeFor[map[string]any](),
+					&vectordata.Definition{Properties: []vectordata.Property{
 						&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
 						&vectordata.VectorProperty{Name: "Vector", Type: typ, Dimensions: 3},
 					}},
-				}, config)
+					config)
+
 				if !supported {
 					if err == nil || model != nil || !strings.Contains(err.Error(), "unsupported type") {
 						t.Fatalf("unsupported native type accepted: %+v, %v", model, err)
@@ -1336,10 +1397,7 @@ func TestBuild_NativeEmbeddingType(t *testing.T) {
 	}
 	for _, output := range []reflect.Type{nil, reflect.TypeFor[[]float32](), reflect.TypeFor[*embedding.Of[float32]]()} {
 		source := &vectordata.VectorProperty{Name: "Vector", Dimensions: 3, EmbeddingType: output}
-		model, err := buildModel[string, record](vectordata.CollectionOptions{
-			Definition:         &vectordata.Definition{Properties: []vectordata.Property{source}},
-			EmbeddingGenerator: embedding.Bind(&taggedGenerator{}),
-		})
+		model, err := buildModel[string, record](&vectordata.Definition{Properties: []vectordata.Property{source}, EmbeddingGenerator: embedding.Bind(&taggedGenerator{})})
 		if output == reflect.TypeFor[*embedding.Of[float32]]() {
 			if err == nil || model != nil || !strings.Contains(err.Error(), "must use its record type") {
 				t.Fatalf("native embedding type override accepted: %+v, %v", model, err)
@@ -1384,7 +1442,7 @@ func testSearchEmbeddingGenerator[E any](t *testing.T, output E, supported bool)
 			return &embedding.Generated[E]{Embeddings: []E{output}}, nil
 		},
 	})
-	model, err := buildModel[string, record](vectordata.CollectionOptions{EmbeddingGenerator: generator})
+	model, err := buildModel[string, record](&vectordata.Definition{EmbeddingGenerator: generator})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1401,7 +1459,7 @@ func testSearchEmbeddingGenerator[E any](t *testing.T, output E, supported bool)
 			ID     string `vectordata:"key"`
 			Vector string `vectordata:"vector,dimensions=3"`
 		}
-		model, err = buildModel[string, generatedRecord](vectordata.CollectionOptions{EmbeddingGenerator: generator})
+		model, err = buildModel[string, generatedRecord](&vectordata.Definition{EmbeddingGenerator: generator})
 		if err == nil || model != nil || !strings.Contains(err.Error(), "unsupported embedding type") || calls != 0 {
 			t.Fatalf("unsupported generated output accepted: %+v, %v", model, err)
 		}
@@ -1425,7 +1483,7 @@ func ExampleBuild() {
 		Text      string    `vectordata:"data,fulltext"`
 		Embedding []float32 `vectordata:"vector,dimensions=3,distance=cosine_similarity"`
 	}
-	model, err := providerservices.Build[string, document](vectordata.CollectionOptions{}, providerservices.Config{
+	model, err := providerservices.Build(reflect.TypeFor[string](), reflect.TypeFor[document](), nil, providerservices.Config{
 		RequiresAtLeastOneVector: true,
 		SupportsDataType:         func(typ reflect.Type) bool { return typ == reflect.TypeFor[string]() },
 		SupportsVectorType:       func(typ reflect.Type) bool { return typ == reflect.TypeFor[[]float32]() },

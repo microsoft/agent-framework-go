@@ -59,7 +59,7 @@ func TestEmbedding_BatchedPropertiesAndQueries(t *testing.T) {
 		generated = append(generated, result.Embeddings...)
 		return result, err
 	})
-	c := createCollection[string, record](t, vectordata.CollectionOptions{EmbeddingGenerator: embedding.Bind(generator)})
+	c := createCollection[string, record](t, &vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator)})
 	input := []record{
 		{ID: "one", Summary: "east", Details: "north", Native: []float32{1, 0}},
 		{ID: "two", Summary: "north", Details: "east", Native: []float32{0, 1}},
@@ -116,30 +116,41 @@ func TestEmbedding_BatchedPropertiesAndQueries(t *testing.T) {
 }
 
 func TestEmbedding_GeneratorPrecedence(t *testing.T) {
-	for level := range 4 {
-		t.Run([]string{"store", "collection", "definition", "property"}[level], func(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		level    int
+		explicit bool
+	}{
+		{"store inferred", 0, false},
+		{"store explicit", 0, true},
+		{"definition", 1, true},
+		{"property", 2, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
 			var calls []int
-			generators := make([]*embedding.BoundGenerator, 4)
+			generators := make([]*embedding.BoundGenerator, 3)
 			for i := range generators {
 				generators[i] = embedding.Bind(generatorFunc[string, *embedding.Of[float32]](func(ctx context.Context, values []string, options *embedding.Options) (*embedding.Generated[*embedding.Of[float32]], error) {
 					calls = append(calls, i)
 					return textGenerator().Generate(ctx, values, options)
 				}))
 			}
-			store := inmemory.New[string, embeddedDocument](inmemory.Config{EmbeddingGenerator: generators[0]})
-			options := vectordata.CollectionOptions{}
-			if level >= 1 {
-				options.EmbeddingGenerator = generators[1]
+			store := inmemory.New(inmemory.Config{EmbeddingGenerator: generators[0]})
+			var definition *vectordata.Definition
+			if test.explicit {
+				definition = &vectordata.Definition{}
 			}
-			if level >= 2 {
-				options.Definition = &vectordata.Definition{EmbeddingGenerator: generators[2]}
+			var wantGenerator *embedding.BoundGenerator
+			if test.level >= 1 {
+				wantGenerator = generators[1]
+				definition.EmbeddingGenerator = wantGenerator
 			}
-			if level >= 3 {
-				options.Definition.Properties = []vectordata.Property{
-					&vectordata.VectorProperty{Name: "Text", Dimensions: 2, EmbeddingGenerator: generators[3]},
+			if test.level >= 2 {
+				definition.Properties = []vectordata.Property{
+					&vectordata.VectorProperty{Name: "Text", Dimensions: 2, EmbeddingGenerator: generators[2]},
 				}
 			}
-			c, err := store.Collection("records", options)
+			c, err := vectordata.GetCollection[string, embeddedDocument](store.Store, "records", definition)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -150,10 +161,82 @@ func TestEmbedding_GeneratorPrecedence(t *testing.T) {
 				t.Fatal(err)
 			}
 			collect(t, c.Search(t.Context(), "east", 1, nil))
-			if !slices.Equal(calls, []int{level, level}) {
+			if !slices.Equal(calls, []int{test.level, test.level}) {
 				t.Fatalf("generator selection = %v", calls)
 			}
+			if definition != nil && definition.EmbeddingGenerator != wantGenerator {
+				t.Fatal("collection changed the definition's generator")
+			}
+			if test.level >= 2 {
+				property := definition.Properties[0].(*vectordata.VectorProperty)
+				if property.Type != nil || property.EmbeddingType != nil || property.StorageName != "" ||
+					property.EmbeddingGenerator != generators[2] {
+					t.Fatal("collection changed the definition's vector property")
+				}
+			}
 		})
+	}
+}
+
+func TestEmbedding_SharedDefinitionDefaults(t *testing.T) {
+	property := &vectordata.VectorProperty{Name: "Text", Type: reflect.TypeFor[string](), Dimensions: 2}
+	definition := &vectordata.Definition{Properties: []vectordata.Property{
+		&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
+		property,
+	}}
+	var calls []int
+	for i := range 2 {
+		generator := embedding.Bind(generatorFunc[string, *embedding.Of[float32]](func(ctx context.Context, values []string, options *embedding.Options) (*embedding.Generated[*embedding.Of[float32]], error) {
+			calls = append(calls, i)
+			return textGenerator().Generate(ctx, values, options)
+		}))
+		store := inmemory.New(inmemory.Config{EmbeddingGenerator: generator})
+		collection, err := store.DynamicCollection("records", definition)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := collection.EnsureExists(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if err := collection.Upsert(t.Context(), map[string]any{"ID": "one", "Text": "east"}); err != nil {
+			t.Fatal(err)
+		}
+		results := collect(t, collection.Search(t.Context(), "east", 1, nil))
+		if len(results) != 1 || results[0].Record["ID"] != "one" {
+			t.Fatalf("dynamic search results = %v", results)
+		}
+		if definition.EmbeddingGenerator != nil || property.EmbeddingGenerator != nil ||
+			property.EmbeddingType != nil || property.StorageName != "" {
+			t.Fatal("store defaults modified the shared definition")
+		}
+	}
+	if !slices.Equal(calls, []int{0, 0, 1, 1}) {
+		t.Fatalf("generator defaults leaked between stores: %v", calls)
+	}
+	if _, err := inmemory.NewCollection[string, map[string]any]("standalone", definition); err == nil {
+		t.Fatal("standalone collection inherited a store's generator")
+	}
+}
+
+func TestEmbedding_DefinitionOverridesInvalidStoreGenerator(t *testing.T) {
+	store := inmemory.New(inmemory.Config{EmbeddingGenerator: &embedding.BoundGenerator{}})
+	if _, err := vectordata.GetCollection[string, embeddedDocument](store.Store, "invalid", nil); err == nil {
+		t.Fatal("invalid store generator was accepted")
+	}
+	definition := &vectordata.Definition{EmbeddingGenerator: embedding.Bind(textGenerator())}
+	collection, err := vectordata.GetCollection[string, embeddedDocument](store.Store, "records", definition)
+	if err != nil {
+		t.Fatalf("overridden store generator was selected: %v", err)
+	}
+	if err := collection.EnsureExists(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := collection.Upsert(t.Context(), embeddedDocument{ID: "one", Text: "east"}); err != nil {
+		t.Fatal(err)
+	}
+	results := collect(t, collection.Search(t.Context(), "east", 1, nil))
+	if len(results) != 1 || results[0].Record.ID != "one" {
+		t.Fatalf("definition generator search results = %v", results)
 	}
 }
 
@@ -186,7 +269,7 @@ func TestEmbedding_InvalidOutputsAreAtomic(t *testing.T) {
 				}
 				return textGenerator().Generate(ctx, values, options)
 			})
-			c := createCollection[string, embeddedDocument](t, vectordata.CollectionOptions{EmbeddingGenerator: embedding.Bind(generator)})
+			c := createCollection[string, embeddedDocument](t, &vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator)})
 			if err := c.Upsert(t.Context(), embeddedDocument{ID: "existing", Text: "east"}); err != nil {
 				t.Fatal(err)
 			}
@@ -212,7 +295,7 @@ func TestEmbedding_SearchErrors(t *testing.T) {
 			generator := generatorFunc[string, *embedding.Of[float32]](func(context.Context, []string, *embedding.Options) (*embedding.Generated[*embedding.Of[float32]], error) {
 				return response, nil
 			})
-			c := createCollection[string, embeddedDocument](t, vectordata.CollectionOptions{EmbeddingGenerator: embedding.Bind(generator)})
+			c := createCollection[string, embeddedDocument](t, &vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator)})
 			_ = sequenceError(t, c.Search(t.Context(), "query", 1, nil))
 		})
 	}
@@ -225,7 +308,7 @@ func TestEmbedding_SearchErrors(t *testing.T) {
 		called = true
 		return &embedding.Generated[[]float32]{Embeddings: [][]float32{{1, 0}}}, nil
 	})
-	c := createCollection[string, record](t, vectordata.CollectionOptions{EmbeddingGenerator: embedding.Bind(generator)})
+	c := createCollection[string, record](t, &vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator)})
 	_ = sequenceError(t, c.Search(t.Context(), (*string)(nil), 1, nil))
 	if called {
 		t.Fatal("nil query reached the generator")
@@ -240,7 +323,7 @@ func TestEmbedding_CancellationAndOriginalErrors(t *testing.T) {
 			<-release
 			return textGenerator().Generate(ctx, inputs, options)
 		})
-		c := createCollection[string, embeddedDocument](t, vectordata.CollectionOptions{EmbeddingGenerator: embedding.Bind(generator)})
+		c := createCollection[string, embeddedDocument](t, &vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator)})
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		done := make(chan error, 1)
@@ -268,7 +351,7 @@ func TestEmbedding_CancellationAndOriginalErrors(t *testing.T) {
 				cancel()
 				return nil, want
 			})
-			c := createCollection[string, embeddedDocument](t, vectordata.CollectionOptions{EmbeddingGenerator: embedding.Bind(generator)})
+			c := createCollection[string, embeddedDocument](t, &vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator)})
 			var err error
 			if search {
 				err = sequenceError(t, c.Search(ctx, "query", 1, nil))
@@ -301,7 +384,7 @@ func TestEmbedding_CollectionDeletionDuringGeneration(t *testing.T) {
 				}
 				return textGenerator().Generate(ctx, values, options)
 			})
-			collection = createCollection[uuid.UUID, *record](t, vectordata.CollectionOptions{EmbeddingGenerator: embedding.Bind(generator)})
+			collection = createCollection[uuid.UUID, *record](t, &vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator)})
 			input := &record{Text: "east"}
 			err := collection.Upsert(t.Context(), input)
 			if recreate {
@@ -343,7 +426,7 @@ func TestEmbedding_UUIDAssignmentFollowsGeneration(t *testing.T) {
 		}
 		return textGenerator().Generate(ctx, values, options)
 	})
-	c := createCollection[uuid.UUID, *record](t, vectordata.CollectionOptions{EmbeddingGenerator: embedding.Bind(generator)})
+	c := createCollection[uuid.UUID, *record](t, &vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator)})
 	if err := c.Upsert(t.Context(), input); !errors.Is(err, want) || input.ID != uuid.Nil {
 		t.Fatalf("failed generation changed the key: %v, %v", input.ID, err)
 	}
@@ -357,9 +440,9 @@ func TestEmbedding_UUIDAssignmentFollowsGeneration(t *testing.T) {
 }
 
 func TestEmbedding_ProviderManagedGenerationUnsupported(t *testing.T) {
-	options := vectordata.CollectionOptions{Definition: &vectordata.Definition{Properties: []vectordata.Property{
+	options := &vectordata.Definition{Properties: []vectordata.Property{
 		&vectordata.VectorProperty{Name: "Text", Dimensions: 2, EmbeddingType: reflect.TypeFor[*embedding.Of[float32]]()},
-	}}}
+	}}
 	if _, err := inmemory.NewCollection[string, embeddedDocument]("records", options); err == nil {
 		t.Fatal("accepted generated field without a generator")
 	}

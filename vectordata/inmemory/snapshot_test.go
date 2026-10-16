@@ -30,8 +30,8 @@ func (s *snapshotStream) Close() error {
 
 func TestSnapshot_RoundTripAndMerge(t *testing.T) {
 	ctx := t.Context()
-	source := inmemory.New[string, document](inmemory.Config{})
-	c, err := source.Collection("records", vectordata.CollectionOptions{})
+	source := inmemory.New(inmemory.Config{})
+	c, err := vectordata.GetCollection[string, document](source.Store, "records", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,8 +49,8 @@ func TestSnapshot_RoundTripAndMerge(t *testing.T) {
 	if err := source.Export(ctx, "records", &stream); err != nil {
 		t.Fatal(err)
 	}
-	target := inmemory.New[string, document](inmemory.Config{})
-	existing, err := target.Collection("records", vectordata.CollectionOptions{})
+	target := inmemory.New(inmemory.Config{})
+	existing, err := vectordata.GetCollection[string, document](target.Store, "records", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestSnapshot_RoundTripAndMerge(t *testing.T) {
 	if err := existing.Upsert(ctx, document{ID: "kept"}, document{ID: "existing", Text: "old"}); err != nil {
 		t.Fatal(err)
 	}
-	imported, err := target.Import(ctx, &stream, vectordata.CollectionOptions{})
+	imported, err := inmemory.Import[string, document](ctx, target, &stream, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,8 +76,8 @@ func TestSnapshot_RoundTripAndMerge(t *testing.T) {
 	if records := collect(t, imported.GetFiltered(ctx, allRecords, 10, nil)); len(records) != 3 {
 		t.Fatalf("merge discarded records: %v", records)
 	}
-	fresh := inmemory.New[string, document](inmemory.Config{})
-	empty, err := fresh.Import(ctx, strings.NewReader(`{"name":"empty","records":[]}`), vectordata.CollectionOptions{})
+	fresh := inmemory.New(inmemory.Config{})
+	empty, err := inmemory.Import[string, document](ctx, fresh, strings.NewReader(`{"name":"empty","records":[]}`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,8 +100,8 @@ func TestSnapshot_GeneratedVectorsWithoutRegeneration(t *testing.T) {
 		return textGenerator().Generate(ctx, values, options)
 	})
 	config := inmemory.Config{EmbeddingGenerator: embedding.Bind(generator)}
-	source := inmemory.New[string, embeddedDocument](config)
-	c, err := source.Collection("generated", vectordata.CollectionOptions{})
+	source := inmemory.New(config)
+	c, err := vectordata.GetCollection[string, embeddedDocument](source.Store, "generated", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,8 +115,8 @@ func TestSnapshot_GeneratedVectorsWithoutRegeneration(t *testing.T) {
 	if err := source.Export(t.Context(), "generated", &buffer); err != nil {
 		t.Fatal(err)
 	}
-	target := inmemory.New[string, embeddedDocument](config)
-	imported, err := target.Import(t.Context(), &buffer, vectordata.CollectionOptions{})
+	target := inmemory.New(config)
+	imported, err := inmemory.Import[string, embeddedDocument](t.Context(), target, &buffer, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,7 +125,7 @@ func TestSnapshot_GeneratedVectorsWithoutRegeneration(t *testing.T) {
 		t.Fatalf("restored generated vectors = %+v, generator calls = %d", got, calls)
 	}
 	for _, vectors := range []string{`{}`, `{"Text":null}`, `{"Text":[1]}`, `{"Text":[1,0],"Other":[1,0]}`} {
-		_, err := target.Import(t.Context(), strings.NewReader(`{"name":"generated","records":[{"record":{"ID":"bad","Text":"east"},"vectors":`+vectors+`}]}`), vectordata.CollectionOptions{})
+		_, err := inmemory.Import[string, embeddedDocument](t.Context(), target, strings.NewReader(`{"name":"generated","records":[{"record":{"ID":"bad","Text":"east"},"vectors":`+vectors+`}]}`), nil)
 		if err == nil {
 			t.Fatalf("accepted invalid sidecars %s", vectors)
 		}
@@ -138,9 +138,9 @@ func TestSnapshot_GeneratedVectorsWithoutRegeneration(t *testing.T) {
 func TestSnapshot_DynamicPropertyTypes(t *testing.T) {
 	type dynamic map[string]any
 	type pointer *dynamic
-	options := dynamicOptions(reflect.TypeFor[int]())
-	source := inmemory.New[int, pointer](inmemory.Config{})
-	c, err := source.Collection("dynamic", options)
+	options := dynamicDefinition(reflect.TypeFor[int]())
+	source := inmemory.New(inmemory.Config{})
+	c, err := vectordata.GetCollection[int, pointer](source.Store, "dynamic", options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,8 +156,8 @@ func TestSnapshot_DynamicPropertyTypes(t *testing.T) {
 	if err := source.Export(t.Context(), "dynamic", &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	target := inmemory.New[int, pointer](inmemory.Config{})
-	imported, err := target.Import(t.Context(), &snapshot, options)
+	target := inmemory.New(inmemory.Config{})
+	imported, err := inmemory.Import[int, pointer](t.Context(), target, &snapshot, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,15 +175,15 @@ func TestSnapshot_DynamicPropertyTypes(t *testing.T) {
 		t.Fatalf("typed nil vector was not preserved: %v, %v, %v", null, found, err)
 	}
 	for _, record := range []string{`{"ID":"wrong"}`, `{"ID":null}`, `{"Text":"missing key"}`, `{"ID":1,"Text":42}`} {
-		if _, err := target.Import(t.Context(), strings.NewReader(`{"name":"dynamic","records":[{"record":`+record+`}]}`), options); err == nil {
+		if _, err := inmemory.Import[int, pointer](t.Context(), target, strings.NewReader(`{"name":"dynamic","records":[{"record":`+record+`}]}`), options); err == nil {
 			t.Fatalf("accepted invalid dynamic snapshot %s", record)
 		}
 	}
 }
 
 func TestSnapshot_InvalidInputsAreAtomic(t *testing.T) {
-	store := inmemory.New[string, document](inmemory.Config{})
-	c, err := store.Collection("records", vectordata.CollectionOptions{})
+	store := inmemory.New(inmemory.Config{})
+	c, err := vectordata.GetCollection[string, document](store.Store, "records", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +203,7 @@ func TestSnapshot_InvalidInputsAreAtomic(t *testing.T) {
 		`{"name":"records","records":[]} {}`, `{"name":"records","records":[],"unknown":true}`,
 		`{"name":"records","records":[{"record":{"ID":"new"}},{"record":{"ID":"kept","Vector":[1]}}]}`,
 	} {
-		if _, err := store.Import(t.Context(), strings.NewReader(snapshot), vectordata.CollectionOptions{}); err == nil {
+		if _, err := inmemory.Import[string, document](t.Context(), store, strings.NewReader(snapshot), nil); err == nil {
 			t.Fatalf("accepted malformed snapshot %q", snapshot)
 		}
 		records := collect(t, c.GetFiltered(t.Context(), allRecords, 10, nil))
@@ -224,8 +224,8 @@ func (r *marshalingRecord) MarshalJSON() ([]byte, error) {
 }
 
 func TestSnapshot_ExportUsesStoredRecordsAndReportsEncodingErrors(t *testing.T) {
-	store := inmemory.New[string, *marshalingRecord](inmemory.Config{})
-	c, err := store.Collection("records", vectordata.CollectionOptions{})
+	store := inmemory.New(inmemory.Config{})
+	c, err := vectordata.GetCollection[string, *marshalingRecord](store.Store, "records", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,8 +247,8 @@ func TestSnapshot_ExportUsesStoredRecordsAndReportsEncodingErrors(t *testing.T) 
 		ID   string `vectordata:"key"`
 		Self *cyclicRecord
 	}
-	cyclicStore := inmemory.New[string, *cyclicRecord](inmemory.Config{})
-	cyclic, err := cyclicStore.Collection("cycles", vectordata.CollectionOptions{})
+	cyclicStore := inmemory.New(inmemory.Config{})
+	cyclic, err := vectordata.GetCollection[string, *cyclicRecord](cyclicStore.Store, "cycles", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,8 +276,8 @@ type readerFunc func([]byte) (int, error)
 func (f readerFunc) Read(buffer []byte) (int, error) { return f(buffer) }
 
 func TestSnapshot_IOAndCancellation(t *testing.T) {
-	store := inmemory.New[string, document](inmemory.Config{})
-	c, err := store.Collection("records", vectordata.CollectionOptions{})
+	store := inmemory.New(inmemory.Config{})
+	c, err := vectordata.GetCollection[string, document](store.Store, "records", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,14 +290,14 @@ func TestSnapshot_IOAndCancellation(t *testing.T) {
 	if err := store.Export(t.Context(), "records", nil); err == nil {
 		t.Fatal("accepted nil writer")
 	}
-	if _, err := store.Import(t.Context(), nil, vectordata.CollectionOptions{}); err == nil {
+	if _, err := inmemory.Import[string, document](t.Context(), store, nil, nil); err == nil {
 		t.Fatal("accepted nil reader")
 	}
 	want := errors.New("IO failed")
 	if err := store.Export(t.Context(), "records", failingIO{want}); !errors.Is(err, want) {
 		t.Fatalf("export IO error = %v", err)
 	}
-	if _, err := store.Import(t.Context(), failingIO{want}, vectordata.CollectionOptions{}); !errors.Is(err, want) {
+	if _, err := inmemory.Import[string, document](t.Context(), store, failingIO{want}, nil); !errors.Is(err, want) {
 		t.Fatalf("import IO error = %v", err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -305,7 +305,7 @@ func TestSnapshot_IOAndCancellation(t *testing.T) {
 	if err := store.Export(ctx, "records", io.Discard); !errors.Is(err, context.Canceled) {
 		t.Fatalf("export cancellation = %v", err)
 	}
-	if _, err := store.Import(ctx, failingIO{want}, vectordata.CollectionOptions{}); !errors.Is(err, context.Canceled) {
+	if _, err := inmemory.Import[string, document](ctx, store, failingIO{want}, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("import cancellation = %v", err)
 	}
 	ctx, cancel = context.WithCancel(t.Context())
@@ -317,7 +317,7 @@ func TestSnapshot_IOAndCancellation(t *testing.T) {
 		cancel()
 		return data.Read(buffer)
 	})
-	if _, err := store.Import(ctx, reader, vectordata.CollectionOptions{}); !errors.Is(err, context.Canceled) {
+	if _, err := inmemory.Import[string, document](ctx, store, reader, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancellation while reading = %v", err)
 	}
 	if reads != 1 {

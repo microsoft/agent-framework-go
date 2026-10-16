@@ -13,7 +13,7 @@ import (
 var (
 	FoundryProjectEndpoint = strings.TrimSpace(os.Getenv("FOUNDRY_PROJECT_ENDPOINT"))
 	FoundryModel           = cmp.Or(strings.TrimSpace(os.Getenv("FOUNDRY_MODEL")), DefaultDeployment)
-	FoundryEmbeddingModel  = cmp.Or(os.Getenv("FOUNDRY_EMBEDDING_MODEL"), "text-embedding-ada-002")
+	FoundryEmbeddingModel  = cmp.Or(os.Getenv("FOUNDRY_EMBEDDING_MODEL"), "text-embedding-3-large")
 )
 
 func FoundryTokenCredential() *azidentity.DefaultAzureCredential {

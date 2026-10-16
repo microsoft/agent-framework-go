@@ -32,9 +32,7 @@ func main() {
 	credential := demo.FoundryTokenCredential()
 	generator := foundryprovider.NewEmbeddingGenerator(demo.FoundryProjectEndpoint, credential,
 		foundryprovider.EmbeddingGeneratorConfig{Model: demo.FoundryEmbeddingModel})
-	collection, err := inmemory.NewCollection[uuid.UUID, TextSearchDocument]("documents", vectordata.CollectionOptions{
-		EmbeddingGenerator: embedding.Bind(generator),
-	})
+	collection, err := inmemory.NewCollection[uuid.UUID, TextSearchDocument]("documents", &vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator)})
 	if err != nil {
 		demo.Panic(err)
 	}
