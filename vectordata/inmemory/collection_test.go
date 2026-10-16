@@ -477,6 +477,52 @@ func TestCollection_KeyTypes(t *testing.T) {
 	}
 }
 
+func checkAssignableDynamicKey[K comparable](t *testing.T, typ reflect.Type, key K, value any) {
+	t.Helper()
+	c := createCollection[K, map[string]any](t, vectordata.CollectionOptions{
+		Definition: &vectordata.Definition{Properties: []vectordata.Property{
+			&vectordata.KeyProperty{Name: "ID", Type: typ},
+		}},
+	})
+	input := map[string]any{"ID": value}
+	if err := c.Upsert(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := c.Get(t.Context(), key, nil)
+	if err != nil || !found || got["ID"] != value {
+		t.Fatalf("Get(%T) = %v, %v, %v; want original key %T", key, got, found, err, value)
+	}
+	if err := c.Delete(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := c.Get(t.Context(), key, nil); err != nil || found {
+		t.Fatalf("Get after Delete = found %v, error %v", found, err)
+	}
+}
+
+func TestCollection_AssignableDynamicKeys(t *testing.T) {
+	type key struct{ ID int }
+	type otherKey struct{ ID int }
+	type arrayKey [1]int
+	type otherArrayKey [1]int
+	type pointerKey *struct{ ID int }
+	type otherPointerKey *struct{ ID int }
+
+	t.Run("struct", func(t *testing.T) {
+		checkAssignableDynamicKey(t, reflect.TypeFor[struct{ ID int }](), key{1}, otherKey{1})
+	})
+	t.Run("array", func(t *testing.T) {
+		checkAssignableDynamicKey(t, reflect.TypeFor[[1]int](), arrayKey{1}, otherArrayKey{1})
+	})
+	t.Run("pointer", func(t *testing.T) {
+		value := &struct{ ID int }{1}
+		checkAssignableDynamicKey(t, reflect.TypeFor[*struct{ ID int }](), pointerKey(value), otherPointerKey(value))
+	})
+	t.Run("interface", func(t *testing.T) {
+		checkAssignableDynamicKey[any](t, reflect.TypeFor[struct{ ID int }](), otherKey{1}, otherKey{1})
+	})
+}
+
 func TestCollection_NativeVectorRepresentations(t *testing.T) {
 	type record struct {
 		ID        int                         `vectordata:"key"`

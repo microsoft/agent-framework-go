@@ -145,6 +145,12 @@ func recordKey[K comparable](field recordField, record reflect.Value) (K, error)
 		return zero, fmt.Errorf("key property %q: %w", field.name, err)
 	}
 	key := reflect.New(reflect.TypeFor[K]()).Elem()
+	if !value.Type().AssignableTo(key.Type()) {
+		// Assignability through the declared property type is not transitive.
+		declared := reflect.New(field.typ).Elem()
+		declared.Set(value)
+		value = declared
+	}
 	key.Set(value)
 	return key.Interface().(K), nil
 }
