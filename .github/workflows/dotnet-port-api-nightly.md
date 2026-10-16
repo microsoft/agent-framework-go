@@ -51,6 +51,14 @@ steps:
         mkdir -p "$data"
         go -C _catalog run ./cmd/symbolmap gaps -limit 0 > "$data/catalog-gaps.json"
         printf 'DOTNET_GAPS_FILE=%s\n' "$data/catalog-gaps.json" >> "$GITHUB_ENV"
+   - name: Prepare terminal result validation
+     run: cp .github/scripts/check-agent-result.cjs "$RUNNER_TEMP/gh-aw/check-agent-result.cjs"
+post-steps:
+   - name: Require a terminal agent result
+     if: success()
+     env:
+        GH_AW_SAFE_OUTPUTS: ${{ steps.set-runtime-paths.outputs.GH_AW_SAFE_OUTPUTS }}
+     run: node "$RUNNER_TEMP/gh-aw/check-agent-result.cjs" "$GH_AW_SAFE_OUTPUTS"
 permissions:
    contents: read
    pull-requests: read
@@ -144,7 +152,11 @@ For `search_issues` and `search_pull_requests`, always include `repo:microsoft/a
 
 Searches discover references; direct reads resolve them. Track references by repository, resource type (`issue` or `pr`), and number, with their candidate/query and any filtering or failure. Read relevant bodies, comments, diffs, and outcomes directly through the matching tool; never include bodies in search results or re-search to rediscover a known reference. Reuse resolved evidence across candidate checks. Skip only work that implements, actively claims, or explicitly rejects the exact missing behavior, including older fallback tracking issues. A matching title, base feature port, internal refactor, or preservation test is not enough; a closed PR is not necessarily merged.
 
+Current Go code is the source of truth for implemented coverage. Identify the actual declarations, callers, and tests that satisfy the selected contract; a proposed patch or a PR body's description is not checkout evidence. When citing a PR as implemented work, use `pull_request_read` with `method: get` and record its `state`, `merged`, and `merged_at`. Require `merged: true` and a non-null merge timestamp, then verify the behavior still exists in the current checkout. Search/list results and `state: closed` alone do not establish a merge. A closed, unmerged PR may document a maintainer's explicit rejection, but record that as a rejected proposal, never as implemented coverage; without such a decision, reassess the candidate against current code.
+
 A filtered search item is not an explicit denial of a direct read. For each potentially relevant filtered reference, attempt one matching `issue_read` or `pull_request_read` through the same guarded GitHub MCP, unless that direct read was already denied. If allowed, assess its actual relevance; if denied or required evidence remains unavailable, keep that candidate blocked during selection and final recheck. Do not retry an explicitly denied read, lower integrity policy, change transports, call a trapped guard, or use sandbox `gh` or unconfigured downloads. Narrower empty searches, an accessible partial diff, passing tests, or disclosing the filter do not clear unresolved evidence.
+
+Filtering that hides issue/PR identifiers is also unresolved evidence, not an empty result. Record the query and filtered count without inventing references or searching around the policy. If required duplicate evidence still blocks an otherwise eligible candidate and no fully verified candidate can be selected within the budget, call `report_incomplete`; do not stop with a prose-only explanation or substitute `noop`. Source-backed exclusions remain valid, and a blocked alternative does not invalidate a fully verified selection.
 
 ## Review and selection
 
@@ -167,6 +179,8 @@ Before editing, confirm the selected catalog leaves, the pinned .NET contract an
 ## Finish
 
 Call one terminal safe-output tool and inspect its result before final prose; a prose summary is not a tool call:
+
+Post-execution validation requires exactly one `create_pull_request`, `noop`, or `report_incomplete` result. Exit code zero does not waive this requirement. For every claim of already-implemented coverage, include current Go file/symbol evidence and the verified merge status of any PR cited as implementation evidence.
 
 - `create_pull_request`: one verified, tested gap closure with a clear final duplicate check. Send only `title`, `body`, and `branch`; omit `temporary_id` and other optional arguments. Draft status, base branch, and title prefix are configured already; this single PR needs no temporary ID. Use a concrete title and sections **Summary**, **Ported .NET PRs**, **Breaking Changes**, **Tests and Examples**, and **Notes**. Include inventoried package versions, pinned SHA, exact catalog leaves and expected assessment changes, relevant upstream commits/PRs (or `None` if no specific PR was ported), immutable evidence, experimental and duplicate checks, and actual validation. Keep prose concise without hard-wrapping paragraphs. Report publication as queued, not a confirmed PR; never push, merge, approve, or open PRs directly.
 - `noop`: completed bounded gap review with no eligible unclaimed change and no potentially eligible candidate left blocked. Source-backed exclusions, including experimental, fix-only, already covered, and too broad, are completed reviews, not blockers. State the pinned SHA, screened/total gap counts, actual leaves/groups inspected, exclusion or already-satisfied reasons, and existing-work links. Do not claim a full catalog audit from screening rows and inspecting a few candidates; an empty diff alone does not establish completion.

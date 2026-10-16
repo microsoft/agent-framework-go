@@ -45,6 +45,25 @@ jobs:
     - name: Run catalog tooling tests
       run: go -C _catalog test -v ${{ matrix.target.name != 'windows-arm64' && '-race' || '' }} -shuffle=on ./...
 
+  workflow-tests:
+    name: Workflow safeguards
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Test workflow safeguards
+        run: node --test .github/scripts/check-agent-result.test.cjs
+
   copilot-integration:
     name: GitHub Copilot integration
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
@@ -80,7 +99,7 @@ jobs:
         run: go test -count=1 -v ./provider/copilotprovider -run '^TestE2E_'
 
   conclusion:
-    needs: [test, copilot-integration]
+    needs: [test, workflow-tests, copilot-integration]
     runs-on: ubuntu-latest
     if: ${{ always() }}
     steps:
