@@ -13310,90 +13310,90 @@
         "mapping": {
           "go": "",
           "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProvider is marked MAAI001 experimental."
         },
         "properties": {
           "AllToolsAutoApprovalRule": {
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProvider is marked MAAI001 experimental."
           },
           "ReadOnlyToolsAutoApprovalRule": {
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProvider is marked MAAI001 experimental."
           },
           "StateKeys": {
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProvider is marked MAAI001 experimental."
           }
         },
         "methods": {
           "Dispose() -> void": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProvider is marked MAAI001 experimental."
           }
         },
         "constructors": {
           "FileAccessProvider(AgentFileStore, FileAccessProviderOptions)": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProvider is marked MAAI001 experimental."
           }
         },
         "constants": {
           "DeleteFileToolName": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProvider is marked MAAI001 experimental."
           },
           "GrepToolName": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProvider is marked MAAI001 experimental."
           },
           "LsToolName": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProvider is marked MAAI001 experimental."
           },
           "ReadFileToolName": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProvider is marked MAAI001 experimental."
           },
           "ReadLinesToolName": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProvider is marked MAAI001 experimental."
           },
           "ReplaceLinesToolName": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProvider is marked MAAI001 experimental."
           },
           "ReplaceToolName": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProvider is marked MAAI001 experimental."
           },
           "WriteToolName": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProvider is marked MAAI001 experimental."
           }
         }
       },
@@ -13404,37 +13404,37 @@
         "mapping": {
           "go": "",
           "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "status": "intentional",
+          "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProviderOptions is marked MAAI001 experimental."
         },
         "properties": {
           "DisableReadOnlyToolApproval": {
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProviderOptions is marked MAAI001 experimental."
           },
           "DisableWriteToolApproval": {
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProviderOptions is marked MAAI001 experimental."
           },
           "DisableWriteTools": {
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProviderOptions is marked MAAI001 experimental."
           },
           "Instructions": {
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProviderOptions is marked MAAI001 experimental."
           }
         },
         "constructors": {
           "FileAccessProviderOptions()": {
             "go": "",
             "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "status": "intentional",
+            "note": "Intentionally omitted from the Go 0.2.0 non-experimental harness scope because FileAccessProviderOptions is marked MAAI001 experimental."
           }
         }
       },
