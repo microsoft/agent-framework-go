@@ -218,8 +218,8 @@ The [in-memory connector](../vectordata/inmemory/) ports
   `Equal(T) bool`; equality otherwise uses `reflect.DeepEqual`.
 - Batch dictionary updates are atomic; mutations to input records are not rolled
   back on failure.
-- Snapshots use Go JSON, not the .NET format. Vector scores may differ through
-  floating-point rounding.
+- Snapshots use Go JSON, not the .NET format. NaN scores are omitted; other scores
+  may differ through floating-point rounding.
 
 These packages remain outside the catalog's extraction scope.
 

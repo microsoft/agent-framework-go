@@ -111,6 +111,69 @@ func (rank filterRank) Compare(other filterRank) int {
 	return 7 * cmp.Compare(other, rank)
 }
 
+type comparisonSlice []int
+
+func (value comparisonSlice) Compare(other comparisonSlice) int {
+	if value == nil || other == nil {
+		panic("comparison method called with nil")
+	}
+	return cmp.Compare(len(value), len(other))
+}
+
+type comparisonMap map[string]int
+
+func (value comparisonMap) Compare(other comparisonMap) int {
+	if value == nil || other == nil {
+		panic("comparison method called with nil")
+	}
+	return cmp.Compare(len(value), len(other))
+}
+
+func TestCompileFilter_NilOrderedValues(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		nilValue, value any
+	}{
+		{"slice", comparisonSlice(nil), comparisonSlice{1}},
+		{"map", comparisonMap(nil), comparisonMap{"one": 1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, operator := range []vectordata.FilterOperator{
+				vectordata.LessThan, vectordata.LessThanOrEqual,
+				vectordata.GreaterThan, vectordata.GreaterThanOrEqual,
+			} {
+				t.Run(string(operator), func(t *testing.T) {
+					for _, operands := range []struct {
+						name          string
+						record, value any
+					}{
+						{"nil record", test.nilValue, test.value},
+						{"nil literal", test.value, test.nilValue},
+						{"both nil", test.nilValue, test.nilValue},
+					} {
+						t.Run(operands.name, func(t *testing.T) {
+							predicate, err := providerservices.CompileFilter(&vectordata.Filter{
+								Operator: operator, Property: "Value", Value: operands.value,
+							}, func(string) (providerservices.FilterProperty, error) {
+								return providerservices.FilterProperty{
+									Type:  reflect.TypeOf(test.value),
+									Value: func(record any) (any, bool, error) { return record, true, nil },
+								}, nil
+							})
+							if err != nil {
+								t.Fatal(err)
+							}
+							if matches, err := predicate(operands.record); err != nil || matches {
+								t.Fatalf("nil relational comparison = %v, %v", matches, err)
+							}
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestCompileFilter_Comparisons(t *testing.T) {
 	for _, test := range []struct {
 		name          string

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"math"
 	"reflect"
 	"slices"
 
@@ -19,7 +20,8 @@ import (
 // Search performs an exact vector search after filtering, then applies the
 // inclusive score threshold, ordering, Skip, and top. Execution is lazy and uses
 // a snapshot of stored record references. Similarities sort descending; distances
-// ascending. Scores have float32 precision. Null record vectors are skipped.
+// ascending. Scores have float32 precision. Null record vectors and undefined
+// (NaN) scores are skipped.
 // Results retain native vectors regardless of IncludeVectors.
 func (c *Collection[K, R]) Search(ctx context.Context, searchValue any, top int, options *vectordata.SearchOptions) iter.Seq2[vectordata.SearchResult[R], error] {
 	return func(yield func(vectordata.SearchResult[R], error) bool) {
@@ -125,6 +127,9 @@ func (c *Collection[K, R]) search(ctx context.Context, searchValue any, top int,
 			return nil, fmt.Errorf("property %q: %w", property.Name, err)
 		}
 		score := compareVectors(input, vector, property.DistanceFunction)
+		if math.IsNaN(float64(score)) {
+			continue
+		}
 		if options.ScoreThreshold != nil {
 			threshold := *options.ScoreThreshold
 			if descending && !(float64(score) >= threshold) || !descending && !(float64(score) <= threshold) {
@@ -147,7 +152,7 @@ func (c *Collection[K, R]) search(ctx context.Context, searchValue any, top int,
 // ordering, Skip, and top. Supported ordered values are booleans, strings,
 // numbers, UUIDs, types with Compare(T) int methods, and nullable pointers to
 // these types. Nulls sort before non-null values in ascending order.
-// Without OrderBy, order is unspecified.
+// Without OrderBy, order is unspecified and filtering stops after the requested page.
 // Strings use Go's lexicographic ordering, without culture-specific collation.
 // Property names refer to Go fields or dynamic schema properties, not storage names.
 // Results retain native vectors regardless of IncludeVectors.
@@ -212,6 +217,24 @@ func (c *Collection[K, R]) filtered(ctx context.Context, filter vectordata.Filte
 				return
 			}
 		}
+	}
+	if len(options.OrderBy) == 0 {
+		var result []R
+		skip := options.Skip
+		for record, err := range records {
+			if err != nil {
+				return nil, err
+			}
+			if skip > 0 {
+				skip--
+				continue
+			}
+			result = append(result, record)
+			if len(result) == top {
+				break
+			}
+		}
+		return result, nil
 	}
 	result, err := providerservices.SortRecords(records, options.OrderBy, func(name string) (providerservices.FilterProperty, error) {
 		field, found := c.schema.fields[name]

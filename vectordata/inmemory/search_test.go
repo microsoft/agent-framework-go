@@ -87,6 +87,59 @@ func TestSearch_DistanceFunctions(t *testing.T) {
 	}
 }
 
+func TestSearch_UndefinedScores(t *testing.T) {
+	for _, distance := range []vectordata.DistanceFunction{
+		"", vectordata.CosineSimilarity, vectordata.CosineDistance,
+		vectordata.DotProductSimilarity, vectordata.EuclideanDistance,
+	} {
+		t.Run(string(distance), func(t *testing.T) {
+			c := createCollection[string, document](t, vectorOptions(distance, ""))
+			base := []float32{1, 0, 0, 0}
+			zero := []float32{0, 0, 0, 0}
+			nan := []float32{float32(math.NaN()), 0, 0, 0}
+			if err := c.Upsert(t.Context(),
+				document{ID: "zero", Vector: zero},
+				document{ID: "exact", Vector: base},
+				document{ID: "nan", Vector: nan},
+			); err != nil {
+				t.Fatal(err)
+			}
+			cosine := distance == "" || distance == vectordata.CosineSimilarity || distance == vectordata.CosineDistance
+			count := 2
+			if cosine {
+				count = 1
+			}
+			for _, top := range []int{1, 3} {
+				results := collect(t, c.Search(t.Context(), base, top, nil))
+				if len(results) != min(top, count) || results[0].Record.ID != "exact" {
+					t.Fatalf("top %d results = %+v", top, results)
+				}
+				for _, result := range results {
+					if result.Score == nil || math.IsNaN(*result.Score) {
+						t.Fatalf("undefined score returned: %+v", result)
+					}
+				}
+			}
+			results := collect(t, c.Search(t.Context(), zero, 3, nil))
+			count = 2
+			if cosine {
+				count = 0
+			}
+			if len(results) != count {
+				t.Fatalf("zero-norm query results = %+v, want %d", results, count)
+			}
+			for _, result := range results {
+				if result.Score == nil || math.IsNaN(*result.Score) {
+					t.Fatalf("undefined zero-norm query score: %+v", result)
+				}
+			}
+			if results := collect(t, c.Search(t.Context(), nan, 3, nil)); len(results) != 0 {
+				t.Fatalf("NaN query returned results: %+v", results)
+			}
+		})
+	}
+}
+
 func TestSearch_UnsupportedMetricsAndIndexHints(t *testing.T) {
 	for _, distance := range []vectordata.DistanceFunction{
 		vectordata.NegativeDotProductSimilarity, vectordata.EuclideanSquaredDistance,
@@ -340,6 +393,51 @@ func TestGetFiltered_OrderingAndValidation(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_ = sequenceError(t, c.GetFiltered(t.Context(), test.filter, test.top, test.options))
+		})
+	}
+}
+
+type paginationValue struct{ observe func() }
+
+func (value paginationValue) Equal(paginationValue) bool {
+	value.observe()
+	return true
+}
+
+func TestGetFiltered_UnorderedPagination(t *testing.T) {
+	type record struct {
+		ID    int             `vectordata:"key"`
+		Value paginationValue `vectordata:"data"`
+	}
+	for _, test := range []struct {
+		name            string
+		skip, top       int
+		orderBy         []vectordata.Sort
+		count, readings int
+	}{
+		{"first", 0, 1, nil, 1, 1},
+		{"offset", 2, 2, nil, 2, 4},
+		{"all", 0, math.MaxInt, nil, 6, 6},
+		{"past end", math.MaxInt, 1, nil, 0, 6},
+		{"ordered", 0, 1, []vectordata.Sort{{Property: "ID"}}, 1, 6},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := createCollection[int, record](t, vectordata.CollectionOptions{})
+			readings := 0
+			records := make([]record, 6)
+			for i := range records {
+				records[i] = record{ID: i, Value: paginationValue{observe: func() { readings++ }}}
+			}
+			if err := c.Upsert(t.Context(), records...); err != nil {
+				t.Fatal(err)
+			}
+			results := collect(t, c.GetFiltered(t.Context(), vectordata.Filter{
+				Operator: vectordata.Equal, Property: "Value", Value: paginationValue{},
+			}, test.top, &vectordata.FilteredRecordRetrievalOptions{Skip: test.skip, OrderBy: test.orderBy}))
+			if len(results) != test.count || readings != test.readings {
+				t.Fatalf("page has %d records after %d evaluations, want %d records after %d evaluations",
+					len(results), readings, test.count, test.readings)
+			}
 		})
 	}
 }

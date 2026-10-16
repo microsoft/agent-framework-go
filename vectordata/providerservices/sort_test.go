@@ -111,6 +111,57 @@ func TestSortRecords_NoOrdering(t *testing.T) {
 	}
 }
 
+func TestSortRecords_NilOrderedValues(t *testing.T) {
+	type record struct {
+		id    string
+		value any
+	}
+	for _, test := range []struct {
+		name                                string
+		nilValue, emptyValue, nonemptyValue any
+	}{
+		{"slice", comparisonSlice(nil), comparisonSlice{}, comparisonSlice{1}},
+		{"map", comparisonMap(nil), comparisonMap{}, comparisonMap{"one": 1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, descending := range []bool{false, true} {
+				t.Run(fmt.Sprintf("descending=%v", descending), func(t *testing.T) {
+					input := []record{
+						{"empty", test.emptyValue},
+						{"nil", test.nilValue},
+						{"nonempty", test.nonemptyValue},
+						{"nested nil", new(test.nilValue)},
+					}
+					result, err := providerservices.SortRecords(recordSequence(input...), []vectordata.Sort{
+						{Property: "Value", Descending: descending},
+					}, func(string) (providerservices.FilterProperty, error) {
+						return providerservices.FilterProperty{
+							Type: reflect.TypeFor[any](),
+							Value: func(input any) (any, bool, error) {
+								return input.(record).value, true, nil
+							},
+						}, nil
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					var ids []string
+					for _, value := range result {
+						ids = append(ids, value.id)
+					}
+					want := []string{"nil", "nested nil", "empty", "nonempty"}
+					if descending {
+						want = []string{"nonempty", "empty", "nil", "nested nil"}
+					}
+					if !slices.Equal(ids, want) {
+						t.Fatalf("ordered IDs = %v, want %v", ids, want)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestSortRecords_MissingAndDynamicValues(t *testing.T) {
 	records := []map[string]any{
 		{"ID": "present", "Value": 2},

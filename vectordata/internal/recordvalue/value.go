@@ -106,13 +106,13 @@ func comparisonMethod(typ reflect.Type, name string, result reflect.Type) (refle
 
 // Compare orders values already unwrapped by Indirect, with nil values first.
 func Compare(x, y reflect.Value) (int, error) {
-	if !x.IsValid() {
-		if !y.IsValid() {
+	if IsNil(x) {
+		if IsNil(y) {
 			return 0, nil
 		}
 		return -1, nil
 	}
-	if !y.IsValid() {
+	if IsNil(y) {
 		return 1, nil
 	}
 	if x.Type() != y.Type() {

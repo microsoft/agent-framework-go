@@ -149,7 +149,7 @@ func filterNode(filter *vectordata.Filter, resolve func(string) (FilterProperty,
 			return false, nil
 		default:
 			a, b := recordvalue.Indirect(actual), recordvalue.Indirect(value)
-			if !a.IsValid() || !b.IsValid() {
+			if recordvalue.IsNil(a) || recordvalue.IsNil(b) {
 				return false, nil
 			}
 			if isNaN(a) || isNaN(b) {
