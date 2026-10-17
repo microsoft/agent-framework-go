@@ -19,10 +19,10 @@ import (
 	"github.com/microsoft/agent-framework-go/vectordata/inmemory"
 )
 
-func vectorOptions(distance vectordata.DistanceFunction, index vectordata.IndexKind) vectordata.CollectionOptions {
-	return vectordata.CollectionOptions{Definition: &vectordata.Definition{Properties: []vectordata.Property{
+func vectorDefinition(distance vectordata.DistanceFunction, index vectordata.IndexKind) *vectordata.Definition {
+	return &vectordata.Definition{Properties: []vectordata.Property{
 		&vectordata.VectorProperty{Name: "Vector", Dimensions: 4, DistanceFunction: distance, IndexKind: index},
-	}}}
+	}}
 }
 
 // Uses the exact, opposite, and orthogonal vectors from the upstream distance
@@ -39,7 +39,7 @@ func TestSearch_DistanceFunctions(t *testing.T) {
 		{vectordata.EuclideanDistance, []float64{0, math.Sqrt(3), 2}},
 	} {
 		t.Run(string(test.distance), func(t *testing.T) {
-			c := createCollection[string, document](t, vectorOptions(test.distance, ""))
+			c := createCollection[string, document](t, vectorDefinition(test.distance, ""))
 			base := []float32{1, 0, 0, 0}
 			if err := c.Upsert(t.Context(),
 				document{ID: "exact", Vector: base},
@@ -93,7 +93,7 @@ func TestSearch_UndefinedScores(t *testing.T) {
 		vectordata.DotProductSimilarity, vectordata.EuclideanDistance,
 	} {
 		t.Run(string(distance), func(t *testing.T) {
-			c := createCollection[string, document](t, vectorOptions(distance, ""))
+			c := createCollection[string, document](t, vectorDefinition(distance, ""))
 			base := []float32{1, 0, 0, 0}
 			zero := []float32{0, 0, 0, 0}
 			nan := []float32{float32(math.NaN()), 0, 0, 0}
@@ -146,7 +146,7 @@ func TestSearch_UnsupportedMetricsAndIndexHints(t *testing.T) {
 		vectordata.HammingDistance, vectordata.ManhattanDistance, "custom",
 	} {
 		t.Run(string(distance), func(t *testing.T) {
-			c := createCollection[string, document](t, vectorOptions(distance, ""))
+			c := createCollection[string, document](t, vectorDefinition(distance, ""))
 			_ = sequenceError(t, c.Search(t.Context(), []float32{1, 0, 0, 0}, 1, nil))
 		})
 	}
@@ -155,7 +155,7 @@ func TestSearch_UnsupportedMetricsAndIndexHints(t *testing.T) {
 		vectordata.QuantizedFlat, vectordata.Dynamic, "custom",
 	} {
 		t.Run("index-"+string(index), func(t *testing.T) {
-			c := createCollection[string, document](t, vectorOptions("", index))
+			c := createCollection[string, document](t, vectorDefinition("", index))
 			if err := c.Upsert(t.Context(), document{ID: "id", Vector: []float32{1, 0, 0, 0}}); err != nil {
 				t.Fatal(err)
 			}
@@ -167,7 +167,7 @@ func TestSearch_UnsupportedMetricsAndIndexHints(t *testing.T) {
 }
 
 func TestSearch_Validation(t *testing.T) {
-	c := createCollection[string, document](t, vectordata.CollectionOptions{})
+	c := createCollection[string, document](t, nil)
 	vector := []float32{1, 0, 0, 0}
 	for name, test := range map[string]struct {
 		value   any
@@ -198,18 +198,18 @@ func TestSearch_Validation(t *testing.T) {
 		First  []float32 `vectordata:"vector,dimensions=4"`
 		Second []float32 `vectordata:"vector,dimensions=4"`
 	}
-	ambiguous := createCollection[string, multiple](t, vectordata.CollectionOptions{})
+	ambiguous := createCollection[string, multiple](t, nil)
 	_ = sequenceError(t, ambiguous.Search(t.Context(), vector, 1, nil))
 	type noVectors struct {
 		ID string `vectordata:"key"`
 	}
-	empty := createCollection[string, noVectors](t, vectordata.CollectionOptions{})
+	empty := createCollection[string, noVectors](t, nil)
 	_ = sequenceError(t, empty.Search(t.Context(), vector, 1, nil))
 	type unsupported struct {
 		ID     string    `vectordata:"key"`
 		Vector []float64 `vectordata:"vector,dimensions=4"`
 	}
-	if _, err := inmemory.NewCollection[string, unsupported]("records", vectordata.CollectionOptions{}); err == nil {
+	if _, err := inmemory.NewCollection[string, unsupported]("records", nil); err == nil {
 		t.Fatal("accepted unsupported float64 vectors")
 	}
 }
@@ -227,7 +227,7 @@ type filterRecord struct {
 
 func filterFixture(t *testing.T) (*inmemory.Collection[int, filterRecord], *inmemory.Collection[int, map[string]any]) {
 	t.Helper()
-	typed := createCollection[int, filterRecord](t, vectordata.CollectionOptions{})
+	typed := createCollection[int, filterRecord](t, nil)
 	properties := []vectordata.Property{
 		&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[int]()},
 		&vectordata.VectorProperty{Name: "Vector", Type: reflect.TypeFor[[]float32](), Dimensions: 3},
@@ -237,7 +237,7 @@ func filterFixture(t *testing.T) (*inmemory.Collection[int, filterRecord], *inme
 			properties = append(properties, &vectordata.DataProperty{Name: field.Name, Type: field.Type})
 		}
 	}
-	dynamic := createCollection[int, map[string]any](t, vectordata.CollectionOptions{Definition: &vectordata.Definition{Properties: properties}})
+	dynamic := createCollection[int, map[string]any](t, &vectordata.Definition{Properties: properties})
 	records := []filterRecord{
 		{ID: 0, Int: 8, String: new("foo"), Bool: true, Int2: 80, StringArray: []string{"x", "y"}, StringList: []string{"x", "y"}},
 		{ID: 1, Int: 9, String: new("bar"), Int2: 90, StringArray: []string{"a", "b"}, StringList: []string{"a", "b"}},
@@ -422,7 +422,7 @@ func TestGetFiltered_UnorderedPagination(t *testing.T) {
 		{"ordered", 0, 1, []vectordata.Sort{{Property: "ID"}}, 1, 6},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			c := createCollection[int, record](t, vectordata.CollectionOptions{})
+			c := createCollection[int, record](t, nil)
 			readings := 0
 			records := make([]record, 6)
 			for i := range records {
@@ -479,7 +479,7 @@ func TestGetFiltered_ValueTypes(t *testing.T) {
 		"nested-null":       {new((*int)(nil)), new(new(2))},
 	} {
 		t.Run(name, func(t *testing.T) {
-			c := createCollection[int, record](t, vectordata.CollectionOptions{})
+			c := createCollection[int, record](t, nil)
 			if err := c.Upsert(t.Context(), record{ID: 2, Value: pair[1]}, record{ID: 1, Value: pair[0]}); err != nil {
 				t.Fatal(err)
 			}
@@ -497,7 +497,7 @@ func TestGetFiltered_ValueTypes(t *testing.T) {
 			}
 		})
 	}
-	c := createCollection[int, record](t, vectordata.CollectionOptions{})
+	c := createCollection[int, record](t, nil)
 	if err := c.Upsert(t.Context(), record{ID: 1, Value: math.NaN()}, record{ID: 2, Value: float64(0)}); err != nil {
 		t.Fatal(err)
 	}
@@ -519,7 +519,7 @@ func TestGetFiltered_CompareMethods(t *testing.T) {
 		Value  *comparisonValue `vectordata:"data"`
 		Vector []float32        `vectordata:"vector,dimensions=1"`
 	}
-	c := createCollection[int, record](t, vectordata.CollectionOptions{})
+	c := createCollection[int, record](t, nil)
 	if err := c.Upsert(t.Context(),
 		record{ID: 3, Value: new(comparisonValue{rank: 3}), Vector: []float32{1}},
 		record{ID: 1, Value: new(comparisonValue{rank: 1}), Vector: []float32{1}},
@@ -606,12 +606,12 @@ func TestGetFiltered_InvalidCompareMethods(t *testing.T) {
 		t.Run(reflect.TypeOf(value).Name(), func(t *testing.T) {
 			for _, typ := range []reflect.Type{reflect.TypeOf(value), reflect.TypeFor[any]()} {
 				t.Run(typ.String(), func(t *testing.T) {
-					c := createCollection[int, map[string]any](t, vectordata.CollectionOptions{Definition: &vectordata.Definition{
+					c := createCollection[int, map[string]any](t, &vectordata.Definition{
 						Properties: []vectordata.Property{
 							&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[int]()},
 							&vectordata.DataProperty{Name: "Value", Type: typ},
 						},
-					}})
+					})
 					if err := c.Upsert(t.Context(), map[string]any{"ID": 1, "Value": value}); err != nil {
 						t.Fatal(err)
 					}
@@ -670,7 +670,7 @@ func TestGetFiltered_EqualityMethods(t *testing.T) {
 		{"invalid-result", invalidEqualResult{1}, invalidEqualResult{1}, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			c := createCollection[int, record](t, vectordata.CollectionOptions{})
+			c := createCollection[int, record](t, nil)
 			if err := c.Upsert(t.Context(), record{ID: 1, Value: test.actual}); err != nil {
 				t.Fatal(err)
 			}
@@ -695,7 +695,7 @@ func TestSearch_EqualityMethods(t *testing.T) {
 		Values []equalityValue `vectordata:"data"`
 		Vector []float32       `vectordata:"vector,dimensions=1"`
 	}
-	c := createCollection[int, record](t, vectordata.CollectionOptions{})
+	c := createCollection[int, record](t, nil)
 	if err := c.Upsert(t.Context(),
 		record{ID: 1, Value: new(equalityValue{"alpha"}), Values: []equalityValue{{"alpha"}}, Vector: []float32{1}},
 		record{ID: 2, Value: new(equalityValue{"beta"}), Values: []equalityValue{{"beta"}}, Vector: []float32{1}},
@@ -745,7 +745,7 @@ func TestGetFiltered_CyclicValues(t *testing.T) {
 	}
 	var cycle any
 	cycle = &cycle
-	c := createCollection[int, record](t, vectordata.CollectionOptions{})
+	c := createCollection[int, record](t, nil)
 	if err := c.Upsert(t.Context(), record{ID: 1, Value: cycle}); err != nil {
 		t.Fatal(err)
 	}
@@ -758,7 +758,7 @@ func TestGetFiltered_CyclicValues(t *testing.T) {
 		ID    int `vectordata:"key"`
 		Value recursiveFirst
 	}
-	recursiveCollection := createCollection[int, recursive](t, vectordata.CollectionOptions{})
+	recursiveCollection := createCollection[int, recursive](t, nil)
 	_ = sequenceError(t, recursiveCollection.GetFiltered(t.Context(), allRecords, 1, &vectordata.FilteredRecordRetrievalOptions{OrderBy: []vectordata.Sort{{Property: "Value"}}}))
 }
 
@@ -769,7 +769,7 @@ func TestGetFiltered_NilCollectionsAndArrayMembership(t *testing.T) {
 		Map   map[string]int
 		Array [2]string
 	}
-	c := createCollection[int, record](t, vectordata.CollectionOptions{})
+	c := createCollection[int, record](t, nil)
 	if err := c.Upsert(t.Context(), record{ID: 1, Array: [2]string{"a", "b"}}, record{ID: 2, Slice: []string{}, Map: map[string]int{}}); err != nil {
 		t.Fatal(err)
 	}
@@ -786,7 +786,7 @@ func TestGetFiltered_NilCollectionsAndArrayMembership(t *testing.T) {
 }
 
 func TestIterators_LazyAndEarlyTermination(t *testing.T) {
-	c, err := inmemory.NewCollection[string, document]("lazy", vectordata.CollectionOptions{})
+	c, err := inmemory.NewCollection[string, document]("lazy", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -846,7 +846,7 @@ func cancelAfterFirst[T any](t *testing.T, sequence func(context.Context) iter.S
 }
 
 func TestIterators_CancellationBetweenResults(t *testing.T) {
-	c := createCollection[string, document](t, vectordata.CollectionOptions{})
+	c := createCollection[string, document](t, nil)
 	if err := c.Upsert(t.Context(), document{ID: "one", Vector: []float32{1, 0, 0, 0}}, document{ID: "two", Vector: []float32{1, 0, 0, 0}}); err != nil {
 		t.Fatal(err)
 	}
@@ -856,9 +856,9 @@ func TestIterators_CancellationBetweenResults(t *testing.T) {
 	cancelAfterFirst(t, func(ctx context.Context) iter.Seq2[document, error] {
 		return c.GetFiltered(ctx, allRecords, 2, nil)
 	})
-	store := inmemory.New[string, document](inmemory.Config{})
+	store := inmemory.New(inmemory.Config{})
 	for _, name := range []string{"one", "two"} {
-		collection, err := store.Collection(name, vectordata.CollectionOptions{})
+		collection, err := vectordata.GetCollection[string, document](store.Store, name, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

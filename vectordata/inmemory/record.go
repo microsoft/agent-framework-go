@@ -119,7 +119,7 @@ func (s recordSchema) validateRecord(record reflect.Value) error {
 		if field.vector == nil || field.vector.Type != field.vector.EmbeddingType || !found || !value.IsValid() {
 			continue
 		}
-		vector, ok := nativeVector(value.Interface())
+		vector, ok := providerservices.AsVector[float32](value.Interface())
 		if !ok {
 			return fmt.Errorf("property %q is not a supported vector", field.name)
 		}
@@ -132,27 +132,35 @@ func (s recordSchema) validateRecord(record reflect.Value) error {
 	return nil
 }
 
-func recordKey[K comparable](field recordField, record reflect.Value) (K, error) {
-	var zero K
+func recordKey(field recordField, record reflect.Value) (any, error) {
 	value, found, err := field.read(record)
 	if err != nil {
-		return zero, err
+		return nil, err
 	}
 	if !found {
-		return zero, fmt.Errorf("key property %q is missing", field.name)
+		return nil, fmt.Errorf("key property %q is missing", field.name)
 	}
 	if err := validateKey(value); err != nil {
-		return zero, fmt.Errorf("key property %q: %w", field.name, err)
+		return nil, fmt.Errorf("key property %q: %w", field.name, err)
 	}
-	key := reflect.New(reflect.TypeFor[K]()).Elem()
-	if !value.Type().AssignableTo(key.Type()) {
-		// Assignability through the declared property type is not transitive.
-		declared := reflect.New(field.typ).Elem()
-		declared.Set(value)
-		value = declared
+	return normalizeKey(value, field.typ), nil
+}
+
+func normalizeKey(value reflect.Value, typ reflect.Type) any {
+	if value.Type() == typ || !value.Type().AssignableTo(typ) {
+		return value.Interface()
 	}
+	key := reflect.New(typ).Elem()
 	key.Set(value)
-	return key.Interface().(K), nil
+	return key.Interface()
+}
+
+func collectionRecord[R any](record any) (R, error) {
+	if typed, ok := record.(R); ok {
+		return typed, nil
+	}
+	var zero R
+	return zero, fmt.Errorf("stored record has type %T, want %v", record, reflect.TypeFor[R]())
 }
 
 func validateKey(value reflect.Value) error {

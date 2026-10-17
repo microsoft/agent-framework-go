@@ -15,12 +15,71 @@ import (
 	"github.com/microsoft/agent-framework-go/vectordata/providerservices"
 )
 
+func TestVectorHelpers(t *testing.T) {
+	testVectorHelpers(t, float32(1), float32(2), []float64{1, 2})
+	testVectorHelpers(t, float64(1), float64(2), []float32{1, 2})
+	testVectorHelpers(t, uint8(1), uint8(2), []int8{1, 2})
+	testVectorHelpers(t, int8(1), int8(2), []uint8{1, 2})
+	type namedFloat float32
+	testVectorHelpers(t, namedFloat(1), namedFloat(2), []float32{1, 2})
+	testVectorHelpers(t, "one", "two", []byte{1, 2})
+}
+
+func testVectorHelpers[T, U any](t *testing.T, first, second T, other []U) {
+	t.Helper()
+	type namedSlice []T
+	t.Run(reflect.TypeFor[T]().String(), func(t *testing.T) {
+		for _, test := range []struct {
+			name      string
+			value     any
+			supported bool
+			want      []T
+		}{
+			{"slice", []T{first, second}, true, []T{first, second}},
+			{"vector", embedding.VectorOf[T]{first, second}, true, []T{first, second}},
+			{"embedding", embedding.Of[T]{Vector: embedding.VectorOf[T]{first, second}}, true, []T{first, second}},
+			{"embedding pointer", &embedding.Of[T]{Vector: embedding.VectorOf[T]{first, second}}, true, []T{first, second}},
+			{"nil slice", []T(nil), true, nil},
+			{"nil vector", embedding.VectorOf[T](nil), true, nil},
+			{"empty embedding", embedding.Of[T]{}, true, nil},
+			{"nil embedding pointer", (*embedding.Of[T])(nil), true, nil},
+			{"pointer to empty embedding", &embedding.Of[T]{}, true, nil},
+			{"empty slice", []T{}, true, []T{}},
+			{"untyped nil", nil, false, nil},
+			{"other slice", other, false, nil},
+			{"other vector", embedding.VectorOf[U](other), false, nil},
+			{"other embedding", embedding.Of[U]{Vector: other}, false, nil},
+			{"other embedding pointer", &embedding.Of[U]{Vector: other}, false, nil},
+			{"array", [2]T{first, second}, false, nil},
+			{"named slice", namedSlice{first, second}, false, nil},
+			{"scalar", first, false, nil},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				if supported := providerservices.SupportsVector[T](reflect.TypeOf(test.value)); supported != test.supported {
+					t.Fatalf("type support = %v, want %v", supported, test.supported)
+				}
+				vector, ok := providerservices.AsVector[T](test.value)
+				if ok != test.supported || !reflect.DeepEqual(vector, test.want) {
+					t.Fatalf("unwrapped vector = (%#v, %v), want (%#v, %v)", vector, ok, test.want, test.supported)
+				}
+				if len(vector) != 0 {
+					vector[0] = second
+					again, _ := providerservices.AsVector[T](test.value)
+					if !reflect.DeepEqual(again[0], second) {
+						t.Fatal("unwrapping cloned the vector")
+					}
+				}
+			})
+		}
+	})
+}
+
 type batchEmbeddingRecord struct {
 	ID   string `vectordata:"key"`
 	Text string `vectordata:"vector,dimensions=2"`
 }
 
-func buildEmbeddingProperty[R any](t *testing.T, options vectordata.CollectionOptions) *providerservices.VectorPropertyModel {
+func buildEmbeddingProperty[R any](t *testing.T, options *vectordata.Definition) *providerservices.VectorPropertyModel {
 	t.Helper()
 	model, err := buildModel[string, R](options)
 	if err != nil {
@@ -36,7 +95,7 @@ func buildEmbeddingProperty[R any](t *testing.T, options vectordata.CollectionOp
 func TestGenerateEmbeddings_RecordsAndMetadata(t *testing.T) {
 	for _, test := range []struct {
 		name    string
-		build   func(vectordata.CollectionOptions) (*providerservices.CollectionModel, error)
+		build   func(*vectordata.Definition) (*providerservices.CollectionModel, error)
 		records []any
 	}{
 		{"struct", buildModel[string, batchEmbeddingRecord], []any{
@@ -69,13 +128,10 @@ func TestGenerateEmbeddings_RecordsAndMetadata(t *testing.T) {
 					}, nil
 				},
 			}
-			model, err := test.build(vectordata.CollectionOptions{
-				EmbeddingGenerator: embedding.Bind(generator),
-				Definition: &vectordata.Definition{Properties: []vectordata.Property{
-					&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
-					&vectordata.VectorProperty{Name: "Text", Type: reflect.TypeFor[string](), Dimensions: 2, StorageName: "text"},
-				}},
-			})
+			model, err := test.build(&vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator), Properties: []vectordata.Property{
+				&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
+				&vectordata.VectorProperty{Name: "Text", Type: reflect.TypeFor[string](), Dimensions: 2, StorageName: "text"},
+			}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -117,7 +173,7 @@ func TestGenerateEmbeddings_EmptyBatches(t *testing.T) {
 					return &embedding.Generated[[]float32]{}, nil
 				},
 			}
-			property := buildEmbeddingProperty[batchEmbeddingRecord](t, vectordata.CollectionOptions{EmbeddingGenerator: embedding.Bind(generator)})
+			property := buildEmbeddingProperty[batchEmbeddingRecord](t, &vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator)})
 			result, err := providerservices.GenerateEmbeddings(t.Context(), property, records)
 			if err != nil || result == nil || len(result.Embeddings) != 0 || calls != 1 {
 				t.Fatalf("empty generation = %+v, %v; calls=%d", result, err, calls)
@@ -141,7 +197,7 @@ func TestGenerateEmbeddings_TypedNilAndOutputPolicies(t *testing.T) {
 			return &embedding.GeneratedOf[float64]{Embeddings: []*embedding.Of[float64]{nil, output}}, nil
 		},
 	}
-	property := buildEmbeddingProperty[record](t, vectordata.CollectionOptions{EmbeddingGenerator: embedding.Bind(generator)})
+	property := buildEmbeddingProperty[record](t, &vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator)})
 	result, err := providerservices.GenerateEmbeddings(t.Context(), property, []record{{ID: "nil"}, {ID: "present", Text: text}})
 	if err != nil || result == nil || len(result.Embeddings) != 2 ||
 		result.Embeddings[0] != (*embedding.Of[float64])(nil) || result.Embeddings[1] != output {
@@ -162,7 +218,7 @@ func TestGenerateEmbeddings_InvalidCounts(t *testing.T) {
 					return output, nil
 				},
 			}
-			property := buildEmbeddingProperty[batchEmbeddingRecord](t, vectordata.CollectionOptions{EmbeddingGenerator: embedding.Bind(generator)})
+			property := buildEmbeddingProperty[batchEmbeddingRecord](t, &vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator)})
 			result, err := providerservices.GenerateEmbeddings(t.Context(), property, []batchEmbeddingRecord{{Text: "first"}, {Text: "second"}})
 			if err == nil || result != nil {
 				t.Fatalf("invalid count = %+v, %v", result, err)
@@ -174,7 +230,7 @@ func TestGenerateEmbeddings_InvalidCounts(t *testing.T) {
 func TestGenerateEmbeddings_InvalidRecords(t *testing.T) {
 	for _, test := range []struct {
 		name    string
-		build   func(vectordata.CollectionOptions) (*providerservices.CollectionModel, error)
+		build   func(*vectordata.Definition) (*providerservices.CollectionModel, error)
 		records []any
 	}{
 		{"wrong record type", buildModel[string, batchEmbeddingRecord], []any{batchEmbeddingRecord{Text: "first"}, struct{}{}}},
@@ -191,13 +247,10 @@ func TestGenerateEmbeddings_InvalidRecords(t *testing.T) {
 					return nil, nil
 				},
 			}
-			model, err := test.build(vectordata.CollectionOptions{
-				EmbeddingGenerator: embedding.Bind(generator),
-				Definition: &vectordata.Definition{Properties: []vectordata.Property{
-					&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
-					&vectordata.VectorProperty{Name: "Text", Type: reflect.TypeFor[string](), Dimensions: 2},
-				}},
-			})
+			model, err := test.build(&vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator), Properties: []vectordata.Property{
+				&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
+				&vectordata.VectorProperty{Name: "Text", Type: reflect.TypeFor[string](), Dimensions: 2},
+			}})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -221,12 +274,12 @@ func TestGenerateEmbeddings_InvalidConfiguration(t *testing.T) {
 			}
 		})
 	}
-	property := buildEmbeddingProperty[batchEmbeddingRecord](t, vectordata.CollectionOptions{
-		Definition: &vectordata.Definition{Properties: []vectordata.Property{
+	property := buildEmbeddingProperty[batchEmbeddingRecord](t,
+		&vectordata.Definition{Properties: []vectordata.Property{
 			&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
 			&vectordata.VectorProperty{Name: "Text", Type: reflect.TypeFor[string](), Dimensions: 2, EmbeddingType: reflect.TypeFor[[]float32]()},
 		}},
-	})
+	)
 	if result, err := providerservices.GenerateEmbeddings(t.Context(), property, records); err == nil || result != nil {
 		t.Fatalf("missing generator = %+v, %v", result, err)
 	}
@@ -240,7 +293,7 @@ func TestGenerateEmbeddings_CancellationAndProviderErrors(t *testing.T) {
 				return nil, nil
 			},
 		}
-		property := buildEmbeddingProperty[batchEmbeddingRecord](t, vectordata.CollectionOptions{EmbeddingGenerator: embedding.Bind(generator)})
+		property := buildEmbeddingProperty[batchEmbeddingRecord](t, &vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator)})
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		if result, err := providerservices.GenerateEmbeddings(ctx, property, []batchEmbeddingRecord{{Text: "value"}}); !errors.Is(err, context.Canceled) || result != nil {
@@ -263,7 +316,7 @@ func TestGenerateEmbeddings_CancellationAndProviderErrors(t *testing.T) {
 					return nil, want
 				},
 			}
-			property := buildEmbeddingProperty[batchEmbeddingRecord](t, vectordata.CollectionOptions{EmbeddingGenerator: embedding.Bind(generator)})
+			property := buildEmbeddingProperty[batchEmbeddingRecord](t, &vectordata.Definition{EmbeddingGenerator: embedding.Bind(generator)})
 			result, err := providerservices.GenerateEmbeddings(ctx, property, []batchEmbeddingRecord{{Text: "first"}, {Text: "second"}})
 			if !errors.Is(err, want) || errors.Is(err, context.Canceled) {
 				t.Fatalf("provider error was replaced: %v", err)

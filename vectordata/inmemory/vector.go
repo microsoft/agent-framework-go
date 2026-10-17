@@ -5,39 +5,9 @@ package inmemory
 import (
 	"fmt"
 	"math"
-	"reflect"
 
-	"github.com/microsoft/agent-framework-go/embedding"
 	"github.com/microsoft/agent-framework-go/vectordata"
 )
-
-func vectorTypeSupported(typ reflect.Type) bool {
-	switch typ {
-	case reflect.TypeFor[[]float32](), reflect.TypeFor[embedding.VectorOf[float32]](),
-		reflect.TypeFor[embedding.Of[float32]](), reflect.TypeFor[*embedding.Of[float32]]():
-		return true
-	default:
-		return false
-	}
-}
-
-func nativeVector(value any) ([]float32, bool) {
-	switch v := value.(type) {
-	case []float32:
-		return v, true
-	case embedding.VectorOf[float32]:
-		return v, true
-	case embedding.Of[float32]:
-		return v.Vector, true
-	case *embedding.Of[float32]:
-		if v == nil {
-			return nil, true
-		}
-		return v.Vector, true
-	default:
-		return nil, false
-	}
-}
 
 func validateVector(vector []float32, dimensions int) error {
 	if len(vector) != dimensions {

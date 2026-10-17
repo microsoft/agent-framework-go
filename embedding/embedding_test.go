@@ -317,7 +317,7 @@ func TestEmbedding_JsonDeserialization_KnownPayload(t *testing.T) {
 	data := []byte(`{
 		"Type":"float32", "vector":[1,2,3],
 		"createdAt":"2024-01-01T00:00:00Z",
-		"modelId":"text-embedding-ada-002",
+		"modelId":"text-embedding-3-large",
 		"additionalProperties":{"key":"val"}
 	}`)
 	var e embedding.Of[float32]
@@ -325,7 +325,7 @@ func TestEmbedding_JsonDeserialization_KnownPayload(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !slices.Equal(e.Vector, []float32{1, 2, 3}) ||
-		e.ModelID != "text-embedding-ada-002" ||
+		e.ModelID != "text-embedding-3-large" ||
 		!e.CreatedAt.Equal(time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)) ||
 		e.AdditionalProperties["key"] != "val" {
 		t.Fatalf("embedding = %+v", e)
@@ -334,7 +334,7 @@ func TestEmbedding_JsonDeserialization_KnownPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"Type":"float32","CreatedAt":"2024-01-01T00:00:00Z","ModelID":"text-embedding-ada-002","AdditionalProperties":{"key":"val"},"Vector":[1,2,3]}`
+	want := `{"Type":"float32","CreatedAt":"2024-01-01T00:00:00Z","ModelID":"text-embedding-3-large","AdditionalProperties":{"key":"val"},"Vector":[1,2,3]}`
 	if string(data) != want {
 		t.Fatalf("Marshal = %s, want %s", data, want)
 	}

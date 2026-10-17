@@ -233,13 +233,13 @@ func TestCompileFilter_Comparisons(t *testing.T) {
 }
 
 func TestCompileFilter_ModelAccessors(t *testing.T) {
-	options := vectordata.CollectionOptions{Definition: &vectordata.Definition{Properties: []vectordata.Property{
+	options := &vectordata.Definition{Properties: []vectordata.Property{
 		&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
 		&vectordata.DataProperty{Name: "Text", Type: reflect.TypeFor[string](), StorageName: "text"},
-	}}}
+	}}
 	for _, test := range []struct {
 		name   string
-		build  func(vectordata.CollectionOptions) (*providerservices.CollectionModel, error)
+		build  func(*vectordata.Definition) (*providerservices.CollectionModel, error)
 		record any
 	}{
 		{"struct", buildModel[string, taggedRecord], taggedRecord{Text: "value"}},
