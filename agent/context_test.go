@@ -307,7 +307,7 @@ func TestContextProviderMiddleware_Run_SuppressesInvokedErrorAfterConsumerStop(t
 	// "range function continued iteration after loop body returned false".
 	for _, err := range seq {
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("middleware returned an error: %v", err)
 		}
 		break
 	}

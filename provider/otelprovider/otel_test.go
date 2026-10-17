@@ -299,7 +299,7 @@ func TestOtel_Run_MetricErrorAttributes(t *testing.T) {
 
 	for _, err := range mw.Run(next, t.Context(), nil) {
 		if !errors.Is(err, testErr) {
-			t.Fatalf("stream error = %v, want %v", err, testErr)
+			t.Fatalf("middleware error = %v, want %v", err, testErr)
 		}
 	}
 
@@ -612,7 +612,7 @@ func TestOtel_Run_RecordsError(t *testing.T) {
 	seq := mw.Run(next, t.Context(), messages)
 	for _, err := range seq {
 		if !errors.Is(err, testErr) {
-			t.Fatalf("stream error = %v, want %v", err, testErr)
+			t.Fatalf("middleware error = %v, want %v", err, testErr)
 		}
 	}
 
@@ -1076,7 +1076,6 @@ func TestOtel_Run_RecordsMultipleErrors(t *testing.T) {
 
 	err1 := errors.New("first error")
 	err2 := errors.New("second error")
-	wantErrors := []error{err1, err2}
 
 	callCount := 0
 	next := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -1089,9 +1088,13 @@ func TestOtel_Run_RecordsMultipleErrors(t *testing.T) {
 	}
 
 	seq := mw.Run(next, t.Context(), []*message.Message{})
+	wantErrors := []error{err1, err2}
 	for _, err := range seq {
-		if callCount >= len(wantErrors) || !errors.Is(err, wantErrors[callCount]) {
-			t.Fatalf("stream error %d = %v, want %v", callCount, err, wantErrors)
+		if callCount >= len(wantErrors) {
+			t.Fatalf("received more than %d errors", len(wantErrors))
+		}
+		if !errors.Is(err, wantErrors[callCount]) {
+			t.Errorf("error %d = %v, want %v", callCount, err, wantErrors[callCount])
 		}
 		callCount++
 	}
