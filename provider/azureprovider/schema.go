@@ -149,7 +149,7 @@ func (c *collection) indexDefinition() (*indexDefinition, error) {
 		switch p := property.(type) {
 		case *providerservices.KeyPropertyModel:
 			field.Name, field.Type = p.StorageName, "Edm.String"
-			field.Key, field.Searchable, field.Filterable = true, true, true
+			field.Key, field.Searchable, field.Filterable, field.Sortable = true, true, true, true
 		case *providerservices.DataPropertyModel:
 			field.Name = p.StorageName
 			var err error

@@ -81,10 +81,10 @@ func TestCollection_FilterTranslation(t *testing.T) {
 			}}
 			collection := openCollection[string, map[string]any](t, store, definition)
 			collect(t, collection.GetFiltered(t.Context(), test.filter, 5, &vectordata.FilteredRecordRetrievalOptions{
-				Skip: 2, OrderBy: []vectordata.Sort{{Property: "Rank", Descending: true}, {Property: "Text"}},
+				Skip: 2, OrderBy: []vectordata.Sort{{Property: "Rank", Descending: true}, {Property: "Text"}, {Property: "ID"}},
 			}))
 			if body["filter"] != test.want || body["top"] != float64(5) || body["skip"] != float64(2) ||
-				body["orderby"] != "rank desc,text" {
+				body["orderby"] != "rank desc,text,id" {
 				t.Fatalf("filtered search = %v; want filter %s", body, test.want)
 			}
 		})

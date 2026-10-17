@@ -233,7 +233,7 @@ func TestAISearch_Lifecycle(t *testing.T) {
 	keyField := fields[0].(map[string]any)
 	vectorField := fields[4].(map[string]any)
 	if len(fields) != 5 || keyField["name"] != "id" || keyField["key"] != true ||
-		keyField["type"] != "Edm.String" || keyField["filterable"] != true ||
+		keyField["type"] != "Edm.String" || keyField["filterable"] != true || keyField["sortable"] != true ||
 		vectorField["name"] != "vector" || vectorField["dimensions"] != float64(3) ||
 		vectorField["vectorSearchProfile"] != "vectorProfile" {
 		t.Fatalf("index fields = %v", fields)

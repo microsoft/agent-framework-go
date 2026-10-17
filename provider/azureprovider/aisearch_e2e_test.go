@@ -162,6 +162,23 @@ func TestE2E_AISearchNativeCRUD(t *testing.T) {
 	if len(ordered) != 2 || ordered[0].Rank != 2 {
 		t.Fatalf("filtered ordering = %v", ordered)
 	}
+	wantIDs := []string{records[0].ID.String(), records[1].ID.String()}
+	slices.Sort(wantIDs)
+	for _, descending := range []bool{false, true} {
+		if descending {
+			slices.Reverse(wantIDs)
+		}
+		orderedByKey := collect(t, collection.GetFiltered(t.Context(), filter, 2,
+			&vectordata.FilteredRecordRetrievalOptions{OrderBy: []vectordata.Sort{{Property: "ID", Descending: descending}}}))
+		if len(orderedByKey) != len(wantIDs) {
+			t.Fatalf("key ordering returned %d records, want %d", len(orderedByKey), len(wantIDs))
+		}
+		for i, record := range orderedByKey {
+			if record.ID.String() != wantIDs[i] {
+				t.Fatalf("key ordering descending=%v: record %d = %s, want %s", descending, i, record.ID, wantIDs[i])
+			}
+		}
+	}
 	hybrid := collection.(vectordata.KeywordHybridSearcher[*liveDocument])
 	hybridResults := collect(t, hybrid.HybridSearch(t.Context(), []float32{1, 0, 0}, []string{"pirate", "ship"}, 2,
 		&vectordata.HybridSearchOptions{Filter: &filter, IncludeVectors: true}))
