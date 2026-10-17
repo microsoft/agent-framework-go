@@ -800,7 +800,10 @@ func TestNew_IncludeOutputsInResponse(t *testing.T) {
 	}
 
 	var updates int
-	for range ag.RunText(t.Context(), "ping", agent.Stream(true)) {
+	for _, err := range ag.RunText(t.Context(), "ping", agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
 		updates++
 	}
 	// Streaming keeps both the hosted update and the translated workflow output visible.

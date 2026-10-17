@@ -694,7 +694,9 @@ func TestChatAgentConfigAllowsConcurrentToolInvocation(t *testing.T) {
 		case <-started:
 		case <-time.After(time.Second):
 			close(release)
-			<-done
+			if err := <-done; err != nil {
+				t.Fatalf("tool calls did not start concurrently: %v", err)
+			}
 			t.Fatal("tool calls did not start concurrently")
 		}
 	}
