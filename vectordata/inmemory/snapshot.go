@@ -97,7 +97,7 @@ func Import[K comparable, R any](ctx context.Context, s *Store, reader io.Reader
 		if err := collection.schema.validateRecord(value); err != nil {
 			return nil, failure(snapshot.Name, "Import", err)
 		}
-		key, err := recordKey(collection.schema.key, value, collection.keyType)
+		key, err := recordKey(collection.schema.key, value)
 		if err != nil {
 			return nil, failure(snapshot.Name, "Import", err)
 		}

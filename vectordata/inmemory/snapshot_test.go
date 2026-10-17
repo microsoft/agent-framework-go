@@ -181,6 +181,54 @@ func TestSnapshot_DynamicPropertyTypes(t *testing.T) {
 	}
 }
 
+func TestSnapshot_AssignableSharedKeys(t *testing.T) {
+	type key [2]int
+	for _, name := range []string{"typed import", "dynamic import"} {
+		t.Run(name, func(t *testing.T) {
+			store := inmemory.New(inmemory.Config{})
+			definition := &vectordata.Definition{Properties: []vectordata.Property{
+				&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[[2]int]()},
+			}}
+			typed, err := vectordata.GetCollection[key, map[string]any](store.Store, "records", definition)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dynamic, err := store.DynamicCollection("records", definition)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := typed.EnsureExists(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			snapshot := strings.NewReader(`{"name":"records","records":[{"record":{"ID":[1,2],"Text":"imported"}}]}`)
+			if name == "typed import" {
+				if err := dynamic.Upsert(t.Context(), map[string]any{"ID": [2]int{1, 2}, "Text": "old"}); err != nil {
+					t.Fatal(err)
+				}
+				_, err = inmemory.Import[key, map[string]any](t.Context(), store, snapshot, definition)
+			} else {
+				if err := typed.Upsert(t.Context(), map[string]any{"ID": key{1, 2}, "Text": "old"}); err != nil {
+					t.Fatal(err)
+				}
+				_, err = inmemory.Import[any, map[string]any](t.Context(), store, snapshot, definition)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]any{"ID": [2]int{1, 2}, "Text": "imported"}
+			if got, found, err := typed.Get(t.Context(), key{1, 2}, nil); err != nil || !found || !reflect.DeepEqual(got, want) {
+				t.Fatalf("typed lookup after import = (%v, %v, %v)", got, found, err)
+			}
+			if got, found, err := dynamic.Get(t.Context(), [2]int{1, 2}, nil); err != nil || !found || !reflect.DeepEqual(got, want) {
+				t.Fatalf("dynamic lookup after import = (%v, %v, %v)", got, found, err)
+			}
+			if records := collect(t, dynamic.GetFiltered(t.Context(), allRecords, 10, nil)); len(records) != 1 {
+				t.Fatalf("import duplicated a logical key: %v", records)
+			}
+		})
+	}
+}
+
 func TestSnapshot_InvalidInputsAreAtomic(t *testing.T) {
 	store := inmemory.New(inmemory.Config{})
 	c, err := vectordata.GetCollection[string, document](store.Store, "records", nil)

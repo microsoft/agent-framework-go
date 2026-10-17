@@ -23,7 +23,6 @@ type Collection[K comparable, R any] struct {
 	name       string
 	model      *providerservices.CollectionModel
 	schema     recordSchema
-	keyType    reflect.Type
 	recordType reflect.Type
 }
 
@@ -63,7 +62,7 @@ func newCollection[K comparable, R any](s *store, name string, keyType, recordTy
 			return nil, failure(name, "Collection", fmt.Errorf("property %q requires an embedding generator; in-memory storage cannot generate embeddings itself", field.name))
 		}
 	}
-	return &Collection[K, R]{store: s, name: name, model: model, schema: schema, keyType: keyType, recordType: recordType}, nil
+	return &Collection[K, R]{store: s, name: name, model: model, schema: schema, recordType: recordType}, nil
 }
 
 // Name returns the collection name.
@@ -114,11 +113,12 @@ func (c *Collection[K, R]) Get(ctx context.Context, key K, options *vectordata.R
 	if err := validateKey(reflect.ValueOf(key)); err != nil {
 		return zero, false, failure(c.name, "Get", err)
 	}
+	lookup := normalizeKey(reflect.ValueOf(key), c.schema.key.typ)
 	c.store.mu.RLock()
 	data, exists := c.store.collections[c.name]
 	var record *storedRecord
 	if exists && data.recordType == c.recordType {
-		record = data.records[key]
+		record = data.records[lookup]
 	}
 	c.store.mu.RUnlock()
 	if !exists {
@@ -148,6 +148,7 @@ func (c *Collection[K, R]) Delete(ctx context.Context, key K) error {
 	if err := validateKey(reflect.ValueOf(key)); err != nil {
 		return failure(c.name, "Delete", err)
 	}
+	lookup := normalizeKey(reflect.ValueOf(key), c.schema.key.typ)
 	c.store.mu.Lock()
 	defer c.store.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -160,7 +161,7 @@ func (c *Collection[K, R]) Delete(ctx context.Context, key K) error {
 	if data.recordType != c.recordType {
 		return failure(c.name, "Delete", incompatibleCollection(c.name, data.recordType, c.recordType))
 	}
-	delete(data.records, key)
+	delete(data.records, lookup)
 	return nil
 }
 
@@ -258,7 +259,7 @@ func (c *Collection[K, R]) Upsert(ctx context.Context, records ...R) error {
 				}
 			}
 		}
-		key, err := recordKey(c.schema.key, value, c.keyType)
+		key, err := recordKey(c.schema.key, value)
 		if err != nil {
 			return failure(c.name, "Upsert", fmt.Errorf("record %d: %w", i, err))
 		}

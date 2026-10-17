@@ -327,11 +327,11 @@ func TestStore_AssignableDynamicKeys(t *testing.T) {
 	type value [2]int
 	store := inmemory.New(inmemory.Config{})
 	options := dynamicDefinition(reflect.TypeFor[[2]int]())
-	collection, err := vectordata.GetCollection[key, map[string]any](store.Store, "typed", options)
+	collection, err := vectordata.GetCollection[key, map[string]any](store.Store, "records", options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	dynamic, err := store.DynamicCollection("dynamic", options)
+	dynamic, err := store.DynamicCollection("records", options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -340,18 +340,47 @@ func TestStore_AssignableDynamicKeys(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	input := map[string]any{"ID": value{1, 2}}
+	input := map[string]any{"ID": value{1, 2}, "Text": "typed"}
 	if err := collection.Upsert(t.Context(), input); err != nil {
-		t.Fatal(err)
-	}
-	if err := dynamic.Upsert(t.Context(), input); err != nil {
 		t.Fatal(err)
 	}
 	if got, found, err := collection.Get(t.Context(), key{1, 2}, nil); err != nil || !found || got["ID"] != (value{1, 2}) {
 		t.Fatalf("assignable typed key Get = (%v, %v, %v)", got, found, err)
 	}
-	if got, found, err := dynamic.Get(t.Context(), value{1, 2}, nil); err != nil || !found || got["ID"] != (value{1, 2}) {
-		t.Fatalf("dynamic key identity = (%v, %v, %v)", got, found, err)
+	for _, lookup := range []any{[2]int{1, 2}, key{1, 2}, value{1, 2}} {
+		if got, found, err := dynamic.Get(t.Context(), lookup, nil); err != nil || !found || !reflect.DeepEqual(got, input) {
+			t.Fatalf("shared dynamic Get(%T) = (%v, %v, %v)", lookup, got, found, err)
+		}
+	}
+	replacement := map[string]any{"ID": [2]int{1, 2}, "Text": "dynamic"}
+	if err := dynamic.Upsert(t.Context(), replacement); err != nil {
+		t.Fatal(err)
+	}
+	if got, found, err := collection.Get(t.Context(), key{1, 2}, nil); err != nil || !found || !reflect.DeepEqual(got, replacement) {
+		t.Fatalf("shared typed Get = (%v, %v, %v)", got, found, err)
+	}
+	if records := collect(t, dynamic.GetFiltered(t.Context(), allRecords, 10, nil)); len(records) != 1 {
+		t.Fatalf("shared handles duplicated a logical key: %v", records)
+	}
+	if input["ID"] != (value{1, 2}) || replacement["ID"] != ([2]int{1, 2}) {
+		t.Fatal("key normalization changed the input records")
+	}
+	for _, lookup := range []any{[2]int{1, 2}, key{1, 2}, value{1, 2}} {
+		if err := dynamic.Delete(t.Context(), lookup); err != nil {
+			t.Fatal(err)
+		}
+		if _, found, err := collection.Get(t.Context(), key{1, 2}, nil); err != nil || found {
+			t.Fatalf("typed Get after dynamic Delete(%T) = (%v, %v)", lookup, found, err)
+		}
+		if err := collection.Upsert(t.Context(), input); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := collection.Delete(t.Context(), key{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := dynamic.Get(t.Context(), [2]int{1, 2}, nil); err != nil || found {
+		t.Fatalf("dynamic Get after typed Delete = (%v, %v)", found, err)
 	}
 }
 

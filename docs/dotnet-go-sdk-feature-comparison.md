@@ -215,7 +215,8 @@ The [in-memory connector](../vectordata/inmemory/) ports
 (tag `mevd/InMemory/v1.0.1`). Additional differences:
 
 - Plain structs follow Go value semantics; use pointers or maps to observe
-  generated UUIDs on input. Keys follow Go equality and reject nil and NaN.
+  generated UUIDs on input. Keys use their declared schema type for Go equality
+  and reject nil and NaN.
 - Strings sort lexicographically. Custom comparisons use `Compare(T) int` and
   `Equal(T) bool`; equality otherwise uses `reflect.DeepEqual`.
 - Batch dictionary updates are atomic; mutations to input records are not rolled

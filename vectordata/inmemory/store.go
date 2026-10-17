@@ -5,9 +5,12 @@
 // unless explicitly exported.
 //
 // Collections support structs, pointers to structs, and map[string]any records.
-// Keys must be non-nil comparable values without NaN. Records are retained and
-// returned without cloning: pointer and map records, and reference-valued fields
-// in struct records, share their underlying data with the caller. Plain structs
+// Keys must be non-nil comparable values without NaN. Assignable keys are
+// normalized to the schema's declared key type for storage and lookup, without
+// changing records. Interface key properties retain concrete key types.
+// Records are retained and returned without cloning: pointer and map records,
+// and reference-valued fields in struct records, share their underlying data
+// with the caller. Plain structs
 // are copied by value. Collection dictionaries support concurrent operations.
 // Shared record data is not synchronized: callers must prevent concurrent
 // mutation, including upserts that generate keys on the same record. Custom JSON

@@ -132,7 +132,7 @@ func (s recordSchema) validateRecord(record reflect.Value) error {
 	return nil
 }
 
-func recordKey(field recordField, record reflect.Value, keyType reflect.Type) (any, error) {
+func recordKey(field recordField, record reflect.Value) (any, error) {
 	value, found, err := field.read(record)
 	if err != nil {
 		return nil, err
@@ -143,15 +143,16 @@ func recordKey(field recordField, record reflect.Value, keyType reflect.Type) (a
 	if err := validateKey(value); err != nil {
 		return nil, fmt.Errorf("key property %q: %w", field.name, err)
 	}
-	key := reflect.New(keyType).Elem()
-	if !value.Type().AssignableTo(key.Type()) {
-		// Assignability through the declared property type is not transitive.
-		declared := reflect.New(field.typ).Elem()
-		declared.Set(value)
-		value = declared
+	return normalizeKey(value, field.typ), nil
+}
+
+func normalizeKey(value reflect.Value, typ reflect.Type) any {
+	if value.Type() == typ || !value.Type().AssignableTo(typ) {
+		return value.Interface()
 	}
+	key := reflect.New(typ).Elem()
 	key.Set(value)
-	return key.Interface(), nil
+	return key.Interface()
 }
 
 func collectionRecord[R any](record any) (R, error) {
