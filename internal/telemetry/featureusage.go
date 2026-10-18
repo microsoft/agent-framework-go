@@ -19,6 +19,7 @@ import (
 // registered there are tracked; indexes must not be repurposed for Go-only features.
 const (
 	FeatureAgent                   = 0
+	FeatureHarnessAgent            = 1
 	FeatureWorkflow                = 2
 	FeatureToolApproval            = 3
 	FeatureFileMemoryProvider      = 5

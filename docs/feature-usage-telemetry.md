@@ -4,6 +4,9 @@ The SDK accumulates a process-wide, concurrency-safe 128-bit feature mask. Each
 bit records whether a framework-owned capability has participated in an operation
 at least once. Bits are idempotent, never reset during production, and do not
 represent invocation counts. Construction alone does not mark a feature.
+Harness construction and configuration do not mark usage either. A configured
+agent marks the harness bit when its run is consumed, including when agent tracing
+is disabled.
 
 The mask contains no identifiers, prompts, arguments, payloads, or user data.
 Tracking is independent of the provider; a feature used with a third-party
@@ -85,6 +88,7 @@ These switches do not configure OpenTelemetry or change service telemetry.
 | Index | Feature | Activation |
 | --- | --- | --- |
 | 0 | `core.agent` | Agent invocation |
+| 1 | `core.harness_agent` | Consumption of a harness-configured agent run |
 | 2 | `core.workflow` | Successful workflow build |
 | 3 | `core.tool_approval` | Tool-approval middleware participation |
 | 5 | `core.file_memory_provider` | File-memory context provider participation |

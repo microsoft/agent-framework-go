@@ -34,6 +34,7 @@ import (
 	copilot "github.com/github/copilot-sdk/go"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/compaction"
+	"github.com/microsoft/agent-framework-go/agent/harness"
 	"github.com/microsoft/agent-framework-go/agent/harness/agentmode"
 	"github.com/microsoft/agent-framework-go/agent/harness/filememory"
 	"github.com/microsoft/agent-framework-go/agent/harness/loop"
@@ -72,6 +73,10 @@ var featureActivationCases = []struct {
 }{
 	{"agent", []int{0}, nil},
 	{"agent-session", []int{0, 13}, nil},
+	{"harness", []int{0, 1}, nil},
+	{"harness-stream", []int{0, 1}, nil},
+	{"harness-defaults", []int{0, 1, 3, 5, 8, 10, 11, 13, 15}, nil},
+	{"harness-mask-disabled", nil, []string{featureMaskDisabledEnvVar + "=true"}},
 	{"history-provide", []int{13}, nil},
 	{"history-store", []int{13}, nil},
 	{"text-search", []int{6}, nil},
@@ -405,6 +410,59 @@ func runFeatureActivation(t *testing.T, name string) {
 					return err
 				}
 				t.Fatalf("empty stream yielded %#v", update)
+			}
+			if calls != 1 {
+				t.Fatalf("provider calls = %d, want 1", calls)
+			}
+			return nil
+		}
+	case "harness", "harness-stream", "harness-defaults", "harness-mask-disabled":
+		settings := harness.Config{WorkingDirectory: t.TempDir()}
+		baseConfig := agent.Config{}
+		if name != "harness-defaults" {
+			settings.DisableTodo = true
+			settings.DisableAgentMode = true
+			settings.DisableFileMemory = true
+			settings.DisableSkills = true
+			settings.DisableWebSearch = true
+			settings.DisableToolApproval = true
+			settings.DisableOpenTelemetry = true
+			baseConfig.HistoryProvider = agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "history"})
+		}
+		h, err := harness.New(settings)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := h.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+		calls := 0
+		a := agent.New(agent.ProviderConfig{
+			Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				calls++
+				var want string
+				switch name {
+				case "harness-defaults":
+					want = featureComment(0, 1, 3, 5, 8, 10, 11, 13, 15)
+				case "harness", "harness-stream":
+					want = featureComment(0, 1)
+				}
+				if got := telemetry.ApplyToUserAgent("", true); got != want {
+					t.Fatalf("feature comment before provider call = %q, want %q", got, want)
+				}
+				return activationRun(ctx, messages, options...)
+			},
+		}, h.Configure(baseConfig))
+		activate = func() error {
+			stream := a.RunText(ctx, "hello", agent.Stream(name == "harness-stream"))
+			assertNoFeatureUsage(t)
+			if calls != 0 {
+				t.Fatal("unconsumed harness run invoked the provider")
+			}
+			if _, err := stream.Collect(); err != nil {
+				return err
 			}
 			if calls != 1 {
 				t.Fatalf("provider calls = %d, want 1", calls)
