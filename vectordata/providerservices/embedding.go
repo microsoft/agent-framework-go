@@ -5,9 +5,46 @@ package providerservices
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/microsoft/agent-framework-go/embedding"
 )
+
+// SupportsVector reports whether typ is []T, [embedding.VectorOf] with T
+// elements, or [embedding.Of] with T elements (a value or pointer).
+// A nil type is unsupported. Providers opt in by choosing T.
+func SupportsVector[T any](typ reflect.Type) bool {
+	switch typ {
+	case reflect.TypeFor[[]T](), reflect.TypeFor[embedding.VectorOf[T]](),
+		reflect.TypeFor[embedding.Of[T]](), reflect.TypeFor[*embedding.Of[T]]():
+		return true
+	default:
+		return false
+	}
+}
+
+// AsVector unwraps the representations supported by [SupportsVector] for T.
+// The returned slice is borrowed, not cloned or normalized. Supported typed nils
+// return (nil, true); untyped nil and unsupported values return (nil, false).
+// Element types must match T exactly; no conversion is performed.
+// Providers remain responsible for nil handling and dimension validation.
+func AsVector[T any](value any) ([]T, bool) {
+	switch vector := value.(type) {
+	case []T:
+		return vector, true
+	case embedding.VectorOf[T]:
+		return vector, true
+	case embedding.Of[T]:
+		return vector.Vector, true
+	case *embedding.Of[T]:
+		if vector == nil {
+			return nil, true
+		}
+		return vector.Vector, true
+	default:
+		return nil, false
+	}
+}
 
 // GenerateEmbeddings reads a vector property's inputs from records and invokes
 // its configured generator once, with nil generation options. The property must

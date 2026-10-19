@@ -88,9 +88,9 @@ func TestEmbeddingGenerationOptions_JsonSerialization_Roundtrips(t *testing.T) {
 
 func TestEmbeddingGenerationOptions_JsonDeserialization_KnownPayload(t *testing.T) {
 	var options embedding.Options
-	err := json.Unmarshal([]byte(`{"dimensions":1536,"modelId":"text-embedding-ada-002","additionalProperties":{"key":"val"}}`), &options)
-	if err != nil || options.Dimensions == nil || *options.Dimensions != 1536 ||
-		options.ModelID == nil || *options.ModelID != "text-embedding-ada-002" ||
+	err := json.Unmarshal([]byte(`{"dimensions":3072,"modelId":"text-embedding-3-large","additionalProperties":{"key":"val"}}`), &options)
+	if err != nil || options.Dimensions == nil || *options.Dimensions != 3072 ||
+		options.ModelID == nil || *options.ModelID != "text-embedding-3-large" ||
 		options.AdditionalProperties["key"] != "val" {
 		t.Fatalf("options = %+v, %v", options, err)
 	}

@@ -193,7 +193,9 @@ The [vector data package](../vectordata/) is based on
 [Microsoft.Extensions.VectorData.Abstractions 10.10.0](https://github.com/dotnet/extensions/tree/294665a5ec4eceaa245388cfb70883ea01881081/src/Libraries/Microsoft.Extensions.VectorData.Abstractions).
 Go differences:
 
-- Stores fix key/record types through generics. `Get` returns
+- Generic collection methods require Go 1.27; `GetCollection` and
+  `DynamicCollection` also work on Go 1.26. Provider dispatch uses runtime types.
+- `Get` returns
   `(record, found, error)`; `iter.Seq2` replaces async enumerables, and variadic
   `Upsert` replaces separate single/batch methods.
 - Struct tags replace attributes; dynamic records use `map[string]any`.
@@ -213,15 +215,35 @@ The [in-memory connector](../vectordata/inmemory/) ports
 (tag `mevd/InMemory/v1.0.1`). Additional differences:
 
 - Plain structs follow Go value semantics; use pointers or maps to observe
-  generated UUIDs on input. Keys follow Go equality and reject nil and NaN.
+  generated UUIDs on input. Keys use their declared schema type for Go equality
+  and reject nil and NaN.
 - Strings sort lexicographically. Custom comparisons use `Compare(T) int` and
   `Equal(T) bool`; equality otherwise uses `reflect.DeepEqual`.
 - Batch dictionary updates are atomic; mutations to input records are not rolled
   back on failure.
-- Snapshots use Go JSON, not the .NET format. NaN scores are omitted; other scores
+- Snapshots use Go JSON and the generic `inmemory.Import` function. NaN scores are omitted; other scores
   may differ through floating-point rounding.
 
+The [Azure AI Search connector](../provider/azureprovider/) ports the
+[Toolkit connector at the same revision](https://github.com/CommunityToolkit/AI/tree/7a48d308df63d85427a772f031616889905a0fdf/MEVD/src/AzureAISearch).
+Additional Go differences:
+
+- Uses the `azcore` REST pipeline instead of a native Search client.
+- VectorData storage names replace serializer naming configuration; only schema
+  properties are mapped. Go `int` maps to `Edm.Int64`.
+- Hybrid `IncludeVectors` is honored, and all partial batch failures are returned.
+- Nil collections serialize as empty arrays; membership filters retain empty strings.
+
 These packages remain outside the catalog's extraction scope.
+
+The [chat-history memory provider](../agent/memory/) ports
+[.NET 1.25.0](https://github.com/microsoft/agent-framework/blob/95511ff025d81cc546c44e653d4be65de5bd7f35/dotnet/src/Microsoft.Agents.AI/Memory/ChatHistoryMemoryProvider.cs).
+Go differences:
+
+- Uses the context-provider interface without a separate message-only overload.
+- Scope IDs are optional pointers; a nil `State.SearchScope` uses `StorageScope`.
+- Stored timestamps use RFC3339Nano; absent message IDs/authors use empty strings.
+- `Close` disposes the collection only when it implements `io.Closer`.
 
 The separate [dotnetsymbols command](../_catalog/cmd/dotnetsymbols/README.md) extracts an inventory from compiled .NET assemblies using `go-winmd`. By default, `go -C _catalog run ./cmd/dotnetsymbols` resolves the latest stable MAF release and downloads its prebuilt core NuGet packages, without Git or a .NET SDK. Pin a version with `-release 1.22.0` for reproducible reruns. Select additional packages with `-package` and an exact target framework with `-framework`. Package versions, hashes, source metadata, and assembly identities are recorded; the release is not assumed to match this catalog's commit baseline.
 

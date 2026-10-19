@@ -119,9 +119,6 @@ func (a *a2aProvider) run(ctx context.Context, messages []*message.Message, opti
 			}, false, yield)
 			return
 		}
-		if len(messages) == 0 {
-			return
-		}
 		userMsg, err := messagesToA2AMessage(session, messages)
 		if err != nil {
 			yield(nil, err)
@@ -169,6 +166,9 @@ func messagesToA2AMessage(session *agent.Session, messages []*message.Message) (
 			}
 			maps.Copy(metadata, msg.AdditionalProperties)
 		}
+	}
+	if len(parts) == 0 {
+		return nil, errors.New("a2aprovider: the provided messages contain no content that can be sent to the remote agent")
 	}
 	combined := &message.Message{ID: msgID, AdditionalProperties: metadata}
 	return createA2AMessage(session, combined, parts), nil

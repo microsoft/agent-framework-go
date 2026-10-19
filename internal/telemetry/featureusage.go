@@ -18,33 +18,34 @@ import (
 // Feature indexes match the .NET version-1 registry. Only supported capabilities
 // registered there are tracked; indexes must not be repurposed for Go-only features.
 const (
-	FeatureAgent                   = 0
-	FeatureHarnessAgent            = 1
-	FeatureWorkflow                = 2
-	FeatureToolApproval            = 3
-	FeatureFileMemoryProvider      = 5
-	FeatureTextSearchProvider      = 6
-	FeatureInMemoryHistoryProvider = 13
-	FeatureCompactionProvider      = 9
-	FeatureSkillsProvider          = 8
-	FeatureFileSkillsSource        = 15
-	FeatureInMemorySkillsSource    = 16
-	FeatureMCP                     = 14
-	FeatureTodoProvider            = 10
-	FeatureAgentModeProvider       = 11
-	FeatureSequentialOrchestration = 32
-	FeatureConcurrentOrchestration = 33
-	FeatureGroupChatOrchestration  = 34
-	FeatureFoundryChatClient       = 48
-	FeatureFoundryAgent            = 49
-	FeatureFoundryMemory           = 50
-	FeatureOpenAI                  = 54
-	FeatureAnthropic               = 55
-	FeatureGitHubCopilot           = 57
-	FeatureA2A                     = 62
-	FeatureHostingAGUI             = 63
-	FeatureShell                   = 69
-	FeatureHostingA2A              = 73
+	FeatureAgent                     = 0
+	FeatureHarnessAgent              = 1
+	FeatureWorkflow                  = 2
+	FeatureToolApproval              = 3
+	FeatureChatHistoryMemoryProvider = 4
+	FeatureFileMemoryProvider        = 5
+	FeatureTextSearchProvider        = 6
+	FeatureInMemoryHistoryProvider   = 13
+	FeatureCompactionProvider        = 9
+	FeatureSkillsProvider            = 8
+	FeatureFileSkillsSource          = 15
+	FeatureInMemorySkillsSource      = 16
+	FeatureMCP                       = 14
+	FeatureTodoProvider              = 10
+	FeatureAgentModeProvider         = 11
+	FeatureSequentialOrchestration   = 32
+	FeatureConcurrentOrchestration   = 33
+	FeatureGroupChatOrchestration    = 34
+	FeatureFoundryChatClient         = 48
+	FeatureFoundryAgent              = 49
+	FeatureFoundryMemory             = 50
+	FeatureOpenAI                    = 54
+	FeatureAnthropic                 = 55
+	FeatureGitHubCopilot             = 57
+	FeatureA2A                       = 62
+	FeatureHostingAGUI               = 63
+	FeatureShell                     = 69
+	FeatureHostingA2A                = 73
 )
 
 const featureMaskDisabledEnvVar = "AGENT_FRAMEWORK_FEATURE_MASK_DISABLED"

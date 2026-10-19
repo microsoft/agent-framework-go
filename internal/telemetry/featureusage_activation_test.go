@@ -41,9 +41,11 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/harness/todo"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/agent/memory"
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
 	"github.com/microsoft/agent-framework-go/agent/textsearch"
+	"github.com/microsoft/agent-framework-go/embedding"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
@@ -58,6 +60,7 @@ import (
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/microsoft/agent-framework-go/tool/mcptool"
 	"github.com/microsoft/agent-framework-go/tool/shelltool"
+	"github.com/microsoft/agent-framework-go/vectordata/inmemory"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/agentworkflow"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -79,6 +82,8 @@ var featureActivationCases = []struct {
 	{"harness-mask-disabled", nil, []string{featureMaskDisabledEnvVar + "=true"}},
 	{"history-provide", []int{13}, nil},
 	{"history-store", []int{13}, nil},
+	{"chat-history-memory", []int{4}, nil},
+	{"chat-history-memory-on-demand", []int{4}, nil},
 	{"text-search", []int{6}, nil},
 	{"text-search-on-demand", []int{6}, nil},
 	{"compaction-context", []int{9}, nil},
@@ -325,6 +330,16 @@ func (activationCompactionStrategy) Compact(context.Context, *compaction.Message
 	return false, nil
 }
 
+type activationMemoryGenerator struct{}
+
+func (activationMemoryGenerator) Generate(_ context.Context, inputs []string, _ *embedding.Options) (*embedding.Generated[embedding.VectorOf[float32]], error) {
+	result := &embedding.Generated[embedding.VectorOf[float32]]{}
+	for range inputs {
+		result.Embeddings = append(result.Embeddings, embedding.VectorOf[float32]{1})
+	}
+	return result, nil
+}
+
 func runFeatureActivation(t *testing.T, name string) {
 	t.Helper()
 	if strings.HasPrefix(name, "port-provider-") {
@@ -476,6 +491,21 @@ func runFeatureActivation(t *testing.T, name string) {
 				return p.Invoked(ctx, agent.InvokedContext{RequestMessages: invoking.Messages, Options: invoking.Options})
 			}
 			_, err := p.Invoking(ctx, invoking)
+			return err
+		}
+	case "chat-history-memory", "chat-history-memory-on-demand":
+		config := memory.Config{}
+		if strings.HasSuffix(name, "on-demand") {
+			config.SearchTime = memory.OnDemandFunctionCalling
+		}
+		store := inmemory.New(inmemory.Config{EmbeddingGenerator: embedding.Bind(activationMemoryGenerator{})})
+		p, err := memory.NewHistoryProvider(store.Store, "history", 1,
+			func(*agent.Session) *memory.State { return new(memory.State) }, config)
+		if err != nil {
+			t.Fatal(err)
+		}
+		activate = func() error {
+			_, _, err := p.Invoking(ctx, invoking)
 			return err
 		}
 	case "text-search", "text-search-on-demand":

@@ -410,6 +410,34 @@ func TestRunAllowsNonUserRoleMessages(t *testing.T) {
 	}
 }
 
+func TestRunRejectsMessagesWithoutSendableParts(t *testing.T) {
+	tests := []struct {
+		name     string
+		messages []*message.Message
+	}{
+		{name: "empty messages"},
+		{name: "empty contents", messages: []*message.Message{{Role: message.RoleUser}}},
+		{name: "empty text", messages: []*message.Message{{Role: message.RoleUser, Contents: message.Contents{&message.TextContent{}}}}},
+		{name: "unsupported contents", messages: []*message.Message{{Role: message.RoleUser, Contents: message.Contents{&message.RawContent{}}}}},
+	}
+	for _, test := range tests {
+		for _, streaming := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/streaming=%t", test.name, streaming), func(t *testing.T) {
+				transport := &mockA2ATransport{}
+				a := newTestAgent(transport, agent.Config{})
+
+				_, err := a.Run(t.Context(), test.messages, agent.Stream(streaming)).Collect()
+				if err == nil || !strings.Contains(err.Error(), "no content that can be sent to the remote agent") {
+					t.Fatalf("error = %v, want no-sendable-content error", err)
+				}
+				if transport.sendMessageCallCount != 0 || transport.sendStreamingCallCount != 0 {
+					t.Fatalf("A2A send calls = (%d, %d), want (0, 0)", transport.sendMessageCallCount, transport.sendStreamingCallCount)
+				}
+			})
+		}
+	}
+}
+
 // An ErrorContent must be sent to A2A as its human-readable text, not as an
 // opaque JSON blob (the default-branch behavior), matching the Python client.
 func TestRunSendsErrorContentAsText(t *testing.T) {

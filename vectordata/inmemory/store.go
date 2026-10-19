@@ -5,9 +5,12 @@
 // unless explicitly exported.
 //
 // Collections support structs, pointers to structs, and map[string]any records.
-// Keys must be non-nil comparable values without NaN. Records are retained and
-// returned without cloning: pointer and map records, and reference-valued fields
-// in struct records, share their underlying data with the caller. Plain structs
+// Keys must be non-nil comparable values without NaN. Assignable keys are
+// normalized to the schema's declared key type for storage and lookup, without
+// changing records. Interface key properties retain concrete key types.
+// Records are retained and returned without cloning: pointer and map records,
+// and reference-valued fields in struct records, share their underlying data
+// with the caller. Plain structs
 // are copied by value. Collection dictionaries support concurrent operations.
 // Shared record data is not synchronized: callers must prevent concurrent
 // mutation, including upserts that generate keys on the same record. Custom JSON
@@ -36,6 +39,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"reflect"
 	"sync"
 
 	"github.com/microsoft/agent-framework-go/embedding"
@@ -45,33 +49,43 @@ import (
 // Config configures an in-memory store.
 type Config struct {
 	// EmbeddingGenerator supplies the default generator for collection handles.
-	// Collection, definition, and property configuration may override it.
+	// Definition and property configuration may override it.
 	EmbeddingGenerator *embedding.BoundGenerator
 }
 
-// Store holds independently named collections with the same key and record
-// types. The zero value is ready to use. A Store must not be copied after use.
-// Its methods and collection handles support concurrent use.
-type Store[K comparable, R any] struct {
+// Store holds independently named collections with different key and record
+// types. Create it with [New]. Its embedded [vectordata.Store] provides collection
+// factories and lifecycle operations; pass that field to provider-independent
+// APIs. A Store must not be copied after use. Its methods support concurrent use.
+type Store struct {
+	*vectordata.Store
+	provider *store
+}
+
+type store struct {
 	mu          sync.RWMutex
-	collections map[string]map[K]*storedRecord[R]
+	collections map[string]*collectionData
 	generator   *embedding.BoundGenerator
 }
 
-// New creates a store. The generator is borrowed, not closed by the store.
-func New[K comparable, R any](config Config) *Store[K, R] {
-	return &Store[K, R]{generator: config.EmbeddingGenerator}
+type collectionData struct {
+	recordType reflect.Type
+	records    map[any]*storedRecord
 }
 
-// Collection returns a configured handle without creating the collection.
-// Handles with the same name share stored records, but not schema configuration.
-func (s *Store[K, R]) Collection(name string, options vectordata.CollectionOptions) (vectordata.Collection[K, R], error) {
-	return s.collection(name, options)
+// New creates a store. The generator is borrowed, not closed by the store.
+func New(config Config) *Store {
+	provider := &store{generator: config.EmbeddingGenerator}
+	return &Store{Store: vectordata.NewStore(provider), provider: provider}
+}
+
+func (s *store) OpenCollection(name string, keyType, recordType reflect.Type, definition *vectordata.Definition) (vectordata.Collection[any, any], error) {
+	return newCollection[any, any](s, name, keyType, recordType, definition)
 }
 
 // ListCollectionNames lazily returns a snapshot of the existing collection names.
 // The order is unspecified.
-func (s *Store[K, R]) ListCollectionNames(ctx context.Context) iter.Seq2[string, error] {
+func (s *store) ListCollectionNames(ctx context.Context) iter.Seq2[string, error] {
 	return func(yield func(string, error) bool) {
 		if err := ctx.Err(); err != nil {
 			yield("", failure("", "ListCollectionNames", err))
@@ -96,7 +110,7 @@ func (s *Store[K, R]) ListCollectionNames(ctx context.Context) iter.Seq2[string,
 }
 
 // CollectionExists reports whether the named collection exists.
-func (s *Store[K, R]) CollectionExists(ctx context.Context, name string) (bool, error) {
+func (s *store) CollectionExists(ctx context.Context, name string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, failure(name, "CollectionExists", err)
 	}
@@ -108,7 +122,7 @@ func (s *Store[K, R]) CollectionExists(ctx context.Context, name string) (bool, 
 
 // EnsureCollectionDeleted removes the collection and all of its records.
 // Deleting a missing collection succeeds. Existing handles can recreate it.
-func (s *Store[K, R]) EnsureCollectionDeleted(ctx context.Context, name string) error {
+func (s *store) EnsureCollectionDeleted(ctx context.Context, name string) error {
 	if err := ctx.Err(); err != nil {
 		return failure(name, "EnsureCollectionDeleted", err)
 	}
@@ -121,8 +135,28 @@ func (s *Store[K, R]) EnsureCollectionDeleted(ctx context.Context, name string) 
 	return nil
 }
 
-type storedRecord[R any] struct {
-	Record  R                    `json:"record"`
+func (s *store) snapshot(ctx context.Context, name string, recordType reflect.Type) ([]*storedRecord, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	data, exists := s.collections[name]
+	if !exists {
+		return nil, missingCollection(name)
+	}
+	if recordType != nil && data.recordType != recordType {
+		return nil, incompatibleCollection(name, data.recordType, recordType)
+	}
+	records := make([]*storedRecord, 0, len(data.records))
+	for _, record := range data.records {
+		records = append(records, record)
+	}
+	return records, nil
+}
+
+type storedRecord struct {
+	Record  any                  `json:"record"`
 	Vectors map[string][]float32 `json:"vectors,omitempty"`
 }
 
@@ -136,4 +170,8 @@ func missingCollection(name string) error {
 	return fmt.Errorf("collection %q does not exist", name)
 }
 
-var _ vectordata.Store[string, any] = (*Store[string, any])(nil)
+func incompatibleCollection(name string, existing, requested reflect.Type) error {
+	return fmt.Errorf("collection %q has record type %v, not %v", name, existing, requested)
+}
+
+var _ vectordata.StoreProvider = (*store)(nil)

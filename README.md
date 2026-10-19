@@ -60,10 +60,12 @@ For a detailed .NET-to-Go feature comparison, see the [.NET and Go SDK feature c
   - [Skills examples](./examples/02-agents/skills/) | [Skills package](./agent/skills/)
 - **Text Search (RAG)**: Retrieve and cite external knowledge automatically before agent runs or through an on-demand search tool, with optional session-backed recent-message memory.
   - [Text search package](./agent/textsearch/) | [RAG examples](./examples/02-agents/rag/)
+- **Chat History Memory**: Store conversations in a vector store and retrieve scoped memories automatically or through an on-demand tool.
+  - [Memory package](./agent/memory/) | [Memory examples](./examples/02-agents/memory/)
 - **Embeddings**: Provider-independent batch generation, numeric and binary vectors, request options, usage metadata, and single-input/vector/batch-pair helpers, with an OpenAI/Foundry adapter and opt-in OpenTelemetry instrumentation.
   - [Embedding package](./embedding/) | [OpenAI embedding generator](./provider/openaiprovider/embedding.go) | [Foundry embedding generator](./provider/foundryprovider/embedding.go)
-- **Vector Data**: Provider-independent store and collection contracts, typed and dynamic record schemas, CRUD helpers, and vector/hybrid search options with portable filters. Includes an in-memory connector with exact vector search, batch embedding generation, and JSON snapshots.
-  - [Vector data package](./vectordata/) | [In-memory connector](./vectordata/inmemory/) | [Experimental provider services](./vectordata/providerservices/)
+- **Vector Data**: Vector stores with typed and dynamic collections, CRUD helpers, and vector/hybrid search options with portable filters. Includes Azure AI Search and an in-memory connector with exact vector search, batch embedding generation, and JSON snapshots.
+  - [Vector data package](./vectordata/) | [Azure AI Search](./provider/azureprovider/) | [In-memory connector](./vectordata/inmemory/) | [Experimental provider services](./vectordata/providerservices/)
 - **AF Labs**: Not implemented yet in the Go SDK.
 - **DevUI**: Not implemented yet in the Go SDK.
 
