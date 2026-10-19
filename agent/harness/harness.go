@@ -6,7 +6,8 @@
 // Create a harness with [New], pass [Harness.Configure]'s result to the normal
 // provider constructor, and call [Harness.Close] after its agents finish.
 // The harness reuses the agent lifecycle and the provider's tool-invocation
-// middleware. Tracing covers agent runs, not individual model calls.
+// middleware. Tracing covers agent runs, function tools, and model calls made by
+// supported model adapters.
 package harness
 
 import (
@@ -76,7 +77,9 @@ type Config struct {
 	DisableToolApproval bool
 	ToolApproval        toolapproval.Config
 
-	// DisableOpenTelemetry disables agent-run tracing, not feature-usage tracking.
+	// DisableOpenTelemetry disables agent, tool, and model-call tracing, not
+	// feature-usage tracking. Model-call tracing is enabled in OpenTelemetry
+	// when this option is false.
 	DisableOpenTelemetry bool
 	OpenTelemetry        otelprovider.MiddlewareConfig
 }
@@ -119,7 +122,9 @@ func New(cfg Config) (*Harness, error) {
 		h.middlewares = append(h.middlewares, toolapproval.New(cfg.ToolApproval))
 	}
 	if !cfg.DisableOpenTelemetry {
-		h.middlewares = append(h.middlewares, otelprovider.NewMiddleware(cfg.OpenTelemetry))
+		tracing := cfg.OpenTelemetry
+		tracing.EnableModelTracing = true
+		h.middlewares = append(h.middlewares, otelprovider.NewMiddleware(tracing))
 	}
 	if !cfg.DisableTodo {
 		h.providers = append(h.providers, todo.New(nil))

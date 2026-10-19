@@ -4,26 +4,45 @@ package otelprovider_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	azfake "github.com/Azure/azure-sdk-for-go/sdk/azcore/fake"
+	"github.com/anthropics/anthropic-sdk-go"
+	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
+	"github.com/microsoft/agent-framework-go/internal/otelx"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/provider/anthropicprovider"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
+	"github.com/microsoft/agent-framework-go/provider/geminiprovider"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/microsoft/agent-framework-go/provider/otelprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/genai"
 
 	otellib "go.opentelemetry.io/otel"
 )
@@ -95,6 +114,551 @@ func hasMetric(resourceMetrics metricdata.ResourceMetrics, name string) bool {
 func metricAttribute(set attribute.Set, key string) (string, bool) {
 	value, ok := set.Value(attribute.Key(key))
 	return value.AsString(), ok
+}
+
+func TestOtel_ModelTracing_Adapters(t *testing.T) {
+	sse := func(event, data string) string {
+		return "event: " + event + "\ndata: " + data + "\n\n"
+	}
+	response := `{"id":"response-1","object":"response","created_at":1,"model":"served-model","status":"completed","output":[{"type":"message","id":"message-1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"done","annotations":[]}]}],"usage":{"input_tokens":11,"output_tokens":5,"total_tokens":16}}`
+	responseEvents := sse("response.created", `{"type":"response.created","response":{"id":"response-1","model":"served-model","status":"in_progress"}}`) +
+		sse("response.output_item.added", `{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"message-1","role":"assistant","content":[]}}`) +
+		sse("response.output_text.delta", `{"type":"response.output_text.delta","item_id":"message-1","output_index":0,"content_index":0,"delta":"done"}`) +
+		sse("response.completed", `{"type":"response.completed","response":`+response+`}`)
+	for _, tc := range []struct {
+		adapter  string
+		provider string
+		body     string
+		events   string
+	}{
+		{
+			adapter: "chat", provider: "openai",
+			body:   `{"id":"response-1","object":"chat.completion","created":1,"model":"served-model","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":5,"total_tokens":16}}`,
+			events: "data: " + `{"id":"response-1","object":"chat.completion.chunk","created":1,"model":"served-model","choices":[{"index":0,"delta":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":5,"total_tokens":16}}` + "\n\ndata: [DONE]\n\n",
+		},
+		{adapter: "responses", provider: "openai", body: response, events: responseEvents},
+		{adapter: "foundry", provider: "microsoft.foundry", body: response, events: responseEvents},
+		{
+			adapter: "anthropic", provider: "anthropic",
+			body: `{"id":"response-1","type":"message","role":"assistant","model":"served-model","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"input_tokens":11,"output_tokens":5}}`,
+			events: sse("message_start", `{"type":"message_start","message":{"id":"response-1","type":"message","role":"assistant","model":"served-model","content":[],"usage":{"input_tokens":11,"output_tokens":0}}}`) +
+				sse("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`) +
+				sse("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}`) +
+				sse("content_block_stop", `{"type":"content_block_stop","index":0}`) +
+				sse("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`) +
+				sse("message_stop", `{"type":"message_stop"}`),
+		},
+		{
+			adapter: "gemini", provider: "gcp.gemini",
+			body:   `{"responseId":"response-1","modelVersion":"served-model","candidates":[{"content":{"role":"model","parts":[{"text":"done"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":5,"totalTokenCount":16}}`,
+			events: "data: " + `{"responseId":"response-1","modelVersion":"served-model","candidates":[{"content":{"role":"model","parts":[{"text":"done"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":5,"totalTokenCount":16}}` + "\n\n",
+		},
+	} {
+		for _, stream := range []bool{false, true} {
+			for _, enabled := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/stream=%v/enabled=%v", tc.adapter, stream, enabled), func(t *testing.T) {
+					exporter := setupTracer(t)
+					reader := setupMeter(t)
+					var requests atomic.Int32
+					server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						requests.Add(1)
+						var body map[string]any
+						if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+							t.Error(err)
+							http.Error(w, err.Error(), http.StatusBadRequest)
+							return
+						}
+						if tc.adapter == "gemini" {
+							if !strings.Contains(r.URL.Path, "request-model") {
+								t.Errorf("model request path = %q", r.URL.Path)
+							}
+						} else if body["model"] != "request-model" {
+							t.Errorf("request model = %v", body["model"])
+						}
+						contentType, data := "application/json", tc.body
+						if stream {
+							contentType, data = "text/event-stream", tc.events
+						}
+						w.Header().Set("Content-Type", contentType)
+						if _, err := fmt.Fprint(w, data); err != nil {
+							t.Error(err)
+						}
+					}))
+					defer server.Close()
+					cfg := agent.Config{
+						Name: "ModelTest",
+						Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{
+							SourceName: "model-test", EnableModelTracing: enabled,
+						})},
+					}
+					a := modelTestAgent(t, tc.adapter, server, cfg)
+					options := []agent.Option{agent.Stream(stream)}
+					switch tc.adapter {
+					case "chat":
+						options = append(options, openaiprovider.ChatCompletionNewParams(openai.ChatCompletionNewParams{Model: "request-model"}))
+					case "responses", "foundry":
+						options = append(options, openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Model: "request-model"}))
+					case "anthropic":
+						options = append(options, anthropicprovider.MessageNewParams(anthropic.MessageNewParams{Model: "request-model"}))
+					}
+					run := a.RunText(t.Context(), "Private prompt contents.", options...)
+					if requests.Load() != 0 || len(exporter.GetSpans()) != 0 {
+						t.Fatal("unconsumed run started model tracing or a request")
+					}
+					got, err := run.Collect()
+					if err != nil || got.String() != "done" {
+						t.Fatalf("response = %v, %v", got, err)
+					}
+					if requests.Load() != 1 || got.Usage().InputTokenCount != 11 || got.Usage().OutputTokenCount != 5 {
+						t.Fatalf("requests = %d, usage = %+v", requests.Load(), got.Usage())
+					}
+					spans := exporter.GetSpans()
+					if !enabled {
+						if len(spans) != 1 {
+							t.Fatalf("default tracing emitted %d spans, want one agent span", len(spans))
+						}
+						return
+					}
+					if len(spans) != 2 {
+						t.Fatalf("spans = %d, want one agent and one model span", len(spans))
+					}
+					agentSpan := findSpanByOperation(t, spans, "invoke_agent")
+					modelSpan := findSpanByOperation(t, spans, "chat")
+					if modelSpan.Name != "chat request-model" || modelSpan.SpanKind != trace.SpanKindClient ||
+						modelSpan.Parent.SpanID() != agentSpan.SpanContext.SpanID() ||
+						modelSpan.SpanContext.TraceID() != agentSpan.SpanContext.TraceID() ||
+						modelSpan.InstrumentationScope.Name != "model-test" {
+						t.Fatalf("model span = %+v", modelSpan)
+					}
+					attrs := modelSpanAttributes(modelSpan)
+					for key, want := range map[string]string{
+						"gen_ai.provider.name": tc.provider, "gen_ai.request.model": "request-model",
+						"gen_ai.response.model": "served-model", "gen_ai.response.id": "response-1",
+					} {
+						if attrs[key].AsString() != want {
+							t.Errorf("%s = %v, want %q", key, attrs[key], want)
+						}
+					}
+					if attrs["gen_ai.usage.input_tokens"].AsInt64() != 11 ||
+						attrs["gen_ai.usage.output_tokens"].AsInt64() != 5 ||
+						!slices.Equal(attrs["gen_ai.response.finish_reasons"].AsStringSlice(), []string{"stop"}) {
+						t.Fatalf("model response attributes = %v", attrs)
+					}
+					if strings.Contains(fmt.Sprint(modelSpan.Attributes), "Private prompt contents.") {
+						t.Fatal("model span captured prompt contents")
+					}
+					duration := collectMetric(t, reader, "gen_ai.client.operation.duration").(metricdata.Histogram[float64])
+					var modelPoints int
+					for _, point := range duration.DataPoints {
+						if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation == "chat" {
+							modelPoints++
+							if point.Count != 1 || point.Sum != modelSpan.EndTime.Sub(modelSpan.StartTime).Seconds() {
+								t.Errorf("model duration point = %+v", point)
+							}
+						}
+					}
+					if modelPoints != 1 {
+						t.Fatalf("model duration points = %d, want 1", modelPoints)
+					}
+					tokens := collectMetric(t, reader, "gen_ai.client.token.usage").(metricdata.Histogram[int64])
+					var inputs, outputs int
+					for _, point := range tokens.DataPoints {
+						if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation != "chat" {
+							continue
+						}
+						switch kind, _ := metricAttribute(point.Attributes, "gen_ai.token.type"); kind {
+						case "input":
+							inputs++
+							if point.Sum != 11 {
+								t.Errorf("model input token sum = %d", point.Sum)
+							}
+						case "output":
+							outputs++
+							if point.Sum != 5 {
+								t.Errorf("model output token sum = %d", point.Sum)
+							}
+						}
+					}
+					if inputs != 1 || outputs != 1 {
+						t.Fatalf("model input/output token points = %d/%d, want 1/1", inputs, outputs)
+					}
+				})
+			}
+		}
+	}
+}
+
+func modelTestAgent(t *testing.T, adapter string, server *httptest.Server, cfg agent.Config) *agent.Agent {
+	t.Helper()
+	client := openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test"), option.WithHTTPClient(server.Client()), option.WithMaxRetries(0))
+	switch adapter {
+	case "chat":
+		return openaiprovider.NewChatCompletionsAgent(client, openaiprovider.AgentConfig{Config: cfg, Model: "default-model"})
+	case "responses":
+		return openaiprovider.NewResponsesAgent(client, openaiprovider.AgentConfig{Config: cfg, Model: "default-model", DisableStoreOutput: true})
+	case "foundry":
+		return foundryprovider.NewAgent(server.URL, &azfake.TokenCredential{}, foundryprovider.ModelDeployment("default-model"), foundryprovider.AgentConfig{
+			Config: cfg, DisableStoreOutput: true,
+			OpenAIOptions: []option.RequestOption{option.WithHTTPClient(server.Client()), option.WithMaxRetries(0)},
+		})
+	case "anthropic":
+		return anthropicprovider.NewAgent(anthropic.NewClient(
+			anthropicoption.WithBaseURL(server.URL), anthropicoption.WithAPIKey("test"),
+			anthropicoption.WithHTTPClient(server.Client()), anthropicoption.WithMaxRetries(0),
+		), anthropicprovider.AgentConfig{Config: cfg, Model: "default-model"})
+	case "gemini":
+		client, err := genai.NewClient(t.Context(), &genai.ClientConfig{
+			Backend: genai.BackendGeminiAPI, APIKey: "test", HTTPClient: server.Client(),
+			HTTPOptions: genai.HTTPOptions{BaseURL: server.URL},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return geminiprovider.NewAgent(client, geminiprovider.AgentConfig{Config: cfg, Model: "request-model"})
+	default:
+		t.Fatalf("unknown model adapter %q", adapter)
+		return nil
+	}
+}
+
+func TestOtel_ModelTracing_Lifecycle(t *testing.T) {
+	failure := errors.New("model failed")
+	for _, tc := range []struct {
+		name      string
+		stopEarly bool
+		cancel    bool
+		err       error
+		usage     *message.UsageDetails
+	}{
+		{name: "empty"},
+		{name: "no usage"},
+		{name: "zero usage", usage: &message.UsageDetails{}},
+		{name: "usage", usage: &message.UsageDetails{InputTokenCount: 7, OutputTokenCount: 3, CachedInputTokenCount: 2, ReasoningTokenCount: 1}},
+		{name: "failure", err: failure},
+		{name: "cancelled", cancel: true, err: context.Canceled},
+		{name: "failure wins over cancellation", cancel: true, err: failure},
+		{name: "early stop", stopEarly: true},
+		{name: "cancelled early stop", stopEarly: true, cancel: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exporter := setupTracer(t)
+			reader := setupMeter(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var released bool
+			update := &agent.ResponseUpdate{Contents: message.NewText("partial").Contents}
+			if tc.usage != nil {
+				update.Contents = append(update.Contents, &message.UsageContent{Details: *tc.usage})
+			}
+			a := agent.New(agent.ProviderConfig{
+				ProviderName: "test-provider",
+				Run: otelx.WrapModelRun(func(ctx context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return func(yield func(*agent.ResponseUpdate, error) bool) {
+						defer func() { released = true }()
+						if tc.cancel {
+							cancel()
+						}
+						if tc.err != nil {
+							yield(nil, tc.err)
+							return
+						}
+						if tc.name == "empty" {
+							return
+						}
+						otelx.RecordModelResponse(ctx, "served-model", "response-id")
+						if !yield(update, nil) {
+							return
+						}
+						if tc.stopEarly {
+							t.Error("provider continued after early stop")
+						}
+					}
+				}, func([]agent.Option) string { return "request-model" }),
+			}, agent.Config{
+				Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{EnableModelTracing: true})},
+			})
+			var gotErr error
+			for got, err := range a.RunText(ctx, "request", agent.Stream(true)) {
+				if err != nil {
+					gotErr = err
+					break
+				}
+				if got != nil && got != update {
+					t.Error("tracing replaced the provider's response update")
+				}
+				if tc.stopEarly {
+					break
+				}
+			}
+			if !errors.Is(gotErr, tc.err) || !released {
+				t.Fatalf("error = %v, want %v; provider released = %v", gotErr, tc.err, released)
+			}
+			modelSpan := findSpanByOperation(t, exporter.GetSpans(), "chat")
+			spanErr := tc.err
+			if spanErr == nil && tc.cancel {
+				spanErr = context.Canceled
+			}
+			if modelSpan.EndTime.IsZero() || (modelSpan.Status.Code == codes.Error) != (spanErr != nil) {
+				t.Fatalf("span status = %v, want error = %v", modelSpan.Status, spanErr)
+			}
+			attrs := modelSpanAttributes(modelSpan)
+			if tc.usage == nil {
+				if _, ok := attrs["gen_ai.usage.input_tokens"]; ok {
+					t.Error("missing usage was reported as zero usage")
+				}
+			} else {
+				for key, want := range map[string]int64{
+					"gen_ai.usage.input_tokens": tc.usage.InputTokenCount, "gen_ai.usage.output_tokens": tc.usage.OutputTokenCount,
+				} {
+					value, ok := attrs[key]
+					if !ok || value.AsInt64() != want {
+						t.Errorf("%s = %v, present = %v, want %d", key, value, ok, want)
+					}
+				}
+				if tc.usage.CachedInputTokenCount > 0 && attrs["gen_ai.usage.cache_read.input_tokens"].AsInt64() != 2 {
+					t.Errorf("cached input usage = %v", attrs)
+				}
+				if tc.usage.ReasoningTokenCount > 0 && attrs["gen_ai.usage.reasoning.output_tokens"].AsInt64() != 1 {
+					t.Errorf("reasoning usage = %v", attrs)
+				}
+			}
+			duration := collectMetric(t, reader, "gen_ai.client.operation.duration").(metricdata.Histogram[float64])
+			var modelCalls uint64
+			for _, point := range duration.DataPoints {
+				if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation == "chat" {
+					modelCalls += point.Count
+					if spanErr != nil {
+						value, ok := metricAttribute(point.Attributes, "error.type")
+						if !ok || value != otelx.ErrorTypeName(spanErr) {
+							t.Errorf("metric error type = %q, present = %v", value, ok)
+						}
+					}
+				}
+			}
+			if modelCalls != 1 {
+				t.Fatalf("recorded model calls = %d, want 1", modelCalls)
+			}
+		})
+	}
+}
+
+func TestOtel_ModelTracing_AdapterFailures(t *testing.T) {
+	for _, adapter := range []string{"chat", "responses", "foundry", "anthropic", "gemini"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%v", adapter, stream), func(t *testing.T) {
+				exporter := setupTracer(t)
+				var requests atomic.Int32
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					requests.Add(1)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusBadRequest)
+					if _, err := fmt.Fprint(w, `{"error":{"message":"model request failed"}}`); err != nil {
+						t.Error(err)
+					}
+				}))
+				defer server.Close()
+				a := modelTestAgent(t, adapter, server, agent.Config{
+					Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{EnableModelTracing: true})},
+				})
+				response, err := a.RunText(t.Context(), "request", agent.Stream(stream)).Collect()
+				if err == nil || response != nil || requests.Load() != 1 {
+					t.Fatalf("response = %v, error = %v, requests = %d", response, err, requests.Load())
+				}
+				span := findSpanByOperation(t, exporter.GetSpans(), "chat")
+				attrs := modelSpanAttributes(span)
+				if span.Status.Code != codes.Error || span.EndTime.IsZero() ||
+					attrs["error.type"].AsString() != otelx.ErrorTypeName(err) {
+					t.Fatalf("model failure span = %+v", span)
+				}
+				if _, ok := attrs["gen_ai.usage.input_tokens"]; ok {
+					t.Fatal("failed request fabricated usage")
+				}
+			})
+		}
+	}
+}
+
+func TestOtel_ModelTracing_CancellationAfterSuccessfulResponse(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			exporter := setupTracer(t)
+			reader := setupMeter(t)
+			data := `{"id":"response-1","object":"chat.completion","created":1,"model":"served-model","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":5,"total_tokens":16}}`
+			if stream {
+				data = "data: " + `{"id":"response-1","object":"chat.completion.chunk","created":1,"model":"served-model","choices":[{"index":0,"delta":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":5,"total_tokens":16}}` +
+					"\n\ndata: [DONE]\n\n"
+			}
+			body := &modelTestBody{Reader: strings.NewReader(data)}
+			client := &http.Client{Transport: modelTestTransport(func(r *http.Request) (*http.Response, error) {
+				contentType := "application/json"
+				if stream {
+					contentType = "text/event-stream"
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{contentType}},
+					Body:       body,
+					Request:    r,
+				}, nil
+			})}
+			a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(
+				option.WithAPIKey("test"), option.WithHTTPClient(client), option.WithMaxRetries(0),
+			), openaiprovider.AgentConfig{
+				Model:        "request-model",
+				ToolAutoCall: &toolautocall.Config{MaximumIterationsPerRequest: new(0)},
+				Config: agent.Config{Middlewares: []agent.Middleware{
+					otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{EnableModelTracing: true}),
+				}},
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var response agent.Response
+			for update, err := range a.RunText(ctx, "request", agent.Stream(stream)) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				response.Update(update)
+				cancel()
+			}
+			if response.String() != "done" || !body.closed.Load() || !errors.Is(ctx.Err(), context.Canceled) {
+				t.Fatalf("response = %q, body closed = %v, context error = %v", response.String(), body.closed.Load(), ctx.Err())
+			}
+			span := findSpanByOperation(t, exporter.GetSpans(), "chat")
+			if span.Status.Code == codes.Error || span.EndTime.IsZero() {
+				t.Errorf("successful response was recorded as an error: %+v", span.Status)
+			}
+			if _, ok := modelSpanAttributes(span)["error.type"]; ok {
+				t.Error("successful model span has an error.type attribute")
+			}
+			duration := collectMetric(t, reader, "gen_ai.client.operation.duration").(metricdata.Histogram[float64])
+			var modelCalls uint64
+			for _, point := range duration.DataPoints {
+				if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation == "chat" {
+					modelCalls += point.Count
+					if _, ok := metricAttribute(point.Attributes, "error.type"); ok {
+						t.Error("successful model duration metric has an error.type attribute")
+					}
+				}
+			}
+			if modelCalls != 1 {
+				t.Fatalf("recorded model calls = %d, want 1", modelCalls)
+			}
+		})
+	}
+}
+
+func TestOtel_ModelTracing_EarlyStopClosesAdapterResponse(t *testing.T) {
+	for _, cancelled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancelled=%v", cancelled), func(t *testing.T) {
+			exporter := setupTracer(t)
+			body := &modelTestBody{Reader: strings.NewReader("data: " +
+				`{"id":"response-1","object":"chat.completion.chunk","created":1,"model":"served-model","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}` +
+				"\n\ndata: [DONE]\n\n")}
+			client := &http.Client{Transport: modelTestTransport(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body:       body,
+					Request:    r,
+				}, nil
+			})}
+			a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(
+				option.WithAPIKey("test"), option.WithHTTPClient(client), option.WithMaxRetries(0),
+			), openaiprovider.AgentConfig{
+				Model: "request-model",
+				Config: agent.Config{Middlewares: []agent.Middleware{
+					otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{EnableModelTracing: true}),
+				}},
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var text string
+			for update, err := range a.RunText(ctx, "request", agent.Stream(true)) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if update != nil && update.String() != "" {
+					text = update.String()
+					if cancelled {
+						cancel()
+					}
+					break
+				}
+			}
+			if text != "partial" || !body.closed.Load() {
+				t.Fatalf("stream text = %q, response body closed = %v", text, body.closed.Load())
+			}
+			span := findSpanByOperation(t, exporter.GetSpans(), "chat")
+			if span.EndTime.IsZero() || (span.Status.Code == codes.Error) != cancelled {
+				t.Fatalf("model span after early stop = %+v", span)
+			}
+		})
+	}
+}
+
+func TestOtel_ModelTracing_ConcurrentCallsKeepMetadataIsolated(t *testing.T) {
+	exporter := setupTracer(t)
+	a := agent.New(agent.ProviderConfig{
+		ProviderName: "test-provider",
+		Run: otelx.WrapModelRun(func(ctx context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				model, _ := agent.GetOption(options, agent.WithInstructions)
+				otelx.RecordModelResponse(ctx, "served-"+model, "response-"+model)
+				yield(&agent.ResponseUpdate{Contents: message.NewText("done").Contents}, nil)
+			}
+		}, func(options []agent.Option) string {
+			model, _ := agent.GetOption(options, agent.WithInstructions)
+			return model
+		}),
+	}, agent.Config{Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{EnableModelTracing: true})}})
+	var wg sync.WaitGroup
+	for i := range 20 {
+		wg.Go(func() {
+			if _, err := a.RunText(t.Context(), "request", agent.WithInstructions(fmt.Sprintf("model-%d", i))).Collect(); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	var calls int
+	for _, span := range exporter.GetSpans() {
+		attrs := modelSpanAttributes(span)
+		if attrs["gen_ai.operation.name"].AsString() != "chat" {
+			continue
+		}
+		calls++
+		request := attrs["gen_ai.request.model"].AsString()
+		if attrs["gen_ai.response.model"].AsString() != "served-"+request || attrs["gen_ai.response.id"].AsString() != "response-"+request {
+			t.Errorf("model metadata leaked between calls: %v", attrs)
+		}
+	}
+	if calls != 20 {
+		t.Fatalf("model spans = %d, want 20", calls)
+	}
+}
+
+func modelSpanAttributes(span tracetest.SpanStub) map[string]attribute.Value {
+	attrs := make(map[string]attribute.Value, len(span.Attributes))
+	for _, entry := range span.Attributes {
+		attrs[string(entry.Key)] = entry.Value
+	}
+	return attrs
+}
+
+type modelTestTransport func(*http.Request) (*http.Response, error)
+
+func (f modelTestTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+type modelTestBody struct {
+	*strings.Reader
+	closed atomic.Bool
+}
+
+func (b *modelTestBody) Close() error {
+	b.closed.Store(true)
+	return nil
 }
 
 func TestOtel_Run_RecordsOperationDurationMetric(t *testing.T) {

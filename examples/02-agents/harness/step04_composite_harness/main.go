@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft. All rights reserved.
 
 // This sample uses the reusable harness setup with a normal Foundry agent.
-// Agent-run tracing is enabled; individual model-call tracing remains separate work.
+// Agent, tool, and individual model-call tracing are enabled.
 // Reference: https://github.com/microsoft/agent-framework/blob/ebcf4db7f9462ef6c377761e0b3159c4c5a73027/dotnet/src/Microsoft.Agents.AI.Harness/HarnessAgent.cs
 package main
 

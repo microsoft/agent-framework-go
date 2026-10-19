@@ -17,6 +17,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/internal/otelx"
 	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -96,10 +97,13 @@ func NewChatCompletionsAgent(oclient openai.Client, config AgentConfig) *agent.A
 	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
 		ProviderName: cmp.Or(config.ProviderName, "openai"),
-		Run:          c.run,
-		Middlewares:  providerMiddlewares,
-		Format:       c.formatOf,
-		Unmarshal:    c.unmarshal,
+		Run: otelx.WrapModelRun(c.run, func(options []agent.Option) string {
+			params, _ := agent.GetOption(options, ChatCompletionNewParams)
+			return cmp.Or(params.Model, config.Model)
+		}),
+		Middlewares: providerMiddlewares,
+		Format:      c.formatOf,
+		Unmarshal:   c.unmarshal,
 	}, config.Config)
 }
 
@@ -135,6 +139,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				yield(nil, err)
 			}
 		}
+		otelx.RecordModelResponse(ctx, resp.Model, resp.ID)
 		// Some services return a successful response with no choices, e.g.
 		// Azure OpenAI when the prompt is blocked by a content filter (the
 		// response carries prompt_filter_results and usage instead). Tolerate
@@ -194,6 +199,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		var acc openai.ChatCompletionAccumulator
 		for stream.Next() {
 			chunk := stream.Current()
+			otelx.RecordModelResponse(ctx, chunk.Model, chunk.ID)
 			if !acc.AddChunk(chunk) {
 				continue
 			}

@@ -21,6 +21,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/internal/otelx"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
@@ -74,7 +75,7 @@ func NewAgent(gclient *genai.Client, config AgentConfig) *agent.Agent {
 	}
 	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
-		Run:          c.run,
+		Run:          otelx.WrapModelRun(c.run, func([]agent.Option) string { return config.Model }),
 		ProviderName: "gcp.gemini",
 		Middlewares:  providerMiddlewares,
 		Format:       c.formatOf,
@@ -105,7 +106,6 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			yield(nil, err)
 		}
 	}
-
 	if stream, _ := agent.GetOption(options, agent.Stream); !stream {
 		resp, err := a.client.Models.GenerateContent(ctx, a.config.Model, contents, cfg)
 		if err != nil {
@@ -113,6 +113,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				yield(nil, err)
 			}
 		}
+		otelx.RecordModelResponse(ctx, resp.ModelVersion, resp.ResponseID)
 		var responseContents []message.Content
 		var finishReason string
 		if len(resp.Candidates) > 0 {
@@ -160,6 +161,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				yield(nil, err)
 				return
 			}
+			otelx.RecordModelResponse(ctx, resp.ModelVersion, resp.ResponseID)
 			var streamContents []message.Content
 			var finishReason string
 			if len(resp.Candidates) > 0 {

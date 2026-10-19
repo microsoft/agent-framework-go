@@ -9,10 +9,13 @@ import (
 	"fmt"
 	"io/fs"
 	"iter"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 
@@ -24,13 +27,19 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
+	"github.com/microsoft/agent-framework-go/provider/otelprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
 
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func newHarness(t *testing.T, cfg harness.Config) *harness.Harness {
@@ -729,6 +738,131 @@ func TestEarlyStreamStopReleasesProviderAndTracing(t *testing.T) {
 	}
 	if borrowed.closed {
 		t.Fatal("cleanup closed a caller-supplied component")
+	}
+}
+
+func TestTracingSeparatesModelCallsFromAgentAndTools(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, disabled := range []bool{false, true} {
+			t.Run(fmt.Sprintf("stream=%v/disabled=%v", stream, disabled), func(t *testing.T) {
+				exporter := tracetest.NewInMemoryExporter()
+				tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+				originalProvider := otel.GetTracerProvider()
+				otel.SetTracerProvider(tracerProvider)
+				t.Cleanup(func() {
+					otel.SetTracerProvider(originalProvider)
+					if err := tracerProvider.Shutdown(context.WithoutCancel(t.Context())); err != nil {
+						t.Error(err)
+					}
+				})
+				h := newHarness(t, harness.Config{
+					DisableOpenTelemetry: disabled,
+					OpenTelemetry:        otelprovider.MiddlewareConfig{SourceName: "harness-model-test"},
+				})
+				var calls atomic.Int32
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					n := calls.Add(1)
+					id, finish, prompt, output := "first", "tool_calls", 11, 3
+					contents := `"tool_calls":[{"index":0,"id":"lookup-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]`
+					if n >= 2 {
+						id, finish, prompt, output = "second", "stop", 7, 2
+						contents = `"content":"done"`
+					}
+					usage := fmt.Sprintf(`"usage":{"prompt_tokens":%d,"completion_tokens":%d,"total_tokens":%d}`, prompt, output, prompt+output)
+					body := fmt.Sprintf(`{"id":%q,"object":"chat.completion","created":1,"model":"served-model","choices":[{"index":0,"message":{"role":"assistant",%s},"finish_reason":%q}],%s}`, id, contents, finish, usage)
+					if stream {
+						w.Header().Set("Content-Type", "text/event-stream")
+						body = strings.Replace(body, `"object":"chat.completion"`, `"object":"chat.completion.chunk"`, 1)
+						body = strings.Replace(body, `"message":`, `"delta":`, 1)
+						body = "data: " + body + "\n\ndata: [DONE]\n\n"
+						if n == 1 {
+							body = fmt.Sprintf("data: "+`{"id":%q,"object":"chat.completion.chunk","created":1,"model":"served-model","choices":[{"index":0,"delta":{"role":"assistant",%s},"finish_reason":null}]}`+"\n\n"+
+								"data: "+`{"id":%q,"object":"chat.completion.chunk","created":1,"model":"served-model","choices":[{"index":0,"delta":{},"finish_reason":%q}],%s}`+"\n\ndata: [DONE]\n\n",
+								id, contents, id, finish, usage)
+						}
+					} else {
+						w.Header().Set("Content-Type", "application/json")
+					}
+					if _, err := fmt.Fprint(w, body); err != nil {
+						t.Error(err)
+					}
+				}))
+				defer server.Close()
+				fn := functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) {
+					return "found", nil
+				})
+				a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(
+					option.WithBaseURL(server.URL), option.WithAPIKey("test"), option.WithMaxRetries(0),
+				), openaiprovider.AgentConfig{
+					Model: "request-model",
+					Config: h.Configure(agent.Config{
+						Name: "HarnessTracing", Tools: []tool.Tool{fn},
+					}),
+				})
+				run := a.RunText(t.Context(), "Look up the project.", agent.WithSession(&agent.Session{}), agent.Stream(stream))
+				if calls.Load() != 0 || len(exporter.GetSpans()) != 0 {
+					t.Fatal("unconsumed run invoked a model or recorded a span")
+				}
+				response, err := run.Collect()
+				if err != nil || response.String() != "done" || calls.Load() != 2 {
+					t.Fatalf("response = %v, %v, calls = %d", response, err, calls.Load())
+				}
+				if usage := response.Usage(); usage.InputTokenCount != 18 || usage.OutputTokenCount != 5 {
+					t.Fatalf("aggregate usage = %+v, want 18 input and 5 output tokens", usage)
+				}
+				spans := exporter.GetSpans()
+				if disabled {
+					if len(spans) != 0 {
+						t.Fatalf("disabled tracing emitted %d spans", len(spans))
+					}
+					return
+				}
+				if len(spans) != 4 {
+					t.Fatalf("spans = %d, want one agent, two models and one tool", len(spans))
+				}
+				var agentSpan tracetest.SpanStub
+				for _, span := range spans {
+					if span.Name == "invoke_agent HarnessTracing" {
+						agentSpan = span
+					}
+				}
+				if !agentSpan.SpanContext.IsValid() {
+					t.Fatal("agent span is missing")
+				}
+				var models, tools int
+				for _, span := range spans {
+					attrs := make(map[string]attribute.Value)
+					for _, entry := range span.Attributes {
+						attrs[string(entry.Key)] = entry.Value
+					}
+					if span.InstrumentationScope.Name != "harness-model-test" || span.EndTime.IsZero() {
+						t.Errorf("span instrumentation or cleanup is incorrect: %+v", span)
+					}
+					switch attrs["gen_ai.operation.name"].AsString() {
+					case "chat":
+						models++
+						if span.Parent.SpanID() != agentSpan.SpanContext.SpanID() || span.SpanKind != trace.SpanKindClient {
+							t.Errorf("model call is not a direct client child of the agent span: %+v", span)
+						}
+						input, output := int64(11), int64(3)
+						if attrs["gen_ai.response.id"].AsString() == "second" {
+							input, output = 7, 2
+						}
+						if attrs["gen_ai.usage.input_tokens"].AsInt64() != input || attrs["gen_ai.usage.output_tokens"].AsInt64() != output {
+							t.Errorf("per-call usage = %v, want %d/%d", attrs, input, output)
+						}
+					case "execute_tool":
+						tools++
+						if span.Parent.SpanID() != agentSpan.SpanContext.SpanID() {
+							t.Error("tool execution was incorrectly nested inside a model call")
+						}
+					}
+				}
+				if models != 2 || tools != 1 {
+					t.Fatalf("model/tool spans = %d/%d, want 2/1", models, tools)
+				}
+			})
+		}
 	}
 }
 
