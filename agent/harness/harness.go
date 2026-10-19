@@ -74,6 +74,8 @@ type Config struct {
 	// from WorkingDirectory. Non-nil collections replace that default source.
 	Skills skills.ContextProviderOptions
 
+	// DisableToolApproval omits standing-approval and auto-approval middleware.
+	// It does not remove the provider's approval requirements from tools.
 	DisableToolApproval bool
 	ToolApproval        toolapproval.Config
 

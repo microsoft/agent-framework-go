@@ -237,6 +237,20 @@ Normal extraction emits deterministic, transient raw schema-1 JSON with `identit
 
 Refreshes update only supplied assembly scopes and preserve assessment values, pairs, Go-only notes, and the original baseline. They complete existing method return labels using the existing generic parameter names; constructor/property keys and test names remain unchanged. API-only refreshes leave tests unchanged. New APIs become unreviewed placeholders, never automatic counterpart matches or assessed gaps. Metadata selection changes and refreshed packages that drop or replace recorded assemblies require separate review and fail without overwriting the catalog. Refreshing a package-owned assembly requires its recorded owning packages in the input so package and assembly provenance are updated together; local extraction can refresh only unowned assembly scopes. Refresh requires exclusive access to the catalog; concurrent updates or editor writes are not supported. The extractor is Go-only and never builds .NET projects; do not redirect its transient stdout onto the maintained catalog.
 
+## Composite agent harness
+
+The [harness usage guide](./agent-harness.md) documents `New`, `Configure`, and
+`Close`, the stable defaults/options assessment, provider-specific settings,
+ownership, and the boundaries of model tracing. The implementation was reviewed
+against .NET revision `ebcf4db7f9462ef6c377761e0b3159c4c5a73027`.
+`HarnessAgent`, `HarnessAgentOptions`, and `ChatClientHarnessExtensions` now have
+source-reviewed assessments in the catalog. Their `Microsoft.Agents.AI.Harness`
+assembly is outside the current binary-extraction scope, so these mappings do
+not claim a new extraction snapshot or change the original baseline.
+Experimental members are recorded as intentional exclusions. Stable mappings
+record Go composition and provider-configuration differences rather than
+claiming identical API shapes or prompts.
+
 ## Reconcile the Inventories
 
 Reconciliation reads declarations through an in-memory projection of the single catalog. Reports retain their `inventory` metadata fields, extraction hash, and package/assembly provenance; no duplicate declaration inventory is maintained.
