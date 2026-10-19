@@ -14103,9 +14103,9 @@
             "status": "mapped"
           },
           "DisableOpenTelemetry": {
-            "go_symbols": ["agent/harness.Config.DisableOpenTelemetry", "provider/otelprovider.MiddlewareConfig.EnableModelTracing"],
+            "go_symbols": ["agent/harness.Config.DisableOpenTelemetry", "provider/otelprovider.MiddlewareConfig.DisableModelTracing"],
             "status": "adapted",
-            "note": "Disables harness-installed agent, tool and supported model-adapter tracing. Feature-usage tracking has its existing independent opt-out; independently installed application tracing is not removed."
+            "note": "Disables harness-installed agent, tool and supported model-adapter tracing. Model tracing is enabled by default by the shared middleware for ordinary and harness agents; Go exposes DisableModelTracing to retain agent/tool-only output. Feature-usage tracking has its existing independent opt-out; independently installed application tracing is not removed."
           },
           "DisableTodoProvider": {
             "go_symbols": ["agent/harness.Config.DisableTodo"],

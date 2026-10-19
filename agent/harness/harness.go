@@ -80,8 +80,8 @@ type Config struct {
 	ToolApproval        toolapproval.Config
 
 	// DisableOpenTelemetry disables agent, tool, and model-call tracing, not
-	// feature-usage tracking. Model-call tracing is enabled in OpenTelemetry
-	// when this option is false.
+	// feature-usage tracking. When tracing is enabled, OpenTelemetry can
+	// independently disable model-call instrumentation.
 	DisableOpenTelemetry bool
 	OpenTelemetry        otelprovider.MiddlewareConfig
 }
@@ -117,9 +117,7 @@ func AgentConfig(settings Config, cfg agent.Config) (agent.Config, error) {
 		middlewares = append(middlewares, toolapproval.New(settings.ToolApproval))
 	}
 	if !settings.DisableOpenTelemetry {
-		tracing := settings.OpenTelemetry
-		tracing.EnableModelTracing = true
-		middlewares = append(middlewares, otelprovider.NewMiddleware(tracing))
+		middlewares = append(middlewares, otelprovider.NewMiddleware(settings.OpenTelemetry))
 	}
 	providers := make([]agent.ContextProvider, 0, 4+len(cfg.ContextProviders))
 	if !settings.DisableTodo {

@@ -916,8 +916,16 @@ func TestEarlyStreamStopReleasesProviderAndTracing(t *testing.T) {
 
 func TestTracingSeparatesModelCallsFromAgentAndTools(t *testing.T) {
 	for _, stream := range []bool{false, true} {
-		for _, disabled := range []bool{false, true} {
-			t.Run(fmt.Sprintf("stream=%v/disabled=%v", stream, disabled), func(t *testing.T) {
+		for _, tc := range []struct {
+			name          string
+			disableAll    bool
+			disableModels bool
+		}{
+			{name: "default"},
+			{name: "model opt-out", disableModels: true},
+			{name: "all disabled", disableAll: true},
+		} {
+			t.Run(fmt.Sprintf("stream=%v/%s", stream, tc.name), func(t *testing.T) {
 				exporter := tracetest.NewInMemoryExporter()
 				tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
 				originalProvider := otel.GetTracerProvider()
@@ -929,8 +937,10 @@ func TestTracingSeparatesModelCallsFromAgentAndTools(t *testing.T) {
 					}
 				})
 				h := harnessConfig(t, harness.Config{
-					DisableOpenTelemetry: disabled,
-					OpenTelemetry:        otelprovider.MiddlewareConfig{SourceName: "harness-model-test"},
+					DisableOpenTelemetry: tc.disableAll,
+					OpenTelemetry: otelprovider.MiddlewareConfig{
+						SourceName: "harness-model-test", DisableModelTracing: tc.disableModels,
+					},
 				})
 
 				var calls atomic.Int32
@@ -985,14 +995,18 @@ func TestTracingSeparatesModelCallsFromAgentAndTools(t *testing.T) {
 					t.Fatalf("aggregate usage = %+v, want 18 input and 5 output tokens", usage)
 				}
 				spans := exporter.GetSpans()
-				if disabled {
+				if tc.disableAll {
 					if len(spans) != 0 {
 						t.Fatalf("disabled tracing emitted %d spans", len(spans))
 					}
 					return
 				}
-				if len(spans) != 4 {
-					t.Fatalf("spans = %d, want one agent, two models and one tool", len(spans))
+				wantModels := 2
+				if tc.disableModels {
+					wantModels = 0
+				}
+				if len(spans) != wantModels+2 {
+					t.Fatalf("spans = %d, want one agent, %d models and one tool", len(spans), wantModels)
 				}
 				var agentSpan tracetest.SpanStub
 				for _, span := range spans {
@@ -1032,8 +1046,8 @@ func TestTracingSeparatesModelCallsFromAgentAndTools(t *testing.T) {
 						}
 					}
 				}
-				if models != 2 || tools != 1 {
-					t.Fatalf("model/tool spans = %d/%d, want 2/1", models, tools)
+				if models != wantModels || tools != 1 {
+					t.Fatalf("model/tool spans = %d/%d, want %d/1", models, tools, wantModels)
 				}
 			})
 		}

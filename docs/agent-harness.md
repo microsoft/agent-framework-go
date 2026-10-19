@@ -82,7 +82,7 @@ All component-disable flags default to `false`.
 | History | In-memory history, persisted per model call | Supply `agent.Config.HistoryProvider`. The harness enables `RequirePerServiceCallHistoryPersistence`. |
 | History conflicts | Warning and throwing disabled; the core agent's history-clearing default is unchanged | Explicit `WarnOnHistoryProviderConflict`, `ThrowOnHistoryProviderConflict`, and `ClearOnHistoryProviderConflict` settings are retained. |
 | Message injection | A new `agent.MessageInjector` per configured agent | Supply `agent.Config.MessageInjector`. Enqueue messages through the injector on the returned configuration. |
-| Tracing | Agent, tool, and supported model-adapter spans using the global OpenTelemetry providers | Set `OpenTelemetry.SourceName`, or set `DisableOpenTelemetry`. The harness always enables model tracing when its tracing middleware is enabled. |
+| Tracing | Agent, tool, and supported model-adapter spans using the global OpenTelemetry providers | Set `OpenTelemetry.SourceName`, set `OpenTelemetry.DisableModelTracing` for agent/tool-only tracing, or set `DisableOpenTelemetry` to omit harness tracing entirely. |
 
 `WorkingDirectory` defaults to the current directory and is resolved when
 `harness.AgentConfig` runs. Memory directories are created as needed. A session's
@@ -162,12 +162,17 @@ response model identifiers, response IDs, reported usage, duration, and errors,
 but not prompt contents or tool arguments/results. Other adapters retain the
 agent-level tracing supported by their existing implementations.
 
-Ordinary agents can opt into model spans with
-`otelprovider.MiddlewareConfig.EnableModelTracing`; the harness enables them
-automatically. `DisableOpenTelemetry` suppresses the harness's tracing middleware,
-not tracing independently installed by the application or a native model SDK.
-Nested agents must opt into model tracing independently; their model spans and
-metrics use their own instrumentation scope.
+`otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})` instruments supported
+model calls by default for ordinary agents as well as the harness, matching the
+stable .NET tracing entry point. This adds model spans and per-call metrics to the
+previous agent/tool-only default. Set `DisableModelTracing: true` to retain
+agent/tool-only output. The harness passes `OpenTelemetry` settings through without
+overriding this opt-out.
+
+Agents without this middleware do not gain framework model instrumentation.
+Nested agents use their own middleware settings and instrumentation scope.
+`DisableOpenTelemetry` suppresses the harness's tracing middleware, not tracing
+independently installed by the application or a native model SDK.
 
 [Feature-usage tracking](./feature-usage-telemetry.md) is separate from tracing.
 A consumed harness-configured run marks `core.harness_agent`, index 1, in the

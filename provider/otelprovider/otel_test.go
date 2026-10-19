@@ -157,8 +157,8 @@ func TestOtel_ModelTracing_Adapters(t *testing.T) {
 		},
 	} {
 		for _, stream := range []bool{false, true} {
-			for _, enabled := range []bool{false, true} {
-				t.Run(fmt.Sprintf("%s/stream=%v/enabled=%v", tc.adapter, stream, enabled), func(t *testing.T) {
+			for _, disabled := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/stream=%v/models-disabled=%v", tc.adapter, stream, disabled), func(t *testing.T) {
 					exporter := setupTracer(t)
 					reader := setupMeter(t)
 					var requests atomic.Int32
@@ -190,7 +190,7 @@ func TestOtel_ModelTracing_Adapters(t *testing.T) {
 					cfg := agent.Config{
 						Name: "ModelTest",
 						Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{
-							SourceName: "model-test", EnableModelTracing: enabled,
+							SourceName: "model-test", DisableModelTracing: disabled,
 						})},
 					}
 					a := modelTestAgent(t, tc.adapter, server, cfg)
@@ -215,9 +215,30 @@ func TestOtel_ModelTracing_Adapters(t *testing.T) {
 						t.Fatalf("requests = %d, usage = %+v", requests.Load(), got.Usage())
 					}
 					spans := spansInScope(exporter.GetSpans(), "model-test")
-					if !enabled {
+					if disabled {
 						if len(spans) != 1 {
-							t.Fatalf("default tracing emitted %d spans, want one agent span", len(spans))
+							t.Fatalf("model opt-out emitted %d spans, want one agent span", len(spans))
+						}
+						for _, scope := range collectMetrics(t, reader).ScopeMetrics {
+							if scope.Scope.Name != "model-test" {
+								continue
+							}
+							for _, metric := range scope.Metrics {
+								switch histogram := metric.Data.(type) {
+								case metricdata.Histogram[float64]:
+									for _, point := range histogram.DataPoints {
+										if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation == "chat" {
+											t.Errorf("model opt-out emitted %s", metric.Name)
+										}
+									}
+								case metricdata.Histogram[int64]:
+									for _, point := range histogram.DataPoints {
+										if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation == "chat" {
+											t.Errorf("model opt-out emitted %s", metric.Name)
+										}
+									}
+								}
+							}
 						}
 						return
 					}
@@ -377,7 +398,7 @@ func TestOtel_ModelTracing_Lifecycle(t *testing.T) {
 					}
 				}, func([]agent.Option) string { return "request-model" }),
 			}, agent.Config{
-				Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "model-test", EnableModelTracing: true})},
+				Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "model-test"})},
 			})
 			var gotErr error
 			for got, err := range a.RunText(ctx, "request", agent.Stream(true)) {
@@ -460,7 +481,7 @@ func TestOtel_ModelTracing_AdapterFailures(t *testing.T) {
 				}))
 				defer server.Close()
 				a := modelTestAgent(t, adapter, server, agent.Config{
-					Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "model-test", EnableModelTracing: true})},
+					Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "model-test"})},
 				})
 				response, err := a.RunText(t.Context(), "request", agent.Stream(stream)).Collect()
 				if err == nil || response != nil || requests.Load() != 1 {
@@ -517,7 +538,7 @@ func TestOtel_ModelTracing_CancellationAfterSuccessfulResponse(t *testing.T) {
 				Model:        "request-model",
 				ToolAutoCall: &toolautocall.Config{MaximumIterationsPerRequest: new(0)},
 				Config: agent.Config{Middlewares: []agent.Middleware{
-					otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{EnableModelTracing: true}),
+					otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{}),
 				}},
 			})
 			ctx, cancel := context.WithCancel(t.Context())
@@ -582,7 +603,7 @@ func TestOtel_ModelTracing_ProviderDeclaredFailures(t *testing.T) {
 				defer server.Close()
 				a := modelTestAgent(t, adapter, server, agent.Config{
 					Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{
-						SourceName: "declared-errors", EnableModelTracing: true,
+						SourceName: "declared-errors",
 					})},
 				})
 				ctx, cancel := context.WithCancel(t.Context())
@@ -637,15 +658,15 @@ func TestOtel_ModelTracing_ProviderDeclaredFailures(t *testing.T) {
 	}
 }
 
-func TestOtel_ModelTracing_NestedAgentsOptInIndependently(t *testing.T) {
-	for _, childTracing := range []string{"none", "agent-only", "models"} {
+func TestOtel_ModelTracing_NestedAgentsUseOwnConfiguration(t *testing.T) {
+	for _, childTracing := range []string{"none", "agent-only", "default"} {
 		t.Run(childTracing, func(t *testing.T) {
 			exporter := setupTracer(t)
 			reader := setupMeter(t)
 			childConfig := agent.Config{Name: "Child"}
 			if childTracing != "none" {
 				childConfig.Middlewares = []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{
-					SourceName: "child-scope", EnableModelTracing: childTracing == "models",
+					SourceName: "child-scope", DisableModelTracing: childTracing == "agent-only",
 				})}
 			}
 			child := agent.New(agent.ProviderConfig{
@@ -679,7 +700,7 @@ func TestOtel_ModelTracing_NestedAgentsOptInIndependently(t *testing.T) {
 				Name:  "Parent",
 				Tools: []tool.Tool{agenttool.New(child, agenttool.Config{})},
 				Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{
-					SourceName: "parent-scope", EnableModelTracing: true,
+					SourceName: "parent-scope",
 				})},
 			})
 			response, err := parent.RunText(t.Context(), "invoke child").Collect()
@@ -708,7 +729,7 @@ func TestOtel_ModelTracing_NestedAgentsOptInIndependently(t *testing.T) {
 				}
 			}
 			wantChildren := 0
-			if childTracing == "models" {
+			if childTracing == "default" {
 				wantChildren = 1
 			}
 			if parents != 2 || children != wantChildren {
@@ -763,7 +784,7 @@ func TestOtel_ModelTracing_EarlyStopClosesAdapterResponse(t *testing.T) {
 			), openaiprovider.AgentConfig{
 				Model: "request-model",
 				Config: agent.Config{Middlewares: []agent.Middleware{
-					otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{EnableModelTracing: true}),
+					otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{}),
 				}},
 			})
 			ctx, cancel := context.WithCancel(t.Context())
@@ -806,7 +827,7 @@ func TestOtel_ModelTracing_ConcurrentCallsKeepMetadataIsolated(t *testing.T) {
 			model, _ := agent.GetOption(options, agent.WithInstructions)
 			return model
 		}),
-	}, agent.Config{Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{EnableModelTracing: true})}})
+	}, agent.Config{Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})}})
 	var wg sync.WaitGroup
 	for i := range 20 {
 		wg.Go(func() {
