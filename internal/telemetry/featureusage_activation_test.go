@@ -444,13 +444,17 @@ func runFeatureActivation(t *testing.T, name string) {
 			settings.DisableOpenTelemetry = true
 			baseConfig.HistoryProvider = agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "history"})
 		}
-		h, err := harness.New(settings)
+		cfg, err := harness.AgentConfig(settings, baseConfig)
 		if err != nil {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() {
-			if err := h.Close(); err != nil {
-				t.Error(err)
+			for _, provider := range cfg.ContextProviders {
+				if memory, ok := provider.(*filememory.Provider); ok {
+					if err := memory.Close(); err != nil {
+						t.Error(err)
+					}
+				}
 			}
 		})
 		calls := 0
@@ -469,7 +473,7 @@ func runFeatureActivation(t *testing.T, name string) {
 				}
 				return activationRun(ctx, messages, options...)
 			},
-		}, h.Configure(baseConfig))
+		}, cfg)
 		activate = func() error {
 			stream := a.RunText(ctx, "hello", agent.Stream(name == "harness-stream"))
 			assertNoFeatureUsage(t)

@@ -23,6 +23,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/harness"
 	"github.com/microsoft/agent-framework-go/agent/harness/agentmode"
 	"github.com/microsoft/agent-framework-go/agent/harness/filememory"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
@@ -42,21 +43,33 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-func newHarness(t *testing.T, cfg harness.Config) *harness.Harness {
+func harnessConfig(t *testing.T, cfg harness.Config) func(agent.Config) agent.Config {
 	t.Helper()
 	if cfg.WorkingDirectory == "" {
 		cfg.WorkingDirectory = t.TempDir()
 	}
-	h, err := harness.New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := h.Close(); err != nil {
-			t.Error(err)
+	return func(base agent.Config) agent.Config {
+		t.Helper()
+		result, err := harness.AgentConfig(cfg, base)
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-	return h
+		t.Cleanup(func() {
+			if err := closeMemory(result); err != nil {
+				t.Error(err)
+			}
+		})
+		return result
+	}
+}
+
+func closeMemory(cfg agent.Config) error {
+	for _, provider := range cfg.ContextProviders {
+		if memory, ok := provider.(*filememory.Provider); ok {
+			return memory.Close()
+		}
+	}
+	return nil
 }
 
 func disabledConfig() harness.Config {
@@ -72,7 +85,7 @@ func disabledConfig() harness.Config {
 }
 
 func TestConfigurePreservesCallerConfiguration(t *testing.T) {
-	h := newHarness(t, harness.Config{})
+	h := harnessConfig(t, harness.Config{})
 	borrowed := &borrowedProvider{ContextProvider: agent.NewContextProvider(agent.ContextProviderConfig{SourceID: "caller"})}
 	middleware := &agenttest.Middleware{}
 	customTool := agenttest.NewTool("caller-tool", "A caller tool")
@@ -100,7 +113,7 @@ func TestConfigurePreservesCallerConfiguration(t *testing.T) {
 		Tools:                          tools[:1],
 		RunOptions:                     options[:1],
 	}
-	got := h.Configure(input)
+	got := h(input)
 	if got.ID != input.ID || got.Name != input.Name || got.Description != input.Description {
 		t.Fatal("agent identity changed")
 	}
@@ -139,11 +152,11 @@ func TestConfigurePreservesCallerConfiguration(t *testing.T) {
 	if len(input.ContextProviders) != 1 || len(input.Middlewares) != 1 || len(input.Tools) != 1 || len(input.RunOptions) != 1 {
 		t.Fatal("input slice lengths changed")
 	}
-	second := h.Configure(agent.Config{})
+	second := h(agent.Config{})
 	if len(second.ContextProviders) != 4 || len(second.Middlewares) != 3 || len(second.Tools) != 1 {
 		t.Fatal("one configured agent changed the defaults for another")
 	}
-	if err := h.Close(); err != nil {
+	if err := closeMemory(got); err != nil {
 		t.Fatal(err)
 	}
 	if borrowed.closed {
@@ -165,12 +178,12 @@ func TestInstructions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			settings := disabledConfig()
 			settings.Instructions = tc.value
-			h := newHarness(t, settings)
-			cfg := h.Configure(agent.Config{})
+			h := harnessConfig(t, settings)
+			cfg := h(agent.Config{})
 			if got := slices.Collect(agent.AllOptions(cfg.RunOptions, agent.WithInstructions)); !slices.Equal(got, tc.want) {
 				t.Fatalf("instructions = %q, want %q", got, tc.want)
 			}
-			cfg = h.Configure(agent.Config{RunOptions: []agent.Option{agent.WithInstructions("Caller.")}})
+			cfg = h(agent.Config{RunOptions: []agent.Option{agent.WithInstructions("Caller.")}})
 			want := append(slices.Clone(tc.want), "Caller.")
 			if got := slices.Collect(agent.AllOptions(cfg.RunOptions, agent.WithInstructions)); !slices.Equal(got, want) {
 				t.Fatalf("instructions with caller = %q, want %q", got, want)
@@ -198,8 +211,8 @@ func TestComponentOptOuts(t *testing.T) {
 		{name: "all", settings: disabledConfig(), middlewares: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newHarness(t, tc.settings)
-			cfg := h.Configure(agent.Config{})
+			h := harnessConfig(t, tc.settings)
+			cfg := h(agent.Config{})
 			if len(cfg.ContextProviders) != tc.providers || len(cfg.Middlewares) != tc.middlewares || len(cfg.Tools) != tc.tools {
 				t.Fatalf("got %d providers, %d middleware, %d tools; want %d, %d, %d",
 					len(cfg.ContextProviders), len(cfg.Middlewares), len(cfg.Tools), tc.providers, tc.middlewares, tc.tools)
@@ -236,8 +249,8 @@ func TestConfigureRetainsExistingWebSearch(t *testing.T) {
 		}, wantTools: 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			h := newHarness(t, harness.Config{})
-			cfg := h.Configure(tc.config)
+			h := harnessConfig(t, harness.Config{})
+			cfg := h(tc.config)
 			tools := append(slices.Collect(agent.AllOptions(cfg.RunOptions, agent.WithTool)), cfg.Tools...)
 			var count int
 			var search *hostedtool.WebSearch
@@ -266,7 +279,7 @@ func TestDefaultToolsAndFileSkills(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(skillDirectory, "SKILL.md"), []byte(skill), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			h := newHarness(t, harness.Config{WorkingDirectory: root})
+			h := harnessConfig(t, harness.Config{WorkingDirectory: root})
 			runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder(func(_ context.Context, _ []*message.Message, opts ...agent.Option) {
 				var names []string
 				for fn := range agent.AllOptions(opts, agent.WithTool) {
@@ -306,9 +319,11 @@ func TestDefaultToolsAndFileSkills(t *testing.T) {
 				}).
 				AddText("saved").
 				Build()}
-			a := newLocalAgent(h.Configure(agent.Config{
+			a := newLocalAgent(h(agent.Config{
 				RunOptions: []agent.Option{agent.WithInstructions("Caller instructions.")},
-			}), runner.Run)
+			}),
+
+				runner.Run)
 			response, err := a.RunText(t.Context(), "Remember our Go project.",
 				agent.WithSession(&agent.Session{}), agent.Stream(stream)).Collect()
 			if err != nil || response.String() != "saved" {
@@ -318,8 +333,95 @@ func TestDefaultToolsAndFileSkills(t *testing.T) {
 	}
 }
 
+func TestDefaultSkillsExcludeSessionMemory(t *testing.T) {
+	root := t.TempDir()
+	settings := harness.Config{WorkingDirectory: root}
+	cfg := harnessConfig(t, settings)(agent.Config{})
+	session := &agent.Session{}
+	tools := harnessTools(t, cfg, session)
+	memory := cfg.ContextProviders[2].(*filememory.Provider)
+	var state filememory.State
+	if found, err := session.Get(memory.StateKeys()[0], &state); err != nil || !found {
+		t.Fatalf("memory state: found = %v, error = %v", found, err)
+	}
+	secret := "private session information"
+	for name, content := range map[string]string{
+		"SKILL.md":   "---\nname: " + state.WorkingFolder + "\ndescription: Private session skill\n---\n" + secret,
+		"private.md": secret,
+	} {
+		args, err := json.Marshal(map[string]string{"fileName": name, "content": content})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tools[filememory.WriteToolName].Call(t.Context(), string(args)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := closeMemory(cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, rootSkill := range []bool{false, true} {
+		t.Run(fmt.Sprintf("root-skill=%v", rootSkill), func(t *testing.T) {
+			if rootSkill {
+				for name, content := range map[string]string{
+					"SKILL.md":                     "---\nname: workspace\ndescription: Public workspace guidance\n---\nUse the workspace.",
+					"public.md":                    "public resource",
+					"agent-file-memory/private.md": secret,
+				} {
+					if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(name)), []byte(content), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			reopened := harnessConfig(t, settings)(agent.Config{})
+			fresh := &agent.Session{}
+			freshTools := harnessTools(t, reopened, fresh)
+			if !rootSkill {
+				if freshTools["load_skill"] != nil {
+					t.Fatal("a session memory file was advertised as a skill")
+				}
+				return
+			}
+			result, err := freshTools["load_skill"].Call(t.Context(), `{"skillName":"workspace"}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if text := fmt.Sprint(result); strings.Contains(text, secret) || strings.Contains(text, "agent-file-memory/") || !strings.Contains(text, "public.md") {
+				t.Fatalf("root skill resource listing = %s", text)
+			}
+			result, err = freshTools["read_skill_resource"].Call(t.Context(), `{"skillName":"workspace","resourceName":"agent-file-memory/private.md"}`)
+			if err == nil && strings.Contains(fmt.Sprint(result), secret) {
+				t.Fatal("root skill read session memory as a resource")
+			}
+			result, err = freshTools["read_skill_resource"].Call(t.Context(), `{"skillName":"workspace","resourceName":"public.md"}`)
+			if err != nil || !strings.Contains(fmt.Sprint(result), "public resource") {
+				t.Fatalf("public resource = %v, %v", result, err)
+			}
+		})
+	}
+}
+
+func harnessTools(t *testing.T, cfg agent.Config, session *agent.Session) map[string]tool.FuncTool {
+	t.Helper()
+	invocation := agent.InvokingContext{Options: []agent.Option{agent.WithSession(session)}}
+	for _, provider := range cfg.ContextProviders {
+		messages, options, err := provider.Invoking(t.Context(), invocation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		invocation = agent.InvokingContext{Messages: messages, Options: options}
+	}
+	tools := make(map[string]tool.FuncTool)
+	for candidate := range agent.AllOptions(invocation.Options, agent.WithTool) {
+		if fn, ok := candidate.(tool.FuncTool); ok {
+			tools[fn.Name()] = fn
+		}
+	}
+	return tools
+}
+
 func TestConfiguredModeAndSkills(t *testing.T) {
-	h := newHarness(t, harness.Config{
+	h := harnessConfig(t, harness.Config{
 		DisableFileMemory: true,
 		AgentMode:         agentmode.Config{DefaultMode: new("execute")},
 		Skills: skills.ContextProviderOptions{Skills: []*skills.Skill{{
@@ -327,7 +429,8 @@ func TestConfiguredModeAndSkills(t *testing.T) {
 			GetContent:  func(context.Context) (string, error) { return "Skill guidance.", nil },
 		}}},
 	})
-	cfg := h.Configure(agent.Config{})
+
+	cfg := h(agent.Config{})
 	mode, ok := cfg.ContextProviders[1].(*agentmode.Provider)
 	if !ok || mode.Mode(&agent.Session{}) != "execute" {
 		t.Fatal("custom mode configuration was not retained")
@@ -343,10 +446,10 @@ func TestConfiguredModeAndSkills(t *testing.T) {
 }
 
 func TestCloseOwnsOnlyCreatedMemory(t *testing.T) {
-	h := newHarness(t, harness.Config{})
-	cfg := h.Configure(agent.Config{})
+	h := harnessConfig(t, harness.Config{})
+	cfg := h(agent.Config{})
 	for range 2 {
-		if err := h.Close(); err != nil {
+		if err := closeMemory(cfg); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -361,10 +464,7 @@ func TestCloseOwnsOnlyCreatedMemory(t *testing.T) {
 func TestDisabledFilesystemComponentsDoNotCreateDirectories(t *testing.T) {
 	cfg := disabledConfig()
 	cfg.WorkingDirectory = filepath.Join(t.TempDir(), "not-created")
-	h := newHarness(t, cfg)
-	if err := h.Close(); err != nil {
-		t.Fatal(err)
-	}
+	harnessConfig(t, cfg)(agent.Config{})
 	if _, err := os.Stat(cfg.WorkingDirectory); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("disabled filesystem components created a working directory: %v", err)
 	}
@@ -375,8 +475,8 @@ func TestNewReportsFilesystemFailure(t *testing.T) {
 	if err := os.WriteFile(file, []byte("not a directory"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if h, err := harness.New(harness.Config{WorkingDirectory: file}); h != nil || err == nil {
-		t.Fatalf("New with file as working directory = %v, %v", h, err)
+	if _, err := harness.AgentConfig(harness.Config{WorkingDirectory: file}, agent.Config{}); err == nil {
+		t.Fatal("AgentConfig with a file as working directory unexpectedly succeeded")
 	}
 }
 
@@ -384,7 +484,7 @@ func TestApprovalAndResume(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		for _, approve := range []bool{false, true} {
 			t.Run(fmt.Sprintf("stream=%v/approve=%v", stream, approve), func(t *testing.T) {
-				h := newHarness(t, harness.Config{})
+				h := harnessConfig(t, harness.Config{})
 				var executions int
 				fn := functool.MustNew(functool.Config{Name: "test_action"}, func(context.Context, struct{}) (string, error) {
 					executions++
@@ -409,9 +509,11 @@ func TestApprovalAndResume(t *testing.T) {
 					}).
 					AddText("finished").
 					Build()}
-				a := newLocalAgent(h.Configure(agent.Config{
+				a := newLocalAgent(h(agent.Config{
 					Tools: []tool.Tool{tool.ApprovalRequiredFunc(fn)},
-				}), runner.Run)
+				}),
+
+					runner.Run)
 				session := &agent.Session{}
 				response, err := a.RunText(t.Context(), "Run the test action.",
 					agent.WithSession(session), agent.Stream(stream)).Collect()
@@ -456,10 +558,79 @@ func TestApprovalAndResume(t *testing.T) {
 	}
 }
 
+func TestAutoApprovalDoesNotRepeatPersistedInputs(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, standing := range []bool{false, true} {
+			t.Run(fmt.Sprintf("stream=%v/standing=%v", stream, standing), func(t *testing.T) {
+				settings := harness.Config{}
+				if !standing {
+					settings.ToolApproval.AutoApprovalRules = []toolapproval.AutoApprovalRule{toolapproval.AllToolsAutoApprovalRule}
+				}
+				var executions int
+				fn := functool.MustNew(functool.Config{Name: "protected_action"}, func(context.Context, struct{}) (string, error) {
+					executions++
+					return "completed", nil
+				})
+				runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
+					AddFunctionCall("first", fn.Name(), `{}`).
+					NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+						assertToolHistory(t, messages, "first")
+						assertTextCount(t, messages, "First request.", 1)
+					}).
+					AddText("first done").
+					NewTurn().
+					AddFunctionCall("second", fn.Name(), `{}`).
+					NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+						assertToolHistory(t, messages, "first", "second")
+						assertTextCount(t, messages, "First request.", 1)
+						assertTextCount(t, messages, "Second request.", 1)
+					}).
+					AddText("second done").
+					Build()}
+				a := newLocalAgent(harnessConfig(t, settings)(agent.Config{
+					Tools: []tool.Tool{tool.ApprovalRequiredFunc(fn)},
+				}), runner.Run)
+				session := &agent.Session{}
+				response, err := a.RunText(t.Context(), "First request.", agent.WithSession(session), agent.Stream(stream)).Collect()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if standing {
+					var request *message.ToolApprovalRequestContent
+					for content := range response.Contents() {
+						if value, ok := content.(*message.ToolApprovalRequestContent); ok {
+							request = value
+						}
+					}
+					if request == nil || executions != 0 {
+						t.Fatalf("expected a pending approval, got %v and %d executions", request, executions)
+					}
+					response, err = a.RunMessage(t.Context(), message.New(request.AlwaysApproveToolResponse()),
+						agent.WithSession(session), agent.Stream(stream)).Collect()
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				if response.String() != "first done" {
+					t.Fatalf("first response = %q", response.String())
+				}
+				response, err = a.RunText(t.Context(), "Second request.", agent.WithSession(session), agent.Stream(stream)).Collect()
+				if err != nil || response.String() != "second done" || executions != 2 {
+					t.Fatalf("second response = %v, %v; executions = %d", response, err, executions)
+				}
+				history := sessionHistory(t, session)
+				assertTextCount(t, history, "First request.", 1)
+				assertTextCount(t, history, "Second request.", 1)
+				assertToolHistory(t, history, "first", "second")
+			})
+		}
+	}
+}
+
 func TestPerCallHistoryIsStoredOnce(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
-			h := newHarness(t, harness.Config{})
+			h := harnessConfig(t, harness.Config{})
 			session := &agent.Session{}
 			var executions int
 			fn := functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) {
@@ -497,7 +668,7 @@ func TestPerCallHistoryIsStoredOnce(t *testing.T) {
 				}).
 				AddText("next done").
 				Build()}
-			a := newLocalAgent(h.Configure(agent.Config{Tools: []tool.Tool{fn}}), runner.Run)
+			a := newLocalAgent(h(agent.Config{Tools: []tool.Tool{fn}}), runner.Run)
 			for _, prompt := range []string{"Start the lookup.", "Next request."} {
 				if _, err := a.RunText(t.Context(), prompt, agent.WithSession(session), agent.Stream(stream)).Collect(); err != nil {
 					t.Fatal(err)
@@ -519,8 +690,8 @@ func TestRestoredSessionKeepsMemoryAfterHarnessReopens(t *testing.T) {
 	for _, stream := range []bool{false, true} {
 		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
 			root := t.TempDir()
-			h := newHarness(t, harness.Config{WorkingDirectory: root})
-			cfg := h.Configure(agent.Config{})
+			h := harnessConfig(t, harness.Config{WorkingDirectory: root})
+			cfg := h(agent.Config{})
 			memory := cfg.ContextProviders[2].(*filememory.Provider)
 			runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
 				AddFunctionCall("write", filememory.WriteToolName, `{"fileName":"project.md","content":"Use Go.","description":"Project preferences"}`).
@@ -540,14 +711,14 @@ func TestRestoredSessionKeepsMemoryAfterHarnessReopens(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := h.Close(); err != nil {
+			if err := closeMemory(cfg); err != nil {
 				t.Fatal(err)
 			}
 			var restored agent.Session
 			if err := json.Unmarshal(data, &restored); err != nil {
 				t.Fatal(err)
 			}
-			reopened := newHarness(t, harness.Config{WorkingDirectory: root})
+			reopened := harnessConfig(t, harness.Config{WorkingDirectory: root})
 			runner = &agenttest.Runner{Responses: agenttest.NewResponseBuilder(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
 				var hasIndex bool
 				for _, msg := range messages {
@@ -597,7 +768,7 @@ func TestRestoredSessionKeepsMemoryAfterHarnessReopens(t *testing.T) {
 				}).
 				AddText("new session").
 				Build()}
-			a = newLocalAgent(reopened.Configure(agent.Config{}), runner.Run)
+			a = newLocalAgent(reopened(agent.Config{}), runner.Run)
 			response, err := a.RunText(t.Context(), "Recall the project.", agent.WithSession(&restored), agent.Stream(stream)).Collect()
 			if err != nil || response.String() != "recalled" {
 				t.Fatalf("restored response = %v, %v", response, err)
@@ -623,7 +794,7 @@ func TestCancellationReleasesRunWithoutClosingComponents(t *testing.T) {
 		for _, during := range []string{"provider", "tool"} {
 			t.Run(fmt.Sprintf("stream=%v/during=%s", stream, during), func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
-					h := newHarness(t, harness.Config{})
+					h := harnessConfig(t, harness.Config{})
 					borrowed := &borrowedProvider{ContextProvider: agent.NewContextProvider(agent.ContextProviderConfig{SourceID: "caller"})}
 					entered := make(chan struct{})
 					fn := functool.MustNew(functool.Config{Name: "wait_for_cancellation"}, func(ctx context.Context, _ struct{}) (string, error) {
@@ -651,10 +822,11 @@ func TestCancellationReleasesRunWithoutClosingComponents(t *testing.T) {
 							yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "ready"}}}, nil)
 						}
 					}
-					a := newLocalAgent(h.Configure(agent.Config{
+					config := h(agent.Config{
 						Tools:            []tool.Tool{fn},
 						ContextProviders: []agent.ContextProvider{borrowed},
-					}), run)
+					})
+					a := newLocalAgent(config, run)
 					ctx, cancel := context.WithCancel(t.Context())
 					defer cancel()
 					finished := make(chan error, 1)
@@ -674,7 +846,7 @@ func TestCancellationReleasesRunWithoutClosingComponents(t *testing.T) {
 					if err != nil || response.String() != "ready" {
 						t.Fatalf("run after cancellation = %v, %v", response, err)
 					}
-					if err := h.Close(); err != nil {
+					if err := closeMemory(config); err != nil {
 						t.Fatal(err)
 					}
 					if calls != 2 || closed != 2 || borrowed.closed {
@@ -697,13 +869,14 @@ func TestEarlyStreamStopReleasesProviderAndTracing(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	h := newHarness(t, harness.Config{})
+	h := harnessConfig(t, harness.Config{})
 	borrowed := &borrowedProvider{ContextProvider: agent.NewContextProvider(agent.ContextProviderConfig{SourceID: "caller"})}
 	var closed bool
-	a := newLocalAgent(h.Configure(agent.Config{
+	cfg := h(agent.Config{
 		Name:             "HarnessTest",
 		ContextProviders: []agent.ContextProvider{borrowed},
-	}), func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	})
+	a := newLocalAgent(cfg, func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			defer func() { closed = true }()
 			if !yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "partial"}}}, nil) {
@@ -733,7 +906,7 @@ func TestEarlyStreamStopReleasesProviderAndTracing(t *testing.T) {
 	if len(spans) != 1 || spans[0].Name != "invoke_agent HarnessTest" || spans[0].EndTime.IsZero() {
 		t.Fatalf("early-stop spans = %+v, want one completed agent span", spans)
 	}
-	if err := h.Close(); err != nil {
+	if err := closeMemory(cfg); err != nil {
 		t.Fatal(err)
 	}
 	if borrowed.closed {
@@ -755,10 +928,11 @@ func TestTracingSeparatesModelCallsFromAgentAndTools(t *testing.T) {
 						t.Error(err)
 					}
 				})
-				h := newHarness(t, harness.Config{
+				h := harnessConfig(t, harness.Config{
 					DisableOpenTelemetry: disabled,
 					OpenTelemetry:        otelprovider.MiddlewareConfig{SourceName: "harness-model-test"},
 				})
+
 				var calls atomic.Int32
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					n := calls.Add(1)
@@ -795,7 +969,7 @@ func TestTracingSeparatesModelCallsFromAgentAndTools(t *testing.T) {
 					option.WithBaseURL(server.URL), option.WithAPIKey("test"), option.WithMaxRetries(0),
 				), openaiprovider.AgentConfig{
 					Model: "request-model",
-					Config: h.Configure(agent.Config{
+					Config: h(agent.Config{
 						Name: "HarnessTracing", Tools: []tool.Tool{fn},
 					}),
 				})

@@ -22,6 +22,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
+	"github.com/microsoft/agent-framework-go/internal/modelcall"
 	"github.com/microsoft/agent-framework-go/internal/otelx"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/anthropicprovider"
@@ -30,6 +31,7 @@ import (
 	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/microsoft/agent-framework-go/provider/otelprovider"
 	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/agenttool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -212,7 +214,7 @@ func TestOtel_ModelTracing_Adapters(t *testing.T) {
 					if requests.Load() != 1 || got.Usage().InputTokenCount != 11 || got.Usage().OutputTokenCount != 5 {
 						t.Fatalf("requests = %d, usage = %+v", requests.Load(), got.Usage())
 					}
-					spans := exporter.GetSpans()
+					spans := spansInScope(exporter.GetSpans(), "model-test")
 					if !enabled {
 						if len(spans) != 1 {
 							t.Fatalf("default tracing emitted %d spans, want one agent span", len(spans))
@@ -352,7 +354,7 @@ func TestOtel_ModelTracing_Lifecycle(t *testing.T) {
 			}
 			a := agent.New(agent.ProviderConfig{
 				ProviderName: "test-provider",
-				Run: otelx.WrapModelRun(func(ctx context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				Run: modelcall.Wrap(func(ctx context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 					return func(yield func(*agent.ResponseUpdate, error) bool) {
 						defer func() { released = true }()
 						if tc.cancel {
@@ -365,7 +367,7 @@ func TestOtel_ModelTracing_Lifecycle(t *testing.T) {
 						if tc.name == "empty" {
 							return
 						}
-						otelx.RecordModelResponse(ctx, "served-model", "response-id")
+						modelcall.RecordResponse(ctx, "served-model", "response-id")
 						if !yield(update, nil) {
 							return
 						}
@@ -375,7 +377,7 @@ func TestOtel_ModelTracing_Lifecycle(t *testing.T) {
 					}
 				}, func([]agent.Option) string { return "request-model" }),
 			}, agent.Config{
-				Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{EnableModelTracing: true})},
+				Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "model-test", EnableModelTracing: true})},
 			})
 			var gotErr error
 			for got, err := range a.RunText(ctx, "request", agent.Stream(true)) {
@@ -458,13 +460,13 @@ func TestOtel_ModelTracing_AdapterFailures(t *testing.T) {
 				}))
 				defer server.Close()
 				a := modelTestAgent(t, adapter, server, agent.Config{
-					Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{EnableModelTracing: true})},
+					Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "model-test", EnableModelTracing: true})},
 				})
 				response, err := a.RunText(t.Context(), "request", agent.Stream(stream)).Collect()
 				if err == nil || response != nil || requests.Load() != 1 {
 					t.Fatalf("response = %v, error = %v, requests = %d", response, err, requests.Load())
 				}
-				span := findSpanByOperation(t, exporter.GetSpans(), "chat")
+				span := findSpanByOperation(t, spansInScope(exporter.GetSpans(), "model-test"), "chat")
 				attrs := modelSpanAttributes(span)
 				if span.Status.Code != codes.Error || span.EndTime.IsZero() ||
 					attrs["error.type"].AsString() != otelx.ErrorTypeName(err) {
@@ -479,8 +481,16 @@ func TestOtel_ModelTracing_AdapterFailures(t *testing.T) {
 }
 
 func TestOtel_ModelTracing_CancellationAfterSuccessfulResponse(t *testing.T) {
-	for _, stream := range []bool{false, true} {
-		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+	for _, tc := range []struct {
+		stream    bool
+		stopEarly bool
+	}{
+		{},
+		{stream: true},
+		{stopEarly: true},
+	} {
+		t.Run(fmt.Sprintf("stream=%v/stop-early=%v", tc.stream, tc.stopEarly), func(t *testing.T) {
+			stream := tc.stream
 			exporter := setupTracer(t)
 			reader := setupMeter(t)
 			data := `{"id":"response-1","object":"chat.completion","created":1,"model":"served-model","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":5,"total_tokens":16}}`
@@ -519,6 +529,9 @@ func TestOtel_ModelTracing_CancellationAfterSuccessfulResponse(t *testing.T) {
 				}
 				response.Update(update)
 				cancel()
+				if tc.stopEarly {
+					break
+				}
 			}
 			if response.String() != "done" || !body.closed.Load() || !errors.Is(ctx.Err(), context.Canceled) {
 				t.Fatalf("response = %q, body closed = %v, context error = %v", response.String(), body.closed.Load(), ctx.Err())
@@ -542,6 +555,189 @@ func TestOtel_ModelTracing_CancellationAfterSuccessfulResponse(t *testing.T) {
 			}
 			if modelCalls != 1 {
 				t.Fatalf("recorded model calls = %d, want 1", modelCalls)
+			}
+		})
+	}
+}
+
+func TestOtel_ModelTracing_ProviderDeclaredFailures(t *testing.T) {
+	for _, adapter := range []string{"responses", "foundry"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%v", adapter, stream), func(t *testing.T) {
+				exporter := setupTracer(t)
+				reader := setupMeter(t)
+				payload := `{"id":"failed-response","object":"response","created_at":1,"model":"served-model","status":"failed","output":[],"error":{"code":"server_error","message":"Provider declared a failure."}}`
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					body := payload
+					if stream {
+						w.Header().Set("Content-Type", "text/event-stream")
+						body = "event: response.failed\ndata: " + `{"type":"response.failed","response":` + payload + "}\n\n"
+					} else {
+						w.Header().Set("Content-Type", "application/json")
+					}
+					if _, err := fmt.Fprint(w, body); err != nil {
+						t.Error(err)
+					}
+				}))
+				defer server.Close()
+				a := modelTestAgent(t, adapter, server, agent.Config{
+					Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{
+						SourceName: "declared-errors", EnableModelTracing: true,
+					})},
+				})
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				var response agent.Response
+				for update, err := range a.RunText(ctx, "request", agent.Stream(stream)) {
+					if err != nil {
+						t.Fatalf("tracing changed the provider's nil iterator error: %v", err)
+					}
+					response.Update(update)
+					if update != nil {
+						for _, content := range update.Contents {
+							if _, ok := content.(*message.ErrorContent); ok {
+								cancel()
+								break
+							}
+						}
+					}
+					if ctx.Err() != nil {
+						break
+					}
+				}
+				var failure *message.ErrorContent
+				for content := range response.Contents() {
+					if value, ok := content.(*message.ErrorContent); ok {
+						failure = value
+					}
+				}
+				if failure == nil || failure.ErrorCode != "server_error" {
+					t.Fatalf("provider failure content = %+v", failure)
+				}
+				span := findSpanByOperation(t, spansInScope(exporter.GetSpans(), "declared-errors"), "chat")
+				if span.Status.Code != codes.Error || modelSpanAttributes(span)["error.type"].AsString() != failure.ErrorCode {
+					t.Fatalf("provider failure was not recorded in the model span: %+v", span)
+				}
+				duration := collectMetric(t, reader, "gen_ai.client.operation.duration").(metricdata.Histogram[float64])
+				var errorsRecorded uint64
+				for _, point := range duration.DataPoints {
+					if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation == "chat" {
+						code, _ := metricAttribute(point.Attributes, "error.type")
+						if code != failure.ErrorCode {
+							t.Errorf("model duration error.type = %q, want %q", code, failure.ErrorCode)
+						}
+						errorsRecorded += point.Count
+					}
+				}
+				if errorsRecorded != 1 {
+					t.Fatalf("model error metric count = %d, want 1", errorsRecorded)
+				}
+			})
+		}
+	}
+}
+
+func TestOtel_ModelTracing_NestedAgentsOptInIndependently(t *testing.T) {
+	for _, childTracing := range []string{"none", "agent-only", "models"} {
+		t.Run(childTracing, func(t *testing.T) {
+			exporter := setupTracer(t)
+			reader := setupMeter(t)
+			childConfig := agent.Config{Name: "Child"}
+			if childTracing != "none" {
+				childConfig.Middlewares = []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{
+					SourceName: "child-scope", EnableModelTracing: childTracing == "models",
+				})}
+			}
+			child := agent.New(agent.ProviderConfig{
+				ProviderName: "child-provider",
+				Run: modelcall.Wrap(func(ctx context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return func(yield func(*agent.ResponseUpdate, error) bool) {
+						modelcall.RecordResponse(ctx, "served-child", "child-response")
+						yield(&agent.ResponseUpdate{
+							Contents: message.Contents{&message.TextContent{Text: "child result"}, &message.UsageContent{
+								Details: message.UsageDetails{InputTokenCount: 2, OutputTokenCount: 1},
+							}},
+						}, nil)
+					}
+				}, func([]agent.Option) string { return "child-model" }),
+			}, childConfig)
+			runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
+				AddFunctionCall("child-call", "Child", `{"query":"child request"}`).
+				NewTurn().
+				AddText("done").
+				Build()}
+			var calls int
+			parent := agent.New(agent.ProviderConfig{
+				ProviderName: "parent-provider",
+				Run: modelcall.Wrap(func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					calls++
+					modelcall.RecordResponse(ctx, "served-parent", fmt.Sprintf("parent-%d", calls))
+					return runner.Run(ctx, messages, options...)
+				}, func([]agent.Option) string { return "parent-model" }),
+				Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{})},
+			}, agent.Config{
+				Name:  "Parent",
+				Tools: []tool.Tool{agenttool.New(child, agenttool.Config{})},
+				Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{
+					SourceName: "parent-scope", EnableModelTracing: true,
+				})},
+			})
+			response, err := parent.RunText(t.Context(), "invoke child").Collect()
+			if err != nil || response.String() != "done" {
+				t.Fatalf("nested response = %v, %v", response, err)
+			}
+			var parents, children int
+			for _, span := range exporter.GetSpans() {
+				attrs := modelSpanAttributes(span)
+				if attrs["gen_ai.operation.name"].AsString() != "chat" {
+					continue
+				}
+				switch span.InstrumentationScope.Name {
+				case "parent-scope":
+					parents++
+					if attrs["gen_ai.response.model"].AsString() != "served-parent" || !strings.HasPrefix(attrs["gen_ai.response.id"].AsString(), "parent-") {
+						t.Errorf("child metadata escaped into a parent call: %v", attrs)
+					}
+				case "child-scope":
+					children++
+					if attrs["gen_ai.response.model"].AsString() != "served-child" {
+						t.Errorf("child response model = %v", attrs)
+					}
+				default:
+					t.Errorf("unexpected model instrumentation scope %q", span.InstrumentationScope.Name)
+				}
+			}
+			wantChildren := 0
+			if childTracing == "models" {
+				wantChildren = 1
+			}
+			if parents != 2 || children != wantChildren {
+				t.Fatalf("parent/child model spans = %d/%d, want 2/%d", parents, children, wantChildren)
+			}
+			var parentMetrics, childMetrics uint64
+			for _, scope := range collectMetrics(t, reader).ScopeMetrics {
+				for _, metric := range scope.Metrics {
+					if metric.Name != "gen_ai.client.operation.duration" {
+						continue
+					}
+					for _, point := range metric.Data.(metricdata.Histogram[float64]).DataPoints {
+						if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation != "chat" {
+							continue
+						}
+						switch scope.Scope.Name {
+						case "parent-scope":
+							parentMetrics += point.Count
+							if model, _ := metricAttribute(point.Attributes, "gen_ai.request.model"); model != "parent-model" {
+								t.Errorf("child call used parent's instruments: %v", point.Attributes)
+							}
+						case "child-scope":
+							childMetrics += point.Count
+						}
+					}
+				}
+			}
+			if parentMetrics != 2 || childMetrics != uint64(wantChildren) {
+				t.Fatalf("parent/child model metrics = %d/%d, want 2/%d", parentMetrics, childMetrics, wantChildren)
 			}
 		})
 	}
@@ -600,10 +796,10 @@ func TestOtel_ModelTracing_ConcurrentCallsKeepMetadataIsolated(t *testing.T) {
 	exporter := setupTracer(t)
 	a := agent.New(agent.ProviderConfig{
 		ProviderName: "test-provider",
-		Run: otelx.WrapModelRun(func(ctx context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		Run: modelcall.Wrap(func(ctx context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 			return func(yield func(*agent.ResponseUpdate, error) bool) {
 				model, _ := agent.GetOption(options, agent.WithInstructions)
-				otelx.RecordModelResponse(ctx, "served-"+model, "response-"+model)
+				modelcall.RecordResponse(ctx, "served-"+model, "response-"+model)
 				yield(&agent.ResponseUpdate{Contents: message.NewText("done").Contents}, nil)
 			}
 		}, func(options []agent.Option) string {
@@ -643,6 +839,12 @@ func modelSpanAttributes(span tracetest.SpanStub) map[string]attribute.Value {
 		attrs[string(entry.Key)] = entry.Value
 	}
 	return attrs
+}
+
+func spansInScope(spans []tracetest.SpanStub, name string) []tracetest.SpanStub {
+	return slices.DeleteFunc(spans, func(span tracetest.SpanStub) bool {
+		return span.InstrumentationScope.Name != name
+	})
 }
 
 type modelTestTransport func(*http.Request) (*http.Response, error)

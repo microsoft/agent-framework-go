@@ -261,8 +261,8 @@ Refreshes update only supplied assembly scopes and preserve assessment values, p
 
 ## Composite agent harness
 
-The [harness usage guide](./agent-harness.md) documents `New`, `Configure`, and
-`Close`, the stable defaults/options assessment, provider-specific settings,
+The [harness usage guide](./agent-harness.md) documents `AgentConfig`,
+automatic file-memory cleanup, the stable defaults/options assessment, provider-specific settings,
 ownership, and the boundaries of model tracing. The implementation was reviewed
 against .NET revision `ebcf4db7f9462ef6c377761e0b3159c4c5a73027`.
 `HarnessAgent`, `HarnessAgentOptions`, and `ChatClientHarnessExtensions` now have

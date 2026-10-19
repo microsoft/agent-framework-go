@@ -8,18 +8,18 @@ another agent type or tool-execution loop.
 Use a normal provider constructor if you want to configure those components
 individually. Use the harness when you want them assembled with the defaults below.
 
-## Create, configure, and close
+## Configure an agent
 
-Create the harness once, pass its configuration to the provider constructor, and
-keep it open until all configured agents have finished. The following function
-accepts an existing OpenAI client and makes one request:
+Pass harness options and common agent settings to `harness.AgentConfig`, then use
+the result with the normal provider constructor. There is no separate harness
+object to keep open or close. The following function accepts an existing OpenAI
+client and makes one request:
 
 ```go
 package example
 
 import (
 	"context"
-	"errors"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness"
@@ -27,17 +27,15 @@ import (
 	"github.com/openai/openai-go/v3"
 )
 
-func ask(ctx context.Context, client openai.Client, model, prompt string) (text string, err error) {
-	h, err := harness.New(harness.Config{})
+func ask(ctx context.Context, client openai.Client, model, prompt string) (string, error) {
+	cfg, err := harness.AgentConfig(harness.Config{}, agent.Config{
+		Name: "Assistant",
+	})
 	if err != nil {
 		return "", err
 	}
-	defer func() { err = errors.Join(err, h.Close()) }()
-
 	a := openaiprovider.NewAgent(client, openaiprovider.AgentConfig{
-		Config: h.Configure(agent.Config{
-			Name: "Assistant",
-		}),
+		Config:             cfg,
 		Model:              model,
 		Instructions:       "Help with software engineering tasks.",
 		DisableStoreOutput: true,
@@ -78,7 +76,7 @@ All component-disable flags default to `false`.
 | Todo | Session-backed Todo tools and instructions | Set `DisableTodo`. |
 | Agent mode | Built-in plan/execute modes, initially plan | Set `AgentMode` to an `agentmode.Config`, or set `DisableAgentMode`. |
 | File memory | Persistent files below `<working-directory>/agent-file-memory`, with a unique working folder per session | Set `WorkingDirectory` or `DisableFileMemory`. Session restoration retains its original working folder. |
-| Skills | File-backed discovery from the working directory, with the existing approval requirements | Set `Skills` to `skills.ContextProviderOptions`, or set `DisableSkills`. Non-nil `Skills.Skills` or `Skills.Sources` replaces default file discovery, including an explicitly empty collection. |
+| Skills | File-backed discovery from the working directory, excluding the reserved `agent-file-memory` subtree, with the existing approval requirements | Set `Skills` to `skills.ContextProviderOptions`, or set `DisableSkills`. Non-nil `Skills.Skills` or `Skills.Sources` replaces default file discovery, including an explicitly empty collection. Caller sources retain their own access policy. |
 | Hosted web search | One default `hostedtool.WebSearch`, unless already supplied through `Tools` or `RunOptions` | Set `DisableWebSearch`. Existing caller tools and their settings are retained. |
 | Tool-approval middleware | Standing approvals and auto-approval rules enabled | Set `ToolApproval` to `toolapproval.Config`, or set `DisableToolApproval`. Disabling this middleware does not remove approval requirements from tools. |
 | History | In-memory history, persisted per model call | Supply `agent.Config.HistoryProvider`. The harness enables `RequirePerServiceCallHistoryPersistence`. |
@@ -87,11 +85,15 @@ All component-disable flags default to `false`.
 | Tracing | Agent, tool, and supported model-adapter spans using the global OpenTelemetry providers | Set `OpenTelemetry.SourceName`, or set `DisableOpenTelemetry`. The harness always enables model tracing when its tracing middleware is enabled. |
 
 `WorkingDirectory` defaults to the current directory and is resolved when
-`harness.New` runs. Memory directories are created as needed. A session's memory
-files survive `Close` and can be reopened by a new harness at the same root.
-Different sessions receive different UUID folders, even when they use the same
-harness. Do not substitute user-controlled paths for the working directory
+`harness.AgentConfig` runs. Memory directories are created as needed. A session's
+memory files remain on disk when its provider is cleaned up and can be reopened
+at the same root. Different sessions receive different UUID folders. Do not
+substitute user-controlled paths for the working directory
 without applying your application's access policy.
+
+Default skill discovery also denies direct resource access to the memory subtree,
+including when the working-directory root contains a skill. Session memory must
+not become a shared skill or resource after an agent is recreated.
 
 File-backed skill scripts require a runner. The default harness discovers skills
 but does not install a script runner. To enable script execution, pass a source
@@ -118,7 +120,7 @@ approval response through the same session. The runnable example shows that flow
 
 ### Provider-managed history
 
-`Configure` does not change provider request-storage settings. The usage example
+`AgentConfig` does not change provider request-storage settings. The usage example
 sets `DisableStoreOutput: true` so OpenAI Responses uses local session history.
 If the service manages history instead, the core agent's existing conflict and
 continuation rules apply. Foundry server agents own their model and instruction
@@ -126,7 +128,7 @@ configuration; they are not equivalent to a locally composed model-client harnes
 
 ## Ordering and ownership
 
-Call `Configure` once on each unconfigured `agent.Config`. It preserves caller
+Call `AgentConfig` once on each unconfigured `agent.Config`. It preserves caller
 identity, logger, function middleware, tools, history, and explicit conflict
 settings. It does not mutate the caller's input slices.
 
@@ -137,10 +139,13 @@ settings. It does not mutate the caller's input slices.
 - Context providers supply tools before the provider's tool-invocation
   middleware runs. History and message injection use the existing agent lifecycle.
 
-`Harness.Close` is idempotent and closes only file memory created by `New`.
-It does not delete memory files, close caller-supplied components, or shut down
-global telemetry providers. Finish all runs before closing it. Cancellation or
-early stream termination releases the active provider call, not the harness.
+File-memory handles are released through `runtime.AddCleanup` when their provider
+and tools become unreachable. Cleanup is asynchronous and is not guaranteed to
+run before program exit. `filememory.Provider.Close` is an optional optimization
+for releasing a handle early after all runs and tool calls finish. It does not
+delete memory files. Harness setup never closes caller-supplied components or
+shuts down global telemetry providers. Cancellation or early stream termination
+releases the active provider call, not the configured components.
 Filesystem setup failures return an error. Invalid component configuration retains
 the corresponding component constructor's panic contract.
 
@@ -160,7 +165,9 @@ agent-level tracing supported by their existing implementations.
 Ordinary agents can opt into model spans with
 `otelprovider.MiddlewareConfig.EnableModelTracing`; the harness enables them
 automatically. `DisableOpenTelemetry` suppresses the harness's tracing middleware,
-not tracing independently installed by the application.
+not tracing independently installed by the application or a native model SDK.
+Nested agents must opt into model tracing independently; their model spans and
+metrics use their own instrumentation scope.
 
 [Feature-usage tracking](./feature-usage-telemetry.md) is separate from tracing.
 A consumed harness-configured run marks `core.harness_agent`, index 1, in the
@@ -186,9 +193,11 @@ The stable composition retains enabled components, provider ordering,
 instruction opt-out, approval binding/bypassing defaults, per-call history,
 session-isolated memory, and agent/model tracing. Go adaptations are explicit:
 
-- `New` → `Configure` → `Close` replaces a C# delegating agent and extension
-  method. The caller selects the provider and supplies dependencies directly
-  rather than through `IServiceProvider`.
+- A top-level `AgentConfig` function replaces a C# delegating agent and extension
+  method. It returns filesystem setup errors explicitly. The caller selects the
+  provider and supplies dependencies directly rather than through `IServiceProvider`.
+- File-memory resources have automatic runtime cleanup, with optional early
+  release through the provider's `Close` method instead of a harness lifetime object.
 - Harness instructions give the same tool-use and progress guidance without
   promising identical prompt wording or instruction separators.
 - Memory folders use UUIDs without the .NET timestamp prefix. Memory remains

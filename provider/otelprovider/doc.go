@@ -12,4 +12,7 @@
 // remains outside those model spans. SDK retries and any remote server-side
 // orchestration stay within the corresponding adapter-call span. Prompt content,
 // tool arguments, and tool results are not recorded by model tracing.
+// Adapters supply neutral model metadata; instrumentation stays in this package.
+// Nested agents opt in independently. Native SDK instrumentation may produce
+// additional spans under its own scope and is not disabled by this middleware.
 package otelprovider

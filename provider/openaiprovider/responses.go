@@ -21,7 +21,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
-	"github.com/microsoft/agent-framework-go/internal/otelx"
+	"github.com/microsoft/agent-framework-go/internal/modelcall"
 	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -58,7 +58,7 @@ func NewResponsesAgent(oclient openai.Client, config AgentConfig) *agent.Agent {
 	return agent.New(
 		agent.ProviderConfig{
 			ProviderName: cmp.Or(config.ProviderName, "openai"),
-			Run: otelx.WrapModelRun(c.run, func(options []agent.Option) string {
+			Run: modelcall.Wrap(c.run, func(options []agent.Option) string {
 				if token, _ := agent.GetOption(options, agent.WithContinuationToken); token != "" {
 					return ""
 				}
@@ -169,7 +169,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 						return
 					}
 					if resp := responsesEventResponse(event); resp != nil {
-						otelx.RecordModelResponse(ctx, resp.Model, resp.ID)
+						modelcall.RecordResponse(ctx, resp.Model, resp.ID)
 						storeDisabled = storeDisabled || resp.JSON.ExtraFields["store"].Raw() == "false"
 						conversationID = responsesConversationID(resp, requestConversationID, storeDisabled)
 					}
@@ -190,7 +190,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 					yield(nil, err)
 					return
 				}
-				otelx.RecordModelResponse(ctx, resp.Model, resp.ID)
+				modelcall.RecordResponse(ctx, resp.Model, resp.ID)
 				conversationID := responsesConversationID(resp, requestConversationID, disableStoreOutput)
 				responsesProcessResponse(resp, ct.SequenceNumber, func(update *agent.ResponseUpdate, err error) bool {
 					if update != nil {
@@ -220,7 +220,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 					return
 				}
 				if resp := responsesEventResponse(event); resp != nil {
-					otelx.RecordModelResponse(ctx, resp.Model, resp.ID)
+					modelcall.RecordResponse(ctx, resp.Model, resp.ID)
 					storeDisabled = storeDisabled || resp.JSON.ExtraFields["store"].Raw() == "false"
 					conversationID = responsesConversationID(resp, requestConversationID, storeDisabled)
 				}
@@ -255,7 +255,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 				yield(nil, err)
 				return
 			}
-			otelx.RecordModelResponse(ctx, resp.Model, resp.ID)
+			modelcall.RecordResponse(ctx, resp.Model, resp.ID)
 			conversationID := responsesConversationID(resp, requestConversationID, disableStoreOutput)
 			responsesProcessResponse(resp, 0, func(update *agent.ResponseUpdate, err error) bool {
 				if update != nil {

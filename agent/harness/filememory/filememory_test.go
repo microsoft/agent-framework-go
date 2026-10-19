@@ -10,12 +10,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness/todo"
@@ -160,6 +162,117 @@ func TestProvider_PersistsAfterClose(t *testing.T) {
 		t.Fatalf("reopened index = %v, %v", messages, err)
 	}
 }
+
+func TestProvider_RuntimeCleanup(t *testing.T) {
+	closed := make(chan struct{})
+	var calls atomic.Int32
+	func() {
+		newProvider(&cleanupMemoryStore{
+			memoryStore: &memoryStore{files: make(map[string]string)},
+			close: func() error {
+				calls.Add(1)
+				close(closed)
+				return nil
+			},
+		}, Config{})
+	}()
+	waitForFileMemoryCleanup(t, closed)
+	if calls.Load() != 1 {
+		t.Fatalf("runtime cleanup closed storage %d times, want 1", calls.Load())
+	}
+}
+
+func TestProvider_CloseStopsRuntimeCleanup(t *testing.T) {
+	released := make(chan struct{})
+	var calls atomic.Int32
+	func() {
+		p := newProvider(&cleanupMemoryStore{
+			memoryStore: &memoryStore{files: make(map[string]string)},
+			close:       func() error { calls.Add(1); return nil },
+		}, Config{})
+		runtime.AddCleanup(p, func(done chan struct{}) { close(done) }, released)
+		for range 2 {
+			if err := p.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}()
+	waitForFileMemoryCleanup(t, released)
+	if calls.Load() != 2 {
+		t.Fatalf("runtime cleanup repeated explicit Close: %d calls", calls.Load())
+	}
+}
+
+func TestProvider_FailedCloseRetainsRuntimeCleanup(t *testing.T) {
+	closed := make(chan struct{})
+	var calls atomic.Int32
+	failure := errors.New("close failed")
+	func() {
+		p := newProvider(&cleanupMemoryStore{
+			memoryStore: &memoryStore{files: make(map[string]string)},
+			close: func() error {
+				if calls.Add(1) == 1 {
+					return failure
+				}
+				close(closed)
+				return nil
+			},
+		}, Config{})
+		if err := p.Close(); !errors.Is(err, failure) {
+			t.Fatalf("Close error = %v, want %v", err, failure)
+		}
+	}()
+	waitForFileMemoryCleanup(t, closed)
+	if calls.Load() != 2 {
+		t.Fatalf("failed Close was not retried by runtime cleanup: %d calls", calls.Load())
+	}
+}
+
+func TestProvider_ToolsRetainStorage(t *testing.T) {
+	closed := make(chan struct{})
+	tools := func() map[string]tool.FuncTool {
+		p := newProvider(&cleanupMemoryStore{
+			memoryStore: &memoryStore{files: map[string]string{"notes.md": "retained"}},
+			close:       func() error { close(closed); return nil },
+		}, Config{})
+		return providerTools(t, p, nil)
+	}()
+	runtime.GC()
+	select {
+	case <-closed:
+		t.Fatal("runtime cleanup closed storage while tools still referenced it")
+	default:
+	}
+	if got := callMemoryTool(t, tools, ReadFileToolName, `{"fileName":"notes.md"}`); got != "retained" {
+		t.Fatalf("retained tool result = %v", got)
+	}
+	runtime.KeepAlive(tools)
+	waitForFileMemoryCleanup(t, closed)
+}
+
+func waitForFileMemoryCleanup(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	for {
+		runtime.GC()
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+			t.Fatal("file memory runtime cleanup did not finish")
+		default:
+			runtime.Gosched()
+		}
+	}
+}
+
+type cleanupMemoryStore struct {
+	*memoryStore
+	close func() error
+}
+
+func (s *cleanupMemoryStore) Close() error { return s.close() }
 
 func TestProvider_Defaults(t *testing.T) {
 	p, _, session, tools := newMemoryFixture(t, Config{})

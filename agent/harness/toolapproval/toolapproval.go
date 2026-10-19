@@ -219,6 +219,7 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			}
 
 			var approvalRequests []*message.ToolApprovalRequestContent
+			var retainedHistory bool
 			for update, err := range next(ctx, callMessages, opts...) {
 				if err != nil {
 					yield(nil, err)
@@ -230,6 +231,9 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 						return
 					}
 					continue
+				}
+				if update.ConversationID != nil {
+					retainedHistory = *update.ConversationID != ""
 				}
 				stripped, requests := splitApprovalRequestContents(update)
 				approvalRequests = append(approvalRequests, requests...)
@@ -289,6 +293,9 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			// All were auto-approved — collect responses and loop to call
 			// inner agent again with the approvals injected.
 			st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, autoApproved...)
+			if retainedHistory {
+				messages = nil
+			}
 			// Non-approval updates were already yielded during streaming.
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/modelcall"
 	"github.com/microsoft/agent-framework-go/internal/otelx"
 	"github.com/microsoft/agent-framework-go/message"
 
@@ -99,7 +100,7 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 		ctx, span := m.tracer.Start(ctx, name, trace.WithTimestamp(start), trace.WithAttributes(attrs...))
 		ctx = otelx.WithTracer(ctx, m.tracer)
 		if m.enableModelTracing {
-			ctx = otelx.WithModelTracing(ctx, m.operationDuration, m.tokenUsage)
+			ctx = modelcall.WithDecorator(ctx, m.modelRun)
 		}
 
 		// Accumulated across the whole run. An agent that makes several LLM round-trips
@@ -179,7 +180,7 @@ func setUsage(span trace.Span, usage message.UsageDetails) {
 		return
 	}
 
-	span.SetAttributes(otelx.UsageAttributes(usage)...)
+	span.SetAttributes(usageAttributes(usage)...)
 }
 
 func hasTokenUsage(usage message.UsageDetails) bool {

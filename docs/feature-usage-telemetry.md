@@ -4,7 +4,7 @@ The SDK accumulates a process-wide, concurrency-safe 128-bit feature mask. Each
 bit records whether a framework-owned capability has participated in an operation
 at least once. Bits are idempotent, never reset during production, and do not
 represent invocation counts. Construction alone does not mark a feature.
-Harness construction and configuration do not mark usage either. A configured
+Harness configuration does not mark usage either. A configured
 agent marks the harness bit when its run is consumed, including when agent tracing
 is disabled.
 

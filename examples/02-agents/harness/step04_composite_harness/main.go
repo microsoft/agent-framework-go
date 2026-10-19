@@ -7,7 +7,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,26 +31,24 @@ func main() {
 	}
 }
 
-func run() (err error) {
+func run() error {
 	workingDirectory, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get working directory: %w", err)
 	}
-	h, err := harness.New(harness.Config{WorkingDirectory: workingDirectory})
+	cfg, err := harness.AgentConfig(harness.Config{WorkingDirectory: workingDirectory}, agent.Config{
+		Name:        "HarnessAssistant",
+		Middlewares: []agent.Middleware{logger},
+	})
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, h.Close()) }()
-
 	a := foundryprovider.NewAgent(
 		demo.FoundryProjectEndpoint,
 		demo.FoundryTokenCredential(),
 		foundryprovider.ModelDeployment(demo.FoundryModel),
 		foundryprovider.AgentConfig{
-			Config: h.Configure(agent.Config{
-				Name:        "HarnessAssistant",
-				Middlewares: []agent.Middleware{logger},
-			}),
+			Config:             cfg,
 			DisableStoreOutput: true,
 			Instructions:       "Help with software engineering tasks. Use memory and todos to track the current session's work.",
 		},

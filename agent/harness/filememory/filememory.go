@@ -27,6 +27,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -106,7 +108,8 @@ type ListEntry struct {
 var _ agent.ContextProvider = (*Provider)(nil)
 
 // Provider supplies memory tools, instructions, and the current memory index.
-// Use [New] to create a provider and [Provider.Close] to release its filesystem handle.
+// Use [New] to create a provider. Its filesystem handle is cleaned up when the
+// provider becomes unreachable; [Provider.Close] releases it early.
 // Provider is safe for concurrent use, including concurrent tool calls.
 type Provider struct {
 	provider         agent.ContextProvider
@@ -115,12 +118,15 @@ type Provider struct {
 	stateInitializer func(*agent.Session) State
 	stateMu          sync.Mutex
 	writeLock        *semaphore.Weighted
+	cleanup          runtime.Cleanup
 }
 
 // New creates a file memory provider rooted at rootDirectory, creating the
 // directory if needed. New directories use permission 0700 and new files use
 // 0600; existing permissions are unchanged. The provider confines file access
-// to this root. Call [Provider.Close] when the provider is no longer needed.
+// to this root. Runtime cleanup releases the handle when the provider becomes
+// unreachable; [Provider.Close] can release it earlier. Cleanup is asynchronous
+// and is not guaranteed to run before program exit.
 //
 // A zero Config uses built-in instructions and the root directory as the
 // working folder.
@@ -150,27 +156,41 @@ func newProvider(store filestore.Store, cfg Config) *Provider {
 		SourceID: "FileMemoryProvider",
 		Provide:  p.provide,
 	})
+	if closer, ok := store.(io.Closer); ok {
+		p.cleanup = runtime.AddCleanup(p, func(closer io.Closer) {
+			if err := closer.Close(); err != nil {
+				slog.Error("filememory: storage cleanup failed", "error", err)
+			}
+		}, closer)
+	}
 	return p
 }
 
-// Close releases the provider's filesystem handle. It is safe to call more than
-// once. Subsequent storage operations return an error wrapping [fs.ErrClosed].
+// Close is an optimization that releases the filesystem handle before runtime
+// cleanup. It is safe to call more than once, but must not overlap active tool
+// calls. Subsequent storage operations return an error wrapping [fs.ErrClosed].
 func (p *Provider) Close() error {
+	defer runtime.KeepAlive(p)
 	if store, ok := p.store.(io.Closer); ok {
-		return store.Close()
+		if err := store.Close(); err != nil {
+			return err
+		}
 	}
+	p.cleanup.Stop()
 	return nil
 }
 
 // Invoking adds memory instructions, tools and any existing memory index to
 // the invocation without modifying the caller's messages or options.
 func (p *Provider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	defer runtime.KeepAlive(p)
 	return p.provider.Invoking(ctx, invoking)
 }
 
 // Invoked completes the context-provider lifecycle. Memory mutations are
 // persisted by the tools, so no additional storage occurs after a run.
 func (p *Provider) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
+	defer runtime.KeepAlive(p)
 	return p.provider.Invoked(ctx, invoked)
 }
 
@@ -287,6 +307,7 @@ func (p *Provider) createTools(state State) []tool.FuncTool {
 		functool.MustNew(functool.Config{
 			Name: GrepToolName, Description: "Search memory files with a case-insensitive Go regular expression and optional filename pattern using * wildcards. Returns filenames, snippets, and 1-based matching lines with their original terminators.",
 		}, func(ctx context.Context, input grepInput) ([]searchResult, error) {
+			defer runtime.KeepAlive(p)
 			results, err := searchFiles(ctx, p.store, state.WorkingFolder, input.RegexPattern, input.GlobPattern)
 			if err != nil {
 				return nil, err
@@ -307,6 +328,7 @@ func (p *Provider) createTools(state State) []tool.FuncTool {
 }
 
 func (p *Provider) write(ctx context.Context, state State, fileName, content, description string) (string, error) {
+	defer runtime.KeepAlive(p)
 	name, err := validateMemoryFileName(fileName)
 	if err != nil {
 		return "", err
@@ -337,6 +359,7 @@ func (p *Provider) write(ctx context.Context, state State, fileName, content, de
 }
 
 func (p *Provider) read(ctx context.Context, state State, fileName string) (string, error) {
+	defer runtime.KeepAlive(p)
 	name, err := validateMemoryFileName(fileName)
 	if err != nil {
 		return "", err
@@ -352,6 +375,7 @@ func (p *Provider) read(ctx context.Context, state State, fileName string) (stri
 }
 
 func (p *Provider) delete(ctx context.Context, state State, fileName string) (string, error) {
+	defer runtime.KeepAlive(p)
 	name, err := validateMemoryFileName(fileName)
 	if err != nil {
 		return "", err
@@ -378,6 +402,7 @@ func (p *Provider) delete(ctx context.Context, state State, fileName string) (st
 }
 
 func (p *Provider) list(ctx context.Context, state State, globPattern string) ([]ListEntry, error) {
+	defer runtime.KeepAlive(p)
 	if _, err := matchesGlob("", globPattern); err != nil {
 		return nil, err
 	}
@@ -411,6 +436,7 @@ func (p *Provider) list(ctx context.Context, state State, globPattern string) ([
 }
 
 func (p *Provider) replace(ctx context.Context, state State, fileName, oldString, newString string, replaceAll bool) (string, error) {
+	defer runtime.KeepAlive(p)
 	name, err := validateMemoryFileName(fileName)
 	if err != nil {
 		return "", err
@@ -437,6 +463,7 @@ func (p *Provider) replace(ctx context.Context, state State, fileName, oldString
 }
 
 func (p *Provider) replaceLines(ctx context.Context, state State, fileName string, edits []lineEdit) (string, error) {
+	defer runtime.KeepAlive(p)
 	name, err := validateMemoryFileName(fileName)
 	if err != nil {
 		return "", err

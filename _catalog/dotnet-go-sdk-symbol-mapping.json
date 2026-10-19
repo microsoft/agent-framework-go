@@ -13527,7 +13527,7 @@
             "go": "provider.Close()",
             "go_symbols": ["agent/harness/filememory.Provider.Close"],
             "status": "adapted",
-            "note": "The Go provider owns and closes its filesystem root handle. Its synchronization needs no separate disposal."
+            "note": "Close optionally releases the owned filesystem root handle early and cancels automatic runtime cleanup after success. The runtime cleanup fallback closes storage when the provider and its tools become unreachable; synchronization needs no disposal."
           }
         },
         "constructors": {
@@ -13535,7 +13535,7 @@
             "go": "filememory.New(rootDirectory, filememory.Config{Instructions: new(\"Remember useful notes.\"), StateInitializer: initializeState})",
             "go_symbols": ["agent/harness/filememory.New", "agent/harness/filememory.Config", "agent/harness/filememory.Config.Instructions", "agent/harness/filememory.Config.StateInitializer", "agent/harness/filememory.State"],
             "status": "partial",
-            "note": "The constructor takes a filesystem root directory, returns an error if storage cannot be opened, and owns the storage lifetime. Optional instructions and the synchronous state-initializer callback use a value Config. Public custom-store injection is deferred while the experimental storage contract remains internal."
+            "note": "The constructor takes a filesystem root directory, returns setup errors, and registers runtime cleanup for owned storage; Close can release it early. Optional instructions and the synchronous state initializer use a value Config. Public custom-store injection is deferred while the experimental storage contract remains internal."
           }
         },
         "constants": {
@@ -13996,17 +13996,17 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI.Harness",
         "mapping": {
-          "go": "harness.New(harness.Config{})",
-          "go_symbols": ["agent/harness.New", "agent/harness.Harness", "agent/harness.Harness.Configure", "agent/harness.Harness.Close", "agent.Agent"],
+          "go": "harness.AgentConfig(harness.Config{}, agent.Config{})",
+          "go_symbols": ["agent/harness.AgentConfig", "agent.Config", "agent.Agent"],
           "status": "adapted",
-          "note": "Source-reviewed at ebcf4db7f9462ef6c377761e0b3159c4c5a73027, outside the current binary-extraction scope. New creates owned components; Configure applies the stable harness defaults to an ordinary provider-backed agent; Close releases owned file memory. Existing middleware and the core agent retain execution, approval, history and session lifecycle. Experimental composition options are excluded; model tracing covers supported Go model adapters."
+          "note": "Source-reviewed at ebcf4db7f9462ef6c377761e0b3159c4c5a73027, outside the current binary-extraction scope. AgentConfig applies stable defaults to an ordinary provider-backed agent and returns setup errors. File memory has runtime cleanup rather than a separate harness lifetime object. Existing middleware and the core agent retain execution, approval, history and sessions. Experimental composition options are excluded; tracing decorates supported model adapters using neutral metadata."
         },
         "constructors": {
           "HarnessAgent(IChatClient, HarnessAgentOptions, ILoggerFactory, IServiceProvider)": {
-            "go": "h, _ := harness.New(harness.Config{}); openaiprovider.NewAgent(client, openaiprovider.AgentConfig{Config: h.Configure(agent.Config{})})",
-            "go_symbols": ["agent/harness.New", "agent/harness.Harness.Configure", "agent.Config", "agent.Config.Logger", "provider/openaiprovider.NewAgent"],
+            "go": "cfg, _ := harness.AgentConfig(harness.Config{}, agent.Config{}); openaiprovider.NewAgent(client, openaiprovider.AgentConfig{Config: cfg})",
+            "go_symbols": ["agent/harness.AgentConfig", "agent.Config", "agent.Config.Logger", "provider/openaiprovider.NewAgent"],
             "status": "adapted",
-            "note": "Create the harness separately from the normal provider constructor and pass agent.Config through Configure. Common agent settings and logging remain in agent.Config; caller-supplied dependencies are constructed directly rather than resolved through IServiceProvider. Filesystem setup returns an error, and the caller closes the harness after its agents finish."
+            "note": "Pass harness options and common agent configuration to AgentConfig before calling the normal provider constructor. Agent identity and logging remain in agent.Config; dependencies are supplied directly instead of through IServiceProvider. Filesystem setup returns an error, and unreachable file-memory providers clean up their handles automatically."
           }
         },
         "constants": {
@@ -14029,9 +14029,9 @@
         },
         "properties": {
           "AIContextProviders": {
-            "go_symbols": ["agent.Config.ContextProviders", "agent/harness.Harness.Configure"],
+            "go_symbols": ["agent.Config.ContextProviders", "agent/harness.AgentConfig"],
             "status": "adapted",
-            "note": "Caller context providers follow the enabled Todo, mode, FileMemory and skills providers; Configure does not mutate the caller's slice."
+            "note": "Caller context providers follow the enabled Todo, mode, FileMemory and skills providers; AgentConfig does not mutate the caller's slice."
           },
           "AgentModeProviderOptions": {
             "go_symbols": ["agent/harness.Config.AgentMode", "agent/harness/agentmode.Config"],
@@ -14040,7 +14040,7 @@
           "AgentSkillsSource": {
             "go_symbols": ["agent/harness.Config.Skills", "agent/skills.ContextProviderOptions.Sources", "agent/skills.Source"],
             "status": "adapted",
-            "note": "Supply one or more sources through Skills.Sources. Non-nil Skills.Sources or Skills.Skills replaces default working-directory file discovery, including explicit empty collections."
+            "note": "Supply sources through Skills.Sources. Non-nil Skills.Sources or Skills.Skills replaces default working-directory discovery, including empty collections. Default discovery and resource access exclude the reserved agent-file-memory subtree; caller sources retain their own access policy."
           },
           "BackgroundAgents": {
             "go_symbols": [],
@@ -14055,9 +14055,9 @@
             "experimental": "MAAI001"
           },
           "ChatHistoryProvider": {
-            "go_symbols": ["agent.Config.HistoryProvider", "agent/harness.Harness.Configure"],
+            "go_symbols": ["agent.Config.HistoryProvider", "agent/harness.AgentConfig"],
             "status": "adapted",
-            "note": "Configure preserves supplied history or creates session-backed in-memory history. It enables per-service-call persistence, defaults warning/throwing on history conflicts to false, and retains explicit caller conflict settings."
+            "note": "AgentConfig preserves supplied history or creates session-backed in-memory history. It enables per-service-call persistence, defaults warning/throwing on history conflicts to false, and retains explicit caller conflict settings."
           },
           "ChatOptions": {
             "go_symbols": ["agent.Config.Tools", "agent.Config.RunOptions", "provider/openaiprovider.AgentConfig.Instructions", "provider/openaiprovider.ResponsesNewParams", "provider/openaiprovider.ChatCompletionNewParams", "provider/anthropicprovider.MessageNewParams", "provider/geminiprovider.GenerateContentConfig"],
@@ -14141,7 +14141,7 @@
           "HarnessInstructions": {
             "go_symbols": ["agent/harness.Config.Instructions", "agent/harness.DefaultInstructions"],
             "status": "adapted",
-            "note": "Nil uses the built-in guidance; an empty or whitespace-only string omits harness instructions. Configure prepends nonblank guidance before caller run options without replacing caller instructions. Go adapters retain their existing instruction-joining rules."
+            "note": "Nil uses the built-in guidance; an empty or whitespace-only string omits harness instructions. AgentConfig prepends nonblank guidance before caller run options without replacing caller instructions. Go adapters retain their existing instruction-joining rules."
           },
           "Id": {
             "go_symbols": ["agent.Config.ID"],
@@ -14195,7 +14195,7 @@
             "go": "harness.Config{}",
             "go_symbols": ["agent/harness.Config"],
             "status": "adapted",
-            "note": "Use the zero-value Go configuration for enabled stable components. Common agent settings are passed separately to Configure, and tool-invocation settings remain on the normal provider configuration."
+            "note": "Use the zero-value Go configuration for enabled stable components. Common agent settings are passed separately to AgentConfig, and tool-invocation settings remain on the normal provider configuration."
           }
         }
       },
@@ -24628,17 +24628,17 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI.Harness",
         "mapping": {
-          "go": "harness.New(harness.Config{})",
-          "go_symbols": ["agent/harness.New", "agent/harness.Harness.Configure"],
+          "go": "harness.AgentConfig(harness.Config{}, agent.Config{})",
+          "go_symbols": ["agent/harness.AgentConfig"],
           "status": "adapted",
-          "note": "Source-reviewed at ebcf4db7f9462ef6c377761e0b3159c4c5a73027, outside the current binary-extraction scope. Go uses a setup value and the normal provider constructor rather than an extension-method container."
+          "note": "Source-reviewed at ebcf4db7f9462ef6c377761e0b3159c4c5a73027, outside the current binary-extraction scope. Go uses a top-level configuration function and the normal provider constructor rather than an extension-method container."
         },
         "methods": {
           "AsHarnessAgent(IChatClient, HarnessAgentOptions, ILoggerFactory, IServiceProvider) -> HarnessAgent": {
-            "go": "h, _ := harness.New(harness.Config{}); openaiprovider.NewAgent(client, openaiprovider.AgentConfig{Config: h.Configure(agent.Config{})})",
-            "go_symbols": ["agent/harness.New", "agent/harness.Harness.Configure", "provider/openaiprovider.NewAgent", "provider/openaiprovider.AgentConfig"],
+            "go": "cfg, _ := harness.AgentConfig(harness.Config{}, agent.Config{}); openaiprovider.NewAgent(client, openaiprovider.AgentConfig{Config: cfg})",
+            "go_symbols": ["agent/harness.AgentConfig", "provider/openaiprovider.NewAgent", "provider/openaiprovider.AgentConfig"],
             "status": "adapted",
-            "note": "Apply harness configuration before calling the ordinary provider constructor. The result remains an agent.Agent, while the caller explicitly closes the separate resource-owning harness."
+            "note": "Apply AgentConfig before calling the ordinary provider constructor. The result remains an agent.Agent, with automatic file-memory cleanup rather than a separate resource-owning harness object."
           }
         }
       },

@@ -3,8 +3,7 @@
 // Package harness assembles middleware, context providers, and history defaults
 // for provider-backed agents.
 //
-// Create a harness with [New], pass [Harness.Configure]'s result to the normal
-// provider constructor, and call [Harness.Close] after its agents finish.
+// Pass [AgentConfig]'s result to the normal provider constructor.
 // The harness reuses the agent lifecycle and the provider's tool-invocation
 // middleware. Tracing covers agent runs, function tools, and model calls made by
 // supported model adapters.
@@ -13,6 +12,7 @@ package harness
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"iter"
 	"os"
 	"path/filepath"
@@ -48,12 +48,12 @@ const DefaultInstructions = `You are a helpful AI assistant that uses tools to c
 
 // Config selects harness components. Its zero value enables the defaults.
 // Agent identity, history, additional tools and providers belong in the
-// [agent.Config] passed to [Harness.Configure]. Tool-invocation settings remain
+// [agent.Config] passed to [AgentConfig]. Tool-invocation settings remain
 // in the provider constructor's existing configuration.
 type Config struct {
 	// WorkingDirectory supplies default skills and the agent-file-memory
 	// directory. Empty uses the current directory. Relative paths are resolved
-	// when New is called.
+	// when AgentConfig is called.
 	WorkingDirectory string
 
 	// Instructions replaces DefaultInstructions. Nil uses the defaults.
@@ -86,112 +86,92 @@ type Config struct {
 	OpenTelemetry        otelprovider.MiddlewareConfig
 }
 
-// Harness owns the default components used by configured agents.
-// It is not an agent and does not execute requests itself.
-// Keep it open while any configured agent uses its components.
-// Configure and Close support concurrent use; callers must finish using
-// file memory before closing it.
-type Harness struct {
-	providers    []agent.ContextProvider
-	middlewares  []agent.Middleware
-	instructions string
-	webSearch    bool
-	memory       *filememory.Provider
-}
+const memoryDirectory = "agent-file-memory"
 
-// New creates a harness and opens its default file memory, unless disabled.
-// Memory files live under WorkingDirectory/agent-file-memory, with a unique
-// persisted working folder per session. Missing memory directories are created.
+// AgentConfig adds harness defaults to cfg without modifying its input slices.
+// Call it once for each agent configuration, before the provider constructor.
 //
-// Close the harness when its configured agents are no longer needed.
+// Caller middleware remains outermost; built-in context providers precede
+// caller providers. Harness instructions precede caller run options. Existing
+// history, message injection, tools and explicit history-conflict settings are
+// retained. Per-service-call history persistence is enabled.
+//
+// File memory uses a unique persisted working folder per session below
+// WorkingDirectory/agent-file-memory. That subtree is excluded from default
+// skill discovery and resource access. Its handles are cleaned up automatically
+// when the provider is no longer reachable; [filememory.Provider.Close] can
+// release them earlier.
+//
+// Provider constructors remain responsible for tool-invocation configuration.
 // Configuration errors from component constructors retain those constructors'
 // panic contracts; filesystem setup failures return an error.
-func New(cfg Config) (*Harness, error) {
-	h := &Harness{
-		instructions: DefaultInstructions,
-		webSearch:    !cfg.DisableWebSearch,
-	}
-	if cfg.Instructions != nil {
-		h.instructions = *cfg.Instructions
-	}
-	h.middlewares = append(h.middlewares, agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+func AgentConfig(settings Config, cfg agent.Config) (agent.Config, error) {
+	middlewares := slices.Clone(cfg.Middlewares)
+	middlewares = append(middlewares, agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			telemetry.MarkUsed(telemetry.FeatureHarnessAgent)
 			next(ctx, messages, options...)(yield)
 		}
 	}))
-	if !cfg.DisableToolApproval {
-		h.middlewares = append(h.middlewares, toolapproval.New(cfg.ToolApproval))
+	if !settings.DisableToolApproval {
+		middlewares = append(middlewares, toolapproval.New(settings.ToolApproval))
 	}
-	if !cfg.DisableOpenTelemetry {
-		tracing := cfg.OpenTelemetry
+	if !settings.DisableOpenTelemetry {
+		tracing := settings.OpenTelemetry
 		tracing.EnableModelTracing = true
-		h.middlewares = append(h.middlewares, otelprovider.NewMiddleware(tracing))
+		middlewares = append(middlewares, otelprovider.NewMiddleware(tracing))
 	}
-	if !cfg.DisableTodo {
-		h.providers = append(h.providers, todo.New(nil))
+	providers := make([]agent.ContextProvider, 0, 4+len(cfg.ContextProviders))
+	if !settings.DisableTodo {
+		providers = append(providers, todo.New(nil))
 	}
-	if !cfg.DisableAgentMode {
-		h.providers = append(h.providers, agentmode.New(cfg.AgentMode))
+	if !settings.DisableAgentMode {
+		providers = append(providers, agentmode.New(settings.AgentMode))
 	}
 
-	skillsConfig := cfg.Skills
-	defaultSkills := !cfg.DisableSkills && skillsConfig.Skills == nil && skillsConfig.Sources == nil
+	skillsConfig := settings.Skills
+	defaultSkills := !settings.DisableSkills && skillsConfig.Skills == nil && skillsConfig.Sources == nil
 	var workingDirectory string
-	if !cfg.DisableFileMemory || defaultSkills {
+	if !settings.DisableFileMemory || defaultSkills {
 		var err error
-		workingDirectory, err = filepath.Abs(cfg.WorkingDirectory)
+		workingDirectory, err = filepath.Abs(settings.WorkingDirectory)
 		if err != nil {
-			return nil, fmt.Errorf("harness: resolve working directory: %w", err)
+			return agent.Config{}, fmt.Errorf("harness: resolve working directory: %w", err)
 		}
 	}
 	var skillsProvider agent.ContextProvider
-	if !cfg.DisableSkills {
+	if !settings.DisableSkills {
 		if defaultSkills {
 			skillsConfig.Sources = []skills.Source{
-				fsskills.NewSourceOptions(fsskills.SourceOptions{Logger: skillsConfig.Logger}, os.DirFS(workingDirectory)),
+				fsskills.NewSourceOptions(fsskills.SourceOptions{Logger: skillsConfig.Logger}, defaultSkillsFS(workingDirectory)),
 			}
 		}
 		skillsProvider = skills.NewContextProvider(skillsConfig)
 	}
-	if !cfg.DisableFileMemory {
-		memory, err := filememory.New(filepath.Join(workingDirectory, "agent-file-memory"), filememory.Config{
+	if !settings.DisableFileMemory {
+		memory, err := filememory.New(filepath.Join(workingDirectory, memoryDirectory), filememory.Config{
 			StateInitializer: func(*agent.Session) filememory.State {
 				return filememory.State{WorkingFolder: uuid.NewString()}
 			},
 		})
 		if err != nil {
-			return nil, fmt.Errorf("harness: create file memory: %w", err)
+			return agent.Config{}, fmt.Errorf("harness: create file memory: %w", err)
 		}
-		h.memory = memory
-		h.providers = append(h.providers, memory)
+		providers = append(providers, memory)
 	}
 	if skillsProvider != nil {
-		h.providers = append(h.providers, skillsProvider)
+		providers = append(providers, skillsProvider)
 	}
-	return h, nil
-}
-
-// Configure adds harness defaults to cfg without modifying its input slices.
-// Call it once for each agent configuration, before the provider constructor.
-//
-// Existing middleware remains outermost; harness approval and tracing run
-// inside it. Built-in context providers precede caller providers. Harness
-// instructions precede caller run options. Existing history, message injection,
-// and explicit history-conflict settings are retained. Per-service-call history
-// persistence is enabled.
-//
-// Configure adds hosted web search unless disabled or already present in
-// cfg.Tools or cfg.RunOptions. It does not add tool-invocation middleware;
-// the provider constructor owns that configuration. The caller continues to
-// own supplied components.
-func (h *Harness) Configure(cfg agent.Config) agent.Config {
-	cfg.Middlewares = append(slices.Clone(cfg.Middlewares), h.middlewares...)
-	cfg.ContextProviders = append(slices.Clone(h.providers), cfg.ContextProviders...)
-	if strings.TrimSpace(h.instructions) != "" {
-		cfg.RunOptions = append([]agent.Option{agent.WithInstructions(h.instructions)}, cfg.RunOptions...)
+	cfg.Middlewares = middlewares
+	cfg.ContextProviders = append(providers, cfg.ContextProviders...)
+	instructions := DefaultInstructions
+	if settings.Instructions != nil {
+		instructions = *settings.Instructions
 	}
-	if h.webSearch {
+	if strings.TrimSpace(instructions) != "" {
+		cfg.RunOptions = append([]agent.Option{agent.WithInstructions(instructions)}, cfg.RunOptions...)
+	}
+	if !settings.DisableWebSearch {
 		hasWebSearch := slices.ContainsFunc(cfg.Tools, func(t tool.Tool) bool {
 			_, ok := t.(*hostedtool.WebSearch)
 			return ok
@@ -221,15 +201,49 @@ func (h *Harness) Configure(cfg agent.Config) agent.Config {
 		cfg.ThrowOnHistoryProviderConflict = new(false)
 	}
 	cfg.RequirePerServiceCallHistoryPersistence = true
-	return cfg
+	return cfg, nil
 }
 
-// Close releases only file memory created by New. It does not close components
-// supplied by callers. It is safe to call more than once.
-// Subsequent operations on that file memory report an error wrapping fs.ErrClosed.
-func (h *Harness) Close() error {
-	if h.memory != nil {
-		return h.memory.Close()
+type defaultSkillsFS string
+
+func checkSkillPath(name, op string) error {
+	first, _, _ := strings.Cut(name, "/")
+	if !fs.ValidPath(name) || strings.EqualFold(first, memoryDirectory) {
+		return &fs.PathError{Op: op, Path: name, Err: fs.ErrNotExist}
 	}
 	return nil
+}
+
+func (f defaultSkillsFS) Open(name string) (fs.File, error) {
+	if err := checkSkillPath(name, "open"); err != nil {
+		return nil, err
+	}
+	return os.DirFS(string(f)).Open(name)
+}
+
+func (f defaultSkillsFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	if err := checkSkillPath(name, "readdir"); err != nil {
+		return nil, err
+	}
+	entries, err := fs.ReadDir(os.DirFS(string(f)), name)
+	if name == "." {
+		entries = slices.DeleteFunc(entries, func(entry fs.DirEntry) bool {
+			return strings.EqualFold(entry.Name(), memoryDirectory)
+		})
+	}
+	return entries, err
+}
+
+func (f defaultSkillsFS) Lstat(name string) (fs.FileInfo, error) {
+	if err := checkSkillPath(name, "lstat"); err != nil {
+		return nil, err
+	}
+	return fs.Lstat(os.DirFS(string(f)), name)
+}
+
+func (f defaultSkillsFS) ReadLink(name string) (string, error) {
+	if err := checkSkillPath(name, "readlink"); err != nil {
+		return "", err
+	}
+	return fs.ReadLink(os.DirFS(string(f)), name)
 }
