@@ -83,6 +83,7 @@ jobs:
     needs: [test, copilot-integration]
     runs-on: ubuntu-latest
     if: ${{ always() }}
+    permissions: {}
     steps:
       - name: Result
         run: |
