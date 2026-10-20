@@ -2,7 +2,6 @@
 description: Nightly agent that ports .NET Agent Framework bug fixes and test parity into the Go SDK without changing public API, and opens a PR
 intent: Correct existing Go behavior and test gaps using verified .NET evidence without adding public API or capabilities
 tracker-id: dotnet-port-fixes-nightly
-model: "gpt-5.6"
 engine:
    id: copilot
 sandbox:

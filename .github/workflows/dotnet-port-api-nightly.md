@@ -2,7 +2,6 @@
 description: Nightly agent that ports assessed .NET catalog gaps into the Go SDK at the inventoried source revision
 intent: Close verified Go API and feature gaps against the .NET version recorded by the symbol inventory
 tracker-id: dotnet-port-api-nightly
-model: "gpt-5.6"
 engine:
    id: copilot
 sandbox:

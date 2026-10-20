@@ -4,6 +4,11 @@
       "repo": "actions/github-script",
       "version": "v9",
       "sha": "3a2844b7e9c422d3c10d287c895573f7108da1b3"
+    },
+    "github/gh-aw-actions/setup@v0.92.0": {
+      "repo": "github/gh-aw-actions/setup",
+      "version": "v0.92.0",
+      "sha": "458b269006dcf88e3b5496b6fbecabe4b9a0f954"
     }
   },
   "containers": {
