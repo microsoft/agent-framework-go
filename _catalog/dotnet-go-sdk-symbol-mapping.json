@@ -11649,7 +11649,7 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "agent/skills.ContextProviderOptions{}",
+          "go": "skills.ContextProviderOptions{}",
           "go_symbols": ["agent/skills.ContextProviderOptions"],
           "status": "adapted",
           "note": "Go configures caching directly on ContextProviderOptions rather than a separate decorator-options type."
@@ -11667,7 +11667,7 @@
         },
         "constructors": {
           "CachingAgentSkillsSourceOptions()": {
-            "go": "agent/skills.ContextProviderOptions{}",
+            "go": "skills.ContextProviderOptions{}",
             "go_symbols": ["agent/skills.ContextProviderOptions"],
             "status": "adapted",
             "note": "Go has no separate decorator-options constructor; caching fields are set on the zero-value ContextProviderOptions."
@@ -12060,7 +12060,7 @@
           "go": "memory.NewHistoryProvider(store, \"history\", dims, stateInit, memory.Config{})",
           "go_symbols": ["agent/memory.HistoryProvider", "agent/memory.NewHistoryProvider"],
           "status": "adapted",
-          "note": "Go returns the provider and an error instead of throwing; it stores through the shared vectordata.Store/Collection abstractions rather than VectorStore/VectorStoreCollection."
+          "note": "Go returns the provider and an error for collection-configuration failures, but panics on invalid arguments; it stores through the shared vectordata.Store/Collection abstractions rather than VectorStore/VectorStoreCollection."
         },
         "properties": {
           "StateKeys": {
@@ -12081,7 +12081,7 @@
             "go": "memory.NewHistoryProvider(store, collectionName, vectorDimensions, stateInitializer, memory.Config{})",
             "go_symbols": ["agent/memory.NewHistoryProvider", "agent/memory.Config"],
             "status": "adapted",
-            "note": "Go takes a *vectordata.Store, returns (*HistoryProvider, error), and configures options through memory.Config instead of a nullable options/logger-factory pair."
+            "note": "Go takes a *vectordata.Store, panics on invalid arguments, returns (*HistoryProvider, error) for collection-configuration failures, and configures options through memory.Config instead of a nullable options/logger-factory pair."
           }
         }
       },
