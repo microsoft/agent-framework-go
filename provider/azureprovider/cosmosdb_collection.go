@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"
 	"github.com/google/uuid"
@@ -65,6 +66,9 @@ func newCosmosCollection(store *cosmosDBStore, name string, keyType, recordType 
 		return nil, cosmosFailure(store.databaseName, name, "Collection", err)
 	}
 	for _, property := range model.Properties {
+		if storageName := propertyStorageName(property); storageName == cosmosScoreField {
+			return nil, cosmosFailure(store.databaseName, name, "Collection", fmt.Errorf("storage name %q is reserved for search scores", storageName))
+		}
 		switch p := property.(type) {
 		case *providerservices.KeyPropertyModel:
 			c.key = p
@@ -287,8 +291,10 @@ func cosmosVectorDataType(typ reflect.Type) (azcosmos.VectorDataType, bool) {
 }
 
 func escapeCosmosPath(value string) string {
-	value = strings.ReplaceAll(value, "~", "~0")
-	return strings.ReplaceAll(value, "/", "~1")
+	if validIdentifier(value) {
+		return value
+	}
+	return cosmosJSONString(value)
 }
 
 func propertyStorageName(property providerservices.PropertyModel) string {
@@ -366,7 +372,7 @@ func (c *cosmosCollection) GetFiltered(ctx context.Context, filter vectordata.Fi
 			yield(zero, cosmosFailure(c.store.databaseName, c.name, "GetFiltered", err))
 			return
 		}
-		query := "SELECT VALUE c FROM c"
+		query := "SELECT " + strings.Join(c.selectFields(opts.IncludeVectors), ", ") + " FROM c"
 		if filterSQL != "" {
 			query += " WHERE " + filterSQL
 		}
@@ -563,7 +569,10 @@ func (c *cosmosCollection) encodeRecord(record any, index int, generated map[str
 			return nil, err
 		}
 		if found {
-			document[property.StorageName] = value
+			document[property.StorageName], err = cosmosDataJSON(value)
+			if err != nil {
+				return nil, fmt.Errorf("property %q: %w", property.Name, err)
+			}
 		}
 	}
 	for _, property := range c.vectors {
@@ -587,6 +596,44 @@ func (c *cosmosCollection) encodeRecord(record any, index int, generated map[str
 		document[property.StorageName] = cosmosVectorJSON(vector)
 	}
 	return document, nil
+}
+
+func cosmosDataJSON(value any) (any, error) {
+	reflected := reflect.ValueOf(value)
+	for reflected.IsValid() && reflected.Kind() == reflect.Pointer {
+		if reflected.IsNil() {
+			return nil, nil
+		}
+		reflected = reflected.Elem()
+	}
+	if !reflected.IsValid() {
+		return nil, nil
+	}
+	if instant, ok := reflected.Interface().(time.Time); ok {
+		instant = instant.UTC()
+		if _, err := instant.MarshalJSON(); err != nil {
+			return nil, err
+		}
+		return instant.Format("2006-01-02T15:04:05.000000000Z"), nil
+	}
+	if reflected.Kind() == reflect.Slice || reflected.Kind() == reflect.Array {
+		element := reflected.Type().Elem()
+		if element == reflect.TypeFor[time.Time]() || element.Kind() == reflect.Interface {
+			if reflected.Kind() == reflect.Slice && reflected.IsNil() {
+				return nil, nil
+			}
+			values := make([]any, reflected.Len())
+			for i := range reflected.Len() {
+				var err error
+				values[i], err = cosmosDataJSON(reflected.Index(i).Interface())
+				if err != nil {
+					return nil, fmt.Errorf("element %d: %w", i, err)
+				}
+			}
+			return values, nil
+		}
+	}
+	return value, nil
 }
 
 func (c *cosmosCollection) decodeRecord(document map[string]json.RawMessage, includeVectors bool) (any, error) {

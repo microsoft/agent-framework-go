@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"
@@ -728,6 +729,7 @@ func (q cosmosTestQuery) parameter(name string) string {
 type cosmosTestProtocol struct {
 	mu         sync.Mutex
 	requests   int
+	containers []azcosmos.ContainerProperties
 	documents  map[string]map[string]json.RawMessage
 	partitions []string
 	queries    []cosmosTestQuery
@@ -769,6 +771,17 @@ func newCosmosTestStore(t *testing.T, config azureprovider.CosmosDBConfig, query
 			} else {
 				writeJSON(map[string]any{"Documents": []any{}})
 			}
+		case r.Method == http.MethodPost && r.URL.Path == "/dbs/sample/colls":
+			var properties azcosmos.ContainerProperties
+			if err := json.NewDecoder(r.Body).Decode(&properties); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			protocol.mu.Lock()
+			protocol.containers = append(protocol.containers, properties)
+			protocol.mu.Unlock()
+			w.WriteHeader(http.StatusCreated)
+			writeJSON(properties)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/docs"):
 			var document map[string]json.RawMessage
 			if err := json.NewDecoder(r.Body).Decode(&document); err != nil {
@@ -1550,6 +1563,7 @@ func TestCosmosDBFilteredPagingPropagatesFailuresAndCancellation(t *testing.T) {
 					cancel()
 				}
 			}
+
 			if results != 1 || terminalErr == nil {
 				t.Fatalf("query yielded %d results with error %v", results, terminalErr)
 			}
@@ -1561,6 +1575,314 @@ func TestCosmosDBFilteredPagingPropagatesFailuresAndCancellation(t *testing.T) {
 				responseErr, ok := errors.AsType[*azcore.ResponseError](terminalErr)
 				if !ok || responseErr.StatusCode != http.StatusBadRequest || pages != 2 {
 					t.Fatalf("failed query: pages=%d, err=%v", pages, terminalErr)
+				}
+			}
+		})
+	}
+}
+
+func TestCosmosDBRejectsReservedScoreStorageName(t *testing.T) {
+	type record struct {
+		ID     string
+		Value  float64
+		Vector []float32
+	}
+	for _, test := range []struct {
+		name     string
+		property vectordata.Property
+	}{
+		{"data", &vectordata.DataProperty{Name: "Value", StorageName: "__cosmos_score", Type: reflect.TypeFor[float64]()}},
+		{"vector", &vectordata.VectorProperty{Name: "Vector", StorageName: "__cosmos_score", Type: reflect.TypeFor[[]float32](), Dimensions: 2}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, protocol := newCosmosTestStore(t, azureprovider.CosmosDBConfig{}, nil)
+			definition := &vectordata.Definition{Properties: []vectordata.Property{
+				&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
+				test.property,
+			}}
+			_, err := vectordata.GetCollection[string, record](store.Store, "records", definition)
+			if err == nil || !strings.Contains(err.Error(), "__cosmos_score") {
+				t.Fatalf("typed reserved storage name error = %v", err)
+			}
+			if _, err := store.DynamicCollection("records", definition); err == nil || !strings.Contains(err.Error(), "__cosmos_score") {
+				t.Fatalf("dynamic reserved storage name error = %v", err)
+			}
+			protocol.mu.Lock()
+			defer protocol.mu.Unlock()
+			if protocol.requests != 0 {
+				t.Fatalf("invalid schema made %d service requests", protocol.requests)
+			}
+		})
+	}
+}
+
+func TestCosmosDBSpecialCharacterStoragePaths(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		storage    string
+		path       string
+		vectorPath string
+	}{
+		{"tilde", "field~name", `/"field~name"`, `/"field~nameVector"`},
+		{"slash", "field/name", `/"field/name"`, `/"field/nameVector"`},
+		{"hyphen", "field-name", `/"field-name"`, `/"field-nameVector"`},
+		{"space", "field name", `/"field name"`, `/"field nameVector"`},
+		{"wildcards", "field[?*]", `/"field[?*]"`, `/"field[?*]Vector"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store, protocol := newCosmosTestStore(t, azureprovider.CosmosDBConfig{PartitionKeyProperties: []string{"Text"}}, nil)
+			collection, err := store.DynamicCollection("records", &vectordata.Definition{Properties: []vectordata.Property{
+				&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
+				&vectordata.DataProperty{Name: "Text", StorageName: test.storage, Type: reflect.TypeFor[string](), IsIndexed: true, IsFullTextIndexed: true},
+				&vectordata.VectorProperty{Name: "Vector", StorageName: test.storage + "Vector", Type: reflect.TypeFor[[]float32](), Dimensions: 2},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := collection.EnsureExists(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			protocol.mu.Lock()
+			properties := protocol.containers[0]
+			protocol.mu.Unlock()
+			if !reflect.DeepEqual(properties.PartitionKeyDefinition.Paths, []string{test.path}) {
+				t.Fatalf("partition paths = %v, want %s", properties.PartitionKeyDefinition.Paths, test.path)
+			}
+			if properties.FullTextPolicy == nil || len(properties.FullTextPolicy.FullTextPaths) != 1 ||
+				properties.FullTextPolicy.FullTextPaths[0].Path != test.path {
+				t.Fatalf("full-text policy = %+v", properties.FullTextPolicy)
+			}
+			if properties.VectorEmbeddingPolicy == nil || len(properties.VectorEmbeddingPolicy.VectorEmbeddings) != 1 ||
+				properties.VectorEmbeddingPolicy.VectorEmbeddings[0].Path != test.vectorPath {
+				t.Fatalf("vector policy = %+v", properties.VectorEmbeddingPolicy)
+			}
+			indexes := properties.IndexingPolicy
+			if indexes == nil || !reflect.DeepEqual(indexes.IncludedPaths, []azcosmos.IncludedPath{{Path: test.path + "/?"}, {Path: "/*"}}) ||
+				!reflect.DeepEqual(indexes.ExcludedPaths, []azcosmos.ExcludedPath{{Path: test.vectorPath + "/*"}}) ||
+				len(indexes.FullTextIndexes) != 1 || indexes.FullTextIndexes[0].Path != test.path ||
+				len(indexes.VectorIndexes) != 1 || indexes.VectorIndexes[0].Path != test.vectorPath {
+				t.Fatalf("index paths = %+v", indexes)
+			}
+			record := map[string]any{"ID": "item-1", "Text": "tenant-1", "Vector": []float32{1, 2}}
+			if err := collection.Upsert(t.Context(), record); err != nil {
+				t.Fatal(err)
+			}
+			key := azureprovider.CosmosKey{DocumentID: "item-1", PartitionKey: []any{"tenant-1"}}
+			got, found, err := collection.Get(t.Context(), key, &vectordata.RecordRetrievalOptions{IncludeVectors: true})
+			if err != nil || !found || !reflect.DeepEqual(got, record) {
+				t.Fatalf("special-name retrieval = (%#v, %v, %v)", got, found, err)
+			}
+			protocol.mu.Lock()
+			defer protocol.mu.Unlock()
+			document := protocol.documents["item-1"]
+			if string(document[test.storage]) != `"tenant-1"` || string(document[test.storage+"Vector"]) != "[1,2]" ||
+				protocol.partitions[0] != `["tenant-1"]` {
+				t.Fatalf("special-name document = %s, partitions = %v", document, protocol.partitions)
+			}
+		})
+	}
+}
+
+func TestCosmosDBTimestampsUseFixedWidthUTC(t *testing.T) {
+	type record struct {
+		ID       string       `vectordata:"key"`
+		Category string       `vectordata:"data,indexed,fulltext"`
+		When     time.Time    `vectordata:"data,indexed"`
+		Nano     time.Time    `vectordata:"data"`
+		Optional *time.Time   `vectordata:"data,indexed"`
+		Missing  *time.Time   `vectordata:"data"`
+		Times    []time.Time  `vectordata:"data"`
+		Array    [2]time.Time `vectordata:"data"`
+		Pointer  *[]time.Time `vectordata:"data"`
+		NilTimes []time.Time  `vectordata:"data"`
+		Empty    []time.Time  `vectordata:"data"`
+		Vector   []float32    `vectordata:"vector,dimensions=2"`
+	}
+	whole := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	nano := whole.Add(time.Nanosecond)
+	east, west := time.FixedZone("east", 3*60*60), time.FixedZone("west", -5*60*60)
+	fraction := whole.Add(500 * time.Millisecond).In(east)
+	const wholeJSON = `"2026-01-01T00:00:00.000000000Z"`
+	const fractionJSON = `"2026-01-01T00:00:00.500000000Z"`
+	const timesJSON = "[" + wholeJSON + "," + fractionJSON + "]"
+	times := []time.Time{whole.In(west), fraction}
+	input := &record{
+		ID: "item-1", Category: "group", When: whole, Nano: nano, Optional: &fraction,
+		Times: times, Array: [2]time.Time{times[0], times[1]}, Pointer: &times,
+		Empty: []time.Time{}, Vector: []float32{1, 2},
+	}
+	store, protocol := newCosmosTestStore(t, azureprovider.CosmosDBConfig{PartitionKeyProperties: []string{"Category"}}, nil)
+	collection, err := vectordata.GetCollection[azureprovider.CosmosKey, *record](store.Store, "records", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := collection.Upsert(t.Context(), input); err != nil {
+		t.Fatal(err)
+	}
+	protocol.mu.Lock()
+	document := protocol.documents[input.ID]
+	protocol.mu.Unlock()
+	for property, want := range map[string]string{
+		"When": wholeJSON, "Nano": `"2026-01-01T00:00:00.000000001Z"`,
+		"Optional": fractionJSON, "Missing": "null", "Times": timesJSON, "Array": timesJSON,
+		"Pointer": timesJSON, "NilTimes": "null", "Empty": "[]",
+	} {
+		if got := string(document[property]); got != want {
+			t.Errorf("stored %s = %s, want %s", property, got, want)
+		}
+	}
+	if string(document["When"]) >= string(document["Nano"]) || string(document["Nano"]) >= string(document["Optional"]) {
+		t.Fatal("stored timestamps do not sort chronologically")
+	}
+	if input.Optional.Location() != east || input.Times[0].Location() != west ||
+		input.Array[1].Location() != east || input.Pointer != &times || (*input.Pointer)[1].Location() != east {
+		t.Fatal("timestamp normalization modified the input record")
+	}
+	key := azureprovider.CosmosKey{DocumentID: input.ID, PartitionKey: []any{"group"}}
+	got, found, err := collection.Get(t.Context(), key, nil)
+	if err != nil || !found || !got.When.Equal(whole) || !got.Nano.Equal(nano) ||
+		got.Optional == nil || !got.Optional.Equal(fraction) || got.Missing != nil ||
+		len(got.Times) != 2 || !got.Times[0].Equal(times[0]) || !got.Times[1].Equal(fraction) ||
+		!got.Array[0].Equal(times[0]) || !got.Array[1].Equal(fraction) || got.Pointer == nil ||
+		len(*got.Pointer) != 2 || !(*got.Pointer)[1].Equal(fraction) || got.NilTimes != nil || got.Empty == nil {
+		t.Fatalf("timestamp round trip = (%+v, %v, %v)", got, found, err)
+	}
+	for _, test := range []struct {
+		name     string
+		filter   vectordata.Filter
+		expected string
+	}{
+		{"equal", vectordata.Filter{Operator: vectordata.Equal, Property: "When", Value: fraction}, fractionJSON},
+		{"not-equal", vectordata.Filter{Operator: vectordata.NotEqual, Property: "When", Value: fraction}, fractionJSON},
+		{"greater", vectordata.Filter{Operator: vectordata.GreaterThan, Property: "When", Value: fraction}, fractionJSON},
+		{"greater-equal", vectordata.Filter{Operator: vectordata.GreaterThanOrEqual, Property: "When", Value: fraction}, fractionJSON},
+		{"less", vectordata.Filter{Operator: vectordata.LessThan, Property: "When", Value: fraction}, fractionJSON},
+		{"less-equal", vectordata.Filter{Operator: vectordata.LessThanOrEqual, Property: "When", Value: fraction}, fractionJSON},
+		{"nullable", vectordata.Filter{Operator: vectordata.Equal, Property: "Optional", Value: &fraction}, fractionJSON},
+		{"contains", vectordata.Filter{Operator: vectordata.Contains, Property: "Times", Value: fraction}, fractionJSON},
+		{"membership", vectordata.Filter{Operator: vectordata.In, Property: "When", Value: times}, timesJSON},
+		{"nullable-membership", vectordata.Filter{Operator: vectordata.In, Property: "Optional", Value: []*time.Time{&whole, nil, &fraction}}, "[" + wholeJSON + ",null," + fractionJSON + "]"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			filter := vectordata.Filter{Operator: vectordata.And, Operands: []vectordata.Filter{
+				{Operator: vectordata.Equal, Property: "Category", Value: "group"},
+				test.filter,
+			}}
+			protocol.mu.Lock()
+			start := len(protocol.queries)
+			protocol.mu.Unlock()
+			collect(t, collection.GetFiltered(t.Context(), filter, 1,
+				&vectordata.FilteredRecordRetrievalOptions{OrderBy: []vectordata.Sort{{Property: "When"}}}))
+			collect(t, collection.Search(t.Context(), []float32{1, 2}, 1, &vectordata.SearchOptions{Filter: &filter}))
+			hybrid := collection.(vectordata.KeywordHybridSearcher[*record])
+			collect(t, hybrid.HybridSearch(t.Context(), []float32{1, 2}, []string{"group"}, 1,
+				&vectordata.HybridSearchOptions{Filter: &filter}))
+			protocol.mu.Lock()
+			defer protocol.mu.Unlock()
+			if len(protocol.queries)-start != 3 {
+				t.Fatalf("sent %d timestamp queries, want 3", len(protocol.queries)-start)
+			}
+			for _, query := range protocol.queries[start:] {
+				if query.parameter("@p1") != test.expected {
+					t.Errorf("timestamp filter parameter = %s, want %s", query.parameter("@p1"), test.expected)
+				}
+			}
+		})
+	}
+}
+
+func TestCosmosDBInvalidTimestampsFailBeforeIO(t *testing.T) {
+	type record struct {
+		ID   string    `vectordata:"key"`
+		When time.Time `vectordata:"data"`
+	}
+	store, protocol := newCosmosTestStore(t, azureprovider.CosmosDBConfig{}, nil)
+	collection, err := vectordata.GetCollection[string, record](store.Store, "records", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+	if err := collection.Upsert(t.Context(), record{ID: "item-1", When: invalid}); err == nil {
+		t.Fatal("invalid stored timestamp was accepted")
+	}
+	errorsSeen := 0
+	for _, err := range collection.GetFiltered(t.Context(), vectordata.Filter{
+		Operator: vectordata.Equal, Property: "When", Value: invalid,
+	}, 1, nil) {
+		if err == nil {
+			t.Fatal("invalid timestamp filter yielded a record")
+		}
+		errorsSeen++
+	}
+	protocol.mu.Lock()
+	defer protocol.mu.Unlock()
+	if errorsSeen != 1 || protocol.requests != 0 {
+		t.Fatalf("invalid timestamp: errors=%d, service requests=%d", errorsSeen, protocol.requests)
+	}
+}
+
+func TestCosmosDBFilteredRetrievalProjectsRequestedFields(t *testing.T) {
+	for _, generated := range []bool{false, true} {
+		name := "native"
+		if generated {
+			name = "generated"
+		}
+		t.Run(name, func(t *testing.T) {
+			for _, options := range []*vectordata.FilteredRecordRetrievalOptions{
+				nil, {Skip: 1}, {Skip: 1, IncludeVectors: true},
+			} {
+				if generated && options != nil && options.IncludeVectors {
+					continue
+				}
+				generator := &cosmosTestEmbeddingGenerator{}
+				store, protocol := newCosmosTestStore(t, azureprovider.CosmosDBConfig{
+					EmbeddingGenerator: embedding.Bind(generator),
+				}, func(w http.ResponseWriter, _ *http.Request) {
+					body := `{"Documents":[{"id":"first","text":"one"},{"id":"second","text":"two"}]}`
+					if options != nil && options.IncludeVectors {
+						body = `{"Documents":[{"id":"first","text":"one","vector":[1,2]},{"id":"second","text":"two","vector":[3,4]}]}`
+					}
+					if _, err := io.WriteString(w, body); err != nil {
+						t.Errorf("write projection response: %v", err)
+					}
+				})
+				vectorType := reflect.TypeFor[[]float32]()
+				if generated {
+					vectorType = reflect.TypeFor[string]()
+				}
+				collection, err := store.DynamicCollection("records", &vectordata.Definition{Properties: []vectordata.Property{
+					&vectordata.KeyProperty{Name: "ID", Type: reflect.TypeFor[string]()},
+					&vectordata.DataProperty{Name: "Text", StorageName: "text", Type: reflect.TypeFor[string]()},
+					&vectordata.VectorProperty{Name: "Vector", StorageName: "vector", Type: vectorType, Dimensions: 2},
+				}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				results := collect(t, collection.GetFiltered(t.Context(), vectordata.Filter{
+					Operator: vectordata.NotEqual, Property: "ID", Value: "other",
+				}, 1, options))
+				wantID, wantText := "first", "one"
+				includeVectors := options != nil && options.IncludeVectors
+				if options != nil {
+					wantID, wantText = "second", "two"
+				}
+				if len(results) != 1 || results[0]["ID"] != wantID || results[0]["Text"] != wantText {
+					t.Fatalf("projected result = %#v", results)
+				}
+				if vector, found := results[0]["Vector"]; found != includeVectors ||
+					(includeVectors && !reflect.DeepEqual(vector, []float32{3, 4})) {
+					t.Fatalf("projected vector = %#v, present=%v, include=%v", vector, found, includeVectors)
+				}
+				protocol.mu.Lock()
+				query := protocol.queries[0]
+				protocol.mu.Unlock()
+				projection, _, found := strings.Cut(query.Query, " FROM c")
+				if !found || !strings.Contains(projection, `c["id"]`) || !strings.Contains(projection, `c["text"]`) ||
+					strings.Contains(projection, `c["vector"]`) != includeVectors || strings.Contains(projection, "VALUE c") {
+					t.Fatalf("filtered projection = %s, include=%v", projection, includeVectors)
+				}
+				if generator.calls != 0 {
+					t.Fatalf("filtered retrieval generated embeddings %d times", generator.calls)
 				}
 			}
 		})

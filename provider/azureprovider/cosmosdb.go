@@ -87,6 +87,13 @@ type CosmosKey struct {
 // properties require an embedding generator. Property and definition
 // generators override the store default.
 //
+// Stored timestamps and timestamp filter values use UTC RFC3339 strings with
+// nine fractional-second digits, including nullable and collection values.
+// Existing timestamps in other formats must be rewritten to this format for
+// chronological ordering and range filters. Storage names with special
+// characters are quoted as Cosmos DB path segments. The storage name
+// "__cosmos_score" is reserved for search results.
+//
 // Container policies include DiskANN, Flat, and QuantizedFlat vector indexes;
 // DiskANN and cosine distance are defaults. Cosine, dot-product, and Euclidean
 // distances are supported. Full-text indexing is available for string data
@@ -103,9 +110,11 @@ type CosmosKey struct {
 // Choose partition paths that group records searched together; with the
 // default /id path, ranked queries must filter to a single document ID.
 // Unordered filtered retrieval supports cross-partition queries and applies
-// Skip and top while paging. Hybrid results are ranked with reciprocal-rank
-// fusion and expose the raw vector distance as Score. Score thresholds compare
-// against that distance (similarities use >=; Euclidean distance uses <=).
+// Skip and top while paging. Queries project only schema properties, omitting
+// vector fields unless IncludeVectors is true. Hybrid results are ranked with
+// reciprocal-rank fusion and expose the raw vector distance as Score.
+// Score thresholds compare against that distance (similarities use >=;
+// Euclidean distance uses <=).
 //
 // IncludeVectors is unsupported on collections with generated vector fields,
 // including missing records and empty query results. Nil native vectors are

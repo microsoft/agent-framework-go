@@ -145,7 +145,16 @@ func (c *cosmosCollection) translateFilter(filter *vectordata.Filter) (string, [
 		}
 	}
 	sql, err := translate(filter)
-	return sql, parameters, err
+	if err != nil {
+		return "", nil, err
+	}
+	for i := range parameters {
+		parameters[i].Value, err = cosmosDataJSON(parameters[i].Value)
+		if err != nil {
+			return "", nil, fmt.Errorf("filter parameter %q: %w", parameters[i].Name, err)
+		}
+	}
+	return sql, parameters, nil
 }
 
 func cosmosFilterType(property providerservices.PropertyModel) reflect.Type {
@@ -388,6 +397,17 @@ func (c *cosmosCollection) HybridSearch(ctx context.Context, value any, keywords
 	}
 }
 
+func (c *cosmosCollection) selectFields(includeVectors bool) []string {
+	fields := make([]string, 0, len(c.model.Properties)+1)
+	for _, property := range c.model.Properties {
+		if _, isVector := property.(*providerservices.VectorPropertyModel); isVector && !includeVectors {
+			continue
+		}
+		fields = append(fields, "c["+cosmosJSONString(propertyStorageName(property))+"]")
+	}
+	return fields
+}
+
 func (c *cosmosCollection) buildSearchQuery(
 	vectorProperty *providerservices.VectorPropertyModel,
 	vector any,
@@ -401,13 +421,7 @@ func (c *cosmosCollection) buildSearchQuery(
 ) (string, []cosmosParameter, error) {
 	vectorExpression := "VectorDistance(c[" + cosmosJSONString(vectorProperty.StorageName) + "], @vector)"
 	parameters = append(parameters, cosmosParameter{Name: "@vector", Value: vector})
-	selectFields := make([]string, 0, len(c.model.Properties)+1)
-	for _, property := range c.model.Properties {
-		if _, isVector := property.(*providerservices.VectorPropertyModel); isVector && !includeVectors {
-			continue
-		}
-		selectFields = append(selectFields, "c["+cosmosJSONString(propertyStorageName(property))+"]")
-	}
+	selectFields := c.selectFields(includeVectors)
 	selectFields = append(selectFields, vectorExpression+" AS "+cosmosScoreField)
 	rankingExpression := vectorExpression
 	if textProperty != nil && keywords != nil {
