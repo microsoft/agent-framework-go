@@ -10513,9 +10513,8 @@
         },
         "properties": {
           "Count": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "note": "Session's state map is private and exposes no public key-count accessor."
+            "go_symbols": ["agent.Session.Count"],
+            "status": "mapped"
           }
         },
         "methods": {
@@ -11085,10 +11084,10 @@
             "status": "mapped"
           },
           "UseCachingOptions(Action<CachingAgentSkillsSourceOptions>) -> AgentSkillsProviderBuilder": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "note": "No built-in refresh-interval or cache-isolation-key configuration was found. DisableCaching can bypass the provider-wide cache but cannot configure expiry or separate cache buckets."
+            "go": "skills.ContextProviderOptions{CacheIsolationKeySelector: selector, RefreshInterval: &interval}",
+            "go_symbols": ["agent/skills.ContextProviderOptions.CacheIsolationKeySelector", "agent/skills.ContextProviderOptions.RefreshInterval"],
+            "status": "adapted",
+            "note": "Go sets refresh interval and cache isolation key directly on ContextProviderOptions rather than through a builder configuration callback."
           },
           "UseFileScriptRunner(AgentFileSkillScriptRunner) -> AgentSkillsProviderBuilder": {
             "go": "fsskills.SourceOptions{ScriptRunner: runner}",
@@ -11650,29 +11649,28 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "agent/skills.ContextProviderOptions{}",
+          "go_symbols": ["agent/skills.ContextProviderOptions"],
+          "status": "adapted",
+          "note": "Go configures caching directly on ContextProviderOptions rather than a separate decorator-options type."
         },
         "properties": {
           "CacheIsolationKeySelector": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/skills.ContextProviderOptions.CacheIsolationKeySelector"],
+            "status": "adapted",
+            "note": "Go's selector receives the invocation context and InvokingContext instead of an AgentSkillsSourceContext."
           },
           "RefreshInterval": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/skills.ContextProviderOptions.RefreshInterval"],
+            "status": "mapped"
           }
         },
         "constructors": {
           "CachingAgentSkillsSourceOptions()": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "agent/skills.ContextProviderOptions{}",
+            "go_symbols": ["agent/skills.ContextProviderOptions"],
+            "status": "adapted",
+            "note": "Go has no separate decorator-options constructor; caching fields are set on the zero-value ContextProviderOptions."
           }
         }
       },
@@ -12059,32 +12057,31 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "memory.NewHistoryProvider(store, \"history\", dims, stateInit, memory.Config{})",
+          "go_symbols": ["agent/memory.HistoryProvider", "agent/memory.NewHistoryProvider"],
+          "status": "adapted",
+          "note": "Go returns the provider and an error instead of throwing; it stores through the shared vectordata.Store/Collection abstractions rather than VectorStore/VectorStoreCollection."
         },
         "properties": {
           "StateKeys": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.HistoryProvider.StateKeys"],
+            "status": "mapped"
           }
         },
         "methods": {
           "Dispose() -> void": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "provider.Close()",
+            "go_symbols": ["agent/memory.HistoryProvider.Close"],
+            "status": "adapted",
+            "note": "Close is an optimization that releases the collection early if it implements io.Closer and never closes the borrowed store; Go also relies on runtime.AddCleanup as a fallback."
           }
         },
         "constructors": {
           "ChatHistoryMemoryProvider(VectorStore, string, int, Func<AgentSession, ChatHistoryMemoryProvider.State>, ChatHistoryMemoryProviderOptions, ILoggerFactory)": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "memory.NewHistoryProvider(store, collectionName, vectorDimensions, stateInitializer, memory.Config{})",
+            "go_symbols": ["agent/memory.NewHistoryProvider", "agent/memory.Config"],
+            "status": "adapted",
+            "note": "Go takes a *vectordata.Store, returns (*HistoryProvider, error), and configures options through memory.Config instead of a nullable options/logger-factory pair."
           }
         }
       },
@@ -12092,29 +12089,26 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "memory.State{}",
+          "go_symbols": ["agent/memory.State"],
+          "status": "mapped"
         },
         "properties": {
           "SearchScope": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.State.SearchScope"],
+            "status": "mapped"
           },
           "StorageScope": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.State.StorageScope"],
+            "status": "mapped"
           }
         },
         "constructors": {
           "State(ChatHistoryMemoryProviderScope, ChatHistoryMemoryProviderScope)": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "memory.State{StorageScope: storage, SearchScope: &search}",
+            "go_symbols": ["agent/memory.State"],
+            "status": "adapted",
+            "note": "Go uses an exported struct literal instead of a constructor; StorageScope is a value and SearchScope is a pointer that defaults to StorageScope when nil."
           }
         }
       },
@@ -12122,74 +12116,65 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "memory.Config{}",
+          "go_symbols": ["agent/memory.Config"],
+          "status": "mapped"
         },
         "properties": {
           "ContextPrompt": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Config.ContextPrompt"],
+            "status": "mapped"
           },
           "EnableSensitiveTelemetryData": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Config.LogSensitiveData"],
+            "status": "mapped"
           },
           "FunctionToolDescription": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Config.FunctionToolDescription"],
+            "status": "mapped"
           },
           "FunctionToolName": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Config.FunctionToolName"],
+            "status": "mapped"
           },
           "MaxResults": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Config.MaxResults"],
+            "status": "mapped"
           },
           "Redactor": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Config.Redactor"],
+            "status": "adapted",
+            "note": "Go takes a func(string) string instead of a Redactor service; it is ignored when LogSensitiveData is true, matching .NET's EnableSensitiveTelemetryData precedence."
           },
           "SearchInputMessageFilter": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Config.SearchInputMessageFilter"],
+            "status": "adapted",
+            "note": "Go uses a messagefilter.Filter instead of a Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>; nil defaults to messagefilter.ExternalOnly."
           },
           "SearchTime": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Config.SearchTime"],
+            "status": "mapped"
           },
           "StateKey": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Config.StateKey"],
+            "status": "mapped"
           },
           "StorageInputRequestMessageFilter": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Config.StorageInputRequestMessageFilter"],
+            "status": "adapted",
+            "note": "Go uses a messagefilter.Filter instead of a Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>; nil defaults to messagefilter.ExternalOnly."
           },
           "StorageInputResponseMessageFilter": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Config.StorageInputResponseMessageFilter"],
+            "status": "adapted",
+            "note": "Go uses a messagefilter.Filter instead of a Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>; nil passes all response messages through, matching .NET's default."
           }
         },
         "constructors": {
           "ChatHistoryMemoryProviderOptions()": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "memory.Config{}",
+            "go_symbols": ["agent/memory.Config"],
+            "status": "mapped"
           }
         }
       },
@@ -12198,23 +12183,20 @@
         "assembly": "Microsoft.Agents.AI",
         "kind": "enum",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "var behavior memory.SearchBehavior",
+          "go_symbols": ["agent/memory.SearchBehavior"],
+          "status": "mapped"
         },
         "constants": {
           "BeforeAIInvoke": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "memory.BeforeInvoke",
+            "go_symbols": ["agent/memory.BeforeInvoke"],
+            "status": "mapped"
           },
           "OnDemandFunctionCalling": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "memory.OnDemandFunctionCalling",
+            "go_symbols": ["agent/memory.OnDemandFunctionCalling"],
+            "status": "mapped"
           }
         }
       },
@@ -12222,45 +12204,40 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "unreviewed": true
+          "go": "memory.Scope{}",
+          "go_symbols": ["agent/memory.Scope"],
+          "status": "adapted",
+          "note": "Go uses pointer fields so a nil ID leaves that dimension unrestricted, versus .NET's nullable string properties with the same meaning."
         },
         "properties": {
           "AgentId": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Scope.AgentID"],
+            "status": "mapped"
           },
           "ApplicationId": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Scope.ApplicationID"],
+            "status": "mapped"
           },
           "SessionId": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Scope.SessionID"],
+            "status": "mapped"
           },
           "UserId": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go_symbols": ["agent/memory.Scope.UserID"],
+            "status": "mapped"
           }
         },
         "constructors": {
           "ChatHistoryMemoryProviderScope()": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "memory.Scope{}",
+            "go_symbols": ["agent/memory.Scope"],
+            "status": "mapped"
           },
           "ChatHistoryMemoryProviderScope(ChatHistoryMemoryProviderScope)": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "unreviewed": true
+            "go": "_ = scope",
+            "go_symbols": ["agent/memory.Scope"],
+            "status": "adapted",
+            "note": "Scope is a value type; assigning or passing it by value copies the struct instead of calling a clone constructor."
           }
         }
       },
