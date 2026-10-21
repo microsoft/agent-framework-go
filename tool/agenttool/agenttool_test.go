@@ -73,6 +73,41 @@ func TestNew_ExposesAgentMetadataAndSchemas(t *testing.T) {
 	}
 }
 
+func TestNew_CustomArgNameAndDescription(t *testing.T) {
+	var capturedMessages []*message.Message
+	a := agenttest.New(agenttest.NewResponseBuilder(
+		func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
+			capturedMessages = messages
+		},
+	).AddText("ok").Build())
+	tl := agenttool.New(a, agenttool.Config{ArgName: "task", ArgDescription: "the task to run"})
+
+	// Schema reflects the custom argument.
+	schema := tl.Schema().(map[string]any)
+	properties := schema["properties"].(map[string]any)
+	if _, ok := properties["task"]; !ok {
+		t.Fatalf("schema properties = %#v, want a \"task\" argument", properties)
+	}
+	if _, ok := properties["query"]; ok {
+		t.Fatalf("schema still exposes the default \"query\" argument")
+	}
+	arg := properties["task"].(map[string]any)
+	if arg["description"] != "the task to run" {
+		t.Errorf("task description = %v, want %q", arg["description"], "the task to run")
+	}
+	if req := schema["required"].([]string); len(req) != 1 || req[0] != "task" {
+		t.Errorf("required = %v, want [task]", req)
+	}
+
+	// Call reads the custom key and forwards its value to the agent.
+	if _, err := tl.Call(t.Context(), `{"task":"do the thing"}`); err != nil {
+		t.Fatalf("Call() error = %v", err)
+	}
+	if len(capturedMessages) == 0 || capturedMessages[len(capturedMessages)-1].String() != "do the thing" {
+		t.Fatalf("agent received %v, want the task text", capturedMessages)
+	}
+}
+
 func TestNew_PanicsWithNilAgent(t *testing.T) {
 	defer func() {
 		if got, want := recover(), "agenttool: agent is required"; got != want {
@@ -219,6 +254,25 @@ func TestCall_InvalidJSONReturnsError(t *testing.T) {
 	_, err := tl.Call(t.Context(), "{")
 	if err == nil {
 		t.Fatal("expected JSON decoding error")
+	}
+}
+
+// A non-string value for the configured argument must be rejected as a JSON
+// decoding error rather than silently invoking the agent with an empty query,
+// matching the schema's declared string type.
+func TestCall_WrongArgTypeReturnsError(t *testing.T) {
+	var invoked bool
+	a := agenttest.New(agenttest.NewResponseBuilder(
+		func(context.Context, []*message.Message, ...agent.Option) { invoked = true },
+	).AddText("unused").Build())
+	tl := agenttool.New(a, agenttool.Config{ArgName: "task"})
+
+	_, err := tl.Call(t.Context(), `{"task":123}`)
+	if err == nil {
+		t.Fatal("expected a JSON decoding error for a non-string argument")
+	}
+	if invoked {
+		t.Fatal("agent should not be invoked when the argument has the wrong type")
 	}
 }
 
