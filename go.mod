@@ -15,7 +15,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.5
-	github.com/openai/openai-go/v3 v3.81.0
+	github.com/openai/openai-go/v3 v3.82.0
 	github.com/qdrant/go-client v1.19.4
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.47.0
