@@ -174,7 +174,7 @@ func TestRepositoryIndexedViews(t *testing.T) {
 		}
 		var queue reconciliationReport
 		decodeOutput(t, commandOutput(t, "reconcile", "-state", "unreviewed", "-area", "workflows"), &queue)
-		if queue.Page == nil || queue.Page.Total <= defaultPageLimit || queue.Page.Returned != defaultPageLimit || len(queue.Rows) != defaultPageLimit || queue.Counts["unreviewed"] != queue.Page.Total {
+		if queue.Page == nil || queue.Page.Offset != 0 || queue.Page.Limit != defaultPageLimit || queue.Page.Returned != min(queue.Page.Total, defaultPageLimit) || len(queue.Rows) != queue.Page.Returned || queue.Counts["unreviewed"] != queue.Page.Total {
 			t.Fatalf("default review queue page is incomplete: page=%+v rows=%d counts=%v", queue.Page, len(queue.Rows), queue.Counts)
 		}
 	})
@@ -313,6 +313,44 @@ func TestReconcileStates(t *testing.T) {
 				if row.State == "linked" && (!reflect.DeepEqual(row.ReviewSourceChanged, test.sourceChanged) || !reflect.DeepEqual(row.ReviewGoChanged, test.goChanged)) {
 					t.Fatalf("commit comparisons did not use the original baseline: %+v", row)
 				}
+			}
+		})
+	}
+}
+
+func TestReconciliationReviewQueuePages(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		total, returned int
+		nextOffset      *int
+	}{
+		{"empty", 0, 0, nil},
+		{"partial", 1, 1, nil},
+		{"full", defaultPageLimit, defaultPageLimit, nil},
+		{"multiple", defaultPageLimit + 1, defaultPageLimit, new(defaultPageLimit)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			report := reconciliationReport{
+				Rows: []reconciliationRow{{Area: "workflows", State: "linked"}},
+			}
+			for i := range test.total {
+				report.Rows = append(report.Rows, reconciliationRow{
+					Namespace: "Example", Type: fmt.Sprintf("Pending%d", i),
+					Area: "workflows", Kind: "type", State: "unreviewed",
+				})
+			}
+			summarizeReconciliation(&report)
+			var out bytes.Buffer
+			if err := writeReconciliation(&out, report, reportFilter{Area: "workflows", State: "unreviewed"}, pageOptions{Limit: defaultPageLimit}, true, false, false); err != nil {
+				t.Fatal(err)
+			}
+			var got reconciliationReport
+			decodeOutput(t, out.String(), &got)
+			wantPage := &pageInfo{
+				Total: test.total, Limit: defaultPageLimit, Returned: test.returned, NextOffset: test.nextOffset,
+			}
+			if !reflect.DeepEqual(got.Page, wantPage) || got.Rows == nil || len(got.Rows) != test.returned || got.Counts["unreviewed"] != test.total || got.Counts["linked"] != 0 {
+				t.Fatalf("review queue page = %+v, rows=%d counts=%v, want page=%+v", got.Page, len(got.Rows), got.Counts, wantPage)
 			}
 		})
 	}
