@@ -366,9 +366,9 @@ func TestArtifactToMessagePartsMetadataAndRaw(t *testing.T) {
 	}
 }
 
-func TestStatusInputContentsNilMessage(t *testing.T) {
+func TestStatusContentsNilMessage(t *testing.T) {
 	status := &a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: nil}
-	result, err := statusInputContents(status)
+	result, err := statusContents(status)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,23 +377,65 @@ func TestStatusInputContentsNilMessage(t *testing.T) {
 	}
 }
 
-func TestStatusInputContentsOtherState(t *testing.T) {
-	status := &a2a.TaskStatus{State: a2a.TaskStateCompleted, Message: &a2a.Message{Parts: a2a.ContentParts{a2a.NewTextPart("Some text")}}}
-	result, err := statusInputContents(status)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result != nil {
-		t.Fatalf("contents = %#v, want nil", result)
+func TestStatusContentsSkipsRoutineStates(t *testing.T) {
+	for _, state := range []a2a.TaskState{a2a.TaskStateSubmitted, a2a.TaskStateWorking, a2a.TaskStateCompleted} {
+		status := &a2a.TaskStatus{State: state, Message: &a2a.Message{Parts: a2a.ContentParts{a2a.NewTextPart("Some text")}}}
+		result, err := statusContents(status)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result != nil {
+			t.Fatalf("state %q: contents = %#v, want nil", state, result)
+		}
 	}
 }
 
-func TestStatusInputContentsMultipleRequests(t *testing.T) {
+func TestStatusContentsSurfacedStates(t *testing.T) {
+	for _, state := range []a2a.TaskState{
+		a2a.TaskStateInputRequired, a2a.TaskStateAuthRequired, a2a.TaskStateFailed,
+		a2a.TaskStateCanceled, a2a.TaskStateRejected, a2a.TaskStateUnspecified,
+	} {
+		status := &a2a.TaskStatus{State: state, Message: &a2a.Message{Parts: a2a.ContentParts{a2a.NewTextPart("details")}}}
+		result, err := statusContents(status)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result) != 1 {
+			t.Fatalf("state %q: contents = %#v, want one", state, result)
+		}
+	}
+}
+
+func TestTaskToMessagesFailedStatusPreservesIdentity(t *testing.T) {
+	status := &a2a.Message{
+		ID:       "status-1",
+		Role:     a2a.MessageRoleAgent,
+		Metadata: map[string]any{"k": "v"},
+		Parts:    a2a.ContentParts{a2a.NewTextPart("boom")},
+	}
+	task := &a2a.Task{ID: "task1", Status: a2a.TaskStatus{State: a2a.TaskStateFailed, Message: status}}
+	result, err := taskToMessages(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("messages = %#v, want one", result)
+	}
+	got := result[0]
+	if got.Role != message.RoleAssistant || got.ID != "status-1" || got.String() != "boom" {
+		t.Errorf("message = role %q id %q text %q", got.Role, got.ID, got.String())
+	}
+	if got.AdditionalProperties["k"] != "v" || got.RawRepresentation != task.Status {
+		t.Errorf("metadata/raw not preserved: %#v %#v", got.AdditionalProperties, got.RawRepresentation)
+	}
+}
+
+func TestStatusContentsMultipleRequests(t *testing.T) {
 	status := &a2a.TaskStatus{
 		State:   a2a.TaskStateInputRequired,
 		Message: &a2a.Message{Parts: a2a.ContentParts{a2a.NewTextPart("First request"), a2a.NewTextPart("Second request"), a2a.NewTextPart("Third request")}},
 	}
-	result, err := statusInputContents(status)
+	result, err := statusContents(status)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,11 +450,11 @@ func TestStatusInputContentsMultipleRequests(t *testing.T) {
 	}
 }
 
-func TestStatusInputContentsRawAndMetadata(t *testing.T) {
+func TestStatusContentsRawAndMetadata(t *testing.T) {
 	part := a2a.NewTextPart("Input request")
 	part.Metadata = map[string]any{"key1": "value1", "key2": "value2"}
 	status := &a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: &a2a.Message{Parts: a2a.ContentParts{part}}}
-	result, err := statusInputContents(status)
+	result, err := statusContents(status)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -436,9 +478,9 @@ func TestStatusInputContentsRawAndMetadata(t *testing.T) {
 	}
 }
 
-func TestStatusInputContentsEmptyParts(t *testing.T) {
+func TestStatusContentsEmptyParts(t *testing.T) {
 	status := &a2a.TaskStatus{State: a2a.TaskStateInputRequired, Message: &a2a.Message{Parts: make(a2a.ContentParts, 0)}}
-	result, err := statusInputContents(status)
+	result, err := statusContents(status)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -26,7 +26,7 @@ func taskToContents(task *a2a.Task) (message.Contents, error) {
 			return nil, err
 		}
 	}
-	input, err := statusInputContents(&task.Status)
+	input, err := statusContents(&task.Status)
 	if err != nil {
 		return nil, err
 	}
@@ -48,17 +48,12 @@ func taskToMessages(task *a2a.Task) ([]*message.Message, error) {
 		}
 		messages = append(messages, msg)
 	}
-	input, err := statusInputContents(&task.Status)
+	status, err := statusToMessage(&task.Status)
 	if err != nil {
 		return nil, err
 	}
-	if input != nil {
-		messages = append(messages, &message.Message{
-			Role:              message.RoleAssistant,
-			ID:                task.Status.Message.ID,
-			Contents:          input,
-			RawRepresentation: task.Status,
-		})
+	if status != nil {
+		messages = append(messages, status)
 	}
 	return messages, nil
 }
@@ -82,14 +77,37 @@ func artifactToMessage(artifact *a2a.Artifact) (*message.Message, error) {
 	}, nil
 }
 
-// statusInputContents returns nil unless an input-required message has contents.
-// Converted contents retain their source parts and cloned part metadata.
-func statusInputContents(status *a2a.TaskStatus) (message.Contents, error) {
+// statusToMessage converts the optional status message, preserving its ID and
+// metadata; the raw representation is the task status. It returns nil for routine progress and
+// successful completion, or when the message has no contents.
+func statusToMessage(status *a2a.TaskStatus) (*message.Message, error) {
 	if status == nil {
 		return nil, errors.New("a2aprovider: status cannot be nil")
 	}
-	if status.State != a2a.TaskStateInputRequired || status.Message == nil {
+	if status.Message == nil {
 		return nil, nil
 	}
-	return partsToContents(status.Message.Parts, nil)
+	switch status.State {
+	case a2a.TaskStateSubmitted, a2a.TaskStateWorking, a2a.TaskStateCompleted:
+		return nil, nil
+	}
+	msg, err := toAgentMessage(status.Message)
+	if err != nil || len(msg.Contents) == 0 {
+		return nil, err
+	}
+	if status.Message.Role != a2a.MessageRoleUser {
+		msg.Role = message.RoleAssistant
+	}
+	msg.RawRepresentation = *status
+	return msg, nil
+}
+
+// statusContents returns nil unless the status carries a message to surface.
+// Converted contents retain their source parts and cloned part metadata.
+func statusContents(status *a2a.TaskStatus) (message.Contents, error) {
+	msg, err := statusToMessage(status)
+	if msg == nil {
+		return nil, err
+	}
+	return msg.Contents, nil
 }

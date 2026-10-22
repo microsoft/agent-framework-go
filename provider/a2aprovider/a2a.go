@@ -284,7 +284,7 @@ func sendMsg(session *agent.Session, contextID string, seq iter.Seq2[a2a.Event, 
 			if e.Status.Message != nil {
 				messageID = e.Status.Message.ID
 			}
-			contents, err := statusInputContents(&e.Status)
+			contents, err := statusContents(&e.Status)
 			if err != nil {
 				yield(nil, err)
 				return
