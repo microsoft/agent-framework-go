@@ -142,6 +142,7 @@ func (resp *Response) Coalesce() {
 // Each message in the response becomes a separate update. Response-level
 // additional properties and a non-empty continuation token are included as
 // an additional metadata-only update without a message ID when present.
+// If there are no messages, any response metadata is emitted in such an update.
 func (resp *Response) ToUpdates() []*ResponseUpdate {
 	if resp == nil {
 		return nil
@@ -154,6 +155,14 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 		if createdAt.IsZero() {
 			createdAt = resp.CreatedAt
 		}
+		// Only an otherwise unidentifiable metadata-only message needs a role
+		// marker to distinguish it from the trailing response metadata update.
+		// targetMessage already defaults collected messages to assistant; leave
+		// the original role unchanged whenever other message data identifies it.
+		role := msg.Role
+		if role == "" && msg.ID == "" && msg.AuthorName == "" && len(msg.Contents) == 0 {
+			role = message.RoleAssistant
+		}
 		updates = append(updates, &ResponseUpdate{
 			RawRepresentation:    msg.RawRepresentation,
 			AdditionalProperties: msg.AdditionalProperties,
@@ -163,13 +172,16 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 			ConversationID:       resp.ConversationID,
 			FinishReason:         resp.FinishReason,
 			AuthorName:           msg.AuthorName,
-			Role:                 msg.Role,
+			Role:                 role,
 			CreatedAt:            createdAt,
 			Contents:             msg.Contents,
 		})
 	}
 
-	if hasAdditionalProperties || resp.ContinuationToken != "" {
+	// With no messages there is no per-message update to carry response metadata.
+	hasResponseMetadata := resp.AgentID != "" || resp.ID != "" || resp.ConversationID != nil ||
+		resp.FinishReason != "" || !resp.CreatedAt.IsZero() || resp.RawRepresentation != nil
+	if hasAdditionalProperties || resp.ContinuationToken != "" || (len(resp.Messages) == 0 && hasResponseMetadata) {
 		extra := &ResponseUpdate{
 			AdditionalProperties: resp.AdditionalProperties,
 			AgentID:              resp.AgentID,
@@ -177,6 +189,10 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 			ConversationID:       resp.ConversationID,
 			ContinuationToken:    resp.ContinuationToken,
 			CreatedAt:            resp.CreatedAt,
+		}
+		if len(resp.Messages) == 0 {
+			extra.FinishReason = resp.FinishReason
+			extra.RawRepresentation = resp.RawRepresentation
 		}
 		updates = append(updates, extra)
 	}
@@ -191,25 +207,28 @@ func (resp *Response) Update(update *ResponseUpdate) {
 	if update == nil {
 		return
 	}
-	msg := resp.targetMessage(update)
-	// Some members on ResponseUpdate map to members of Message.
-	// Incorporate those into the latest message; in cases where the message
-	// stores a single value, prefer the latest update's value over anything
-	// stored in the message.
-	msg.AuthorName = cmp.Or(update.AuthorName, msg.AuthorName)
-	msg.Role = cmp.Or(update.Role, msg.Role)
-	msg.ID = cmp.Or(update.MessageID, msg.ID)
-	if !isValidCreatedAt(msg.CreatedAt) && isValidCreatedAt(update.CreatedAt) {
-		msg.CreatedAt = update.CreatedAt
-	}
-	msg.Contents = append(msg.Contents, update.Contents...)
-	if update.MessageID != "" && update.AdditionalProperties != nil {
-		if msg.AdditionalProperties == nil {
-			msg.AdditionalProperties = make(map[string]any)
+	// A response-level metadata update must not create an empty message.
+	if responseUpdateHasMessageData(update) {
+		msg := resp.targetMessage(update)
+		// Some members on ResponseUpdate map to members of Message.
+		// Incorporate those into the latest message; in cases where the message
+		// stores a single value, prefer the latest update's value over anything
+		// stored in the message.
+		msg.AuthorName = cmp.Or(update.AuthorName, msg.AuthorName)
+		msg.Role = cmp.Or(update.Role, msg.Role)
+		msg.ID = cmp.Or(update.MessageID, msg.ID)
+		if !isValidCreatedAt(msg.CreatedAt) && isValidCreatedAt(update.CreatedAt) {
+			msg.CreatedAt = update.CreatedAt
 		}
-		maps.Copy(msg.AdditionalProperties, update.AdditionalProperties)
+		msg.Contents = append(msg.Contents, update.Contents...)
+		if update.MessageID != "" && update.AdditionalProperties != nil {
+			if msg.AdditionalProperties == nil {
+				msg.AdditionalProperties = make(map[string]any)
+			}
+			maps.Copy(msg.AdditionalProperties, update.AdditionalProperties)
+		}
+		msg.RawRepresentation = appendRawRepresentation(msg.RawRepresentation, update.RawRepresentation)
 	}
-	msg.RawRepresentation = appendRawRepresentation(msg.RawRepresentation, update.RawRepresentation)
 
 	// Other members on a ResponseUpdate map to members of the response.
 	// Prefer metadata supplied by later updates; omitted metadata does not
@@ -342,6 +361,12 @@ type ResponseUpdate struct {
 
 	// Contents contains the content items carried by this update.
 	Contents message.Contents `json:",omitzero"`
+}
+
+// RawRepresentation alone is response metadata, not evidence of a message.
+// Providers may emit raw-only lifecycle events before or after message updates.
+func responseUpdateHasMessageData(update *ResponseUpdate) bool {
+	return update != nil && (update.MessageID != "" || update.AuthorName != "" || update.Role != "" || len(update.Contents) > 0)
 }
 
 // String returns the concatenated text contents of this update.

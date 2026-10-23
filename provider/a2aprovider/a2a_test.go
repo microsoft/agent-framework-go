@@ -2255,8 +2255,8 @@ func TestRunStreamingWithTaskStatusUpdateEvent(t *testing.T) {
 	}
 
 	update := updates[0]
-	if update.Role != message.RoleAssistant {
-		t.Errorf("update.Role = %q, want %q", update.Role, message.RoleAssistant)
+	if update.Role != "" {
+		t.Errorf("update.Role = %q, want empty for lifecycle-only status", update.Role)
 	}
 	if update.ResponseID != taskID {
 		t.Errorf("update.ResponseID = %q, want %q", update.ResponseID, taskID)
@@ -2852,12 +2852,9 @@ func TestRunWithTaskResponsePreservesMetadataAndRawScopes(t *testing.T) {
 					if inputRequired {
 						wantMessages++
 					}
-					// The existing iterator collector retains one empty lifecycle message.
-					if len(result.Messages) != max(1, wantMessages) {
-						t.Fatalf("messages = %d, want %d", len(result.Messages), max(1, wantMessages))
-					}
-					if wantMessages == 0 && result.Messages[0].RawRepresentation != task {
-						t.Errorf("empty message raw = %T, want *a2a.Task", result.Messages[0].RawRepresentation)
+					// Lifecycle metadata remains on the response without creating a message.
+					if len(result.Messages) != wantMessages {
+						t.Fatalf("messages = %d, want %d", len(result.Messages), wantMessages)
 					}
 					for i, artifact := range task.Artifacts {
 						msg := result.Messages[i]
@@ -3114,5 +3111,25 @@ func TestRunStreamingWithInputRequiredStatusContents(t *testing.T) {
 	}
 	if texts[0].Text != "Where would you like to fly?" {
 		t.Errorf("text = %q, want Where would you like to fly?", texts[0].Text)
+	}
+}
+
+func TestAgentRunStreamingLifecycleOnlyTaskDoesNotCreateMessage(t *testing.T) {
+	transport := &mockA2ATransport{streamingResponseToReturn: &a2a.Task{
+		ID:        "task-raw",
+		ContextID: "ctx-raw",
+		Status:    a2a.TaskStatus{State: a2a.TaskStateSubmitted},
+	}}
+	a := newTestAgent(transport, agent.Config{})
+
+	resp, err := a.RunText(t.Context(), "start", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Messages) != 0 {
+		t.Fatalf("len(Messages) = %d, want 0", len(resp.Messages))
+	}
+	if resp.RawRepresentation == nil {
+		t.Fatal("RawRepresentation is nil")
 	}
 }

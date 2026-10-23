@@ -528,7 +528,7 @@ func (a *Agent) setAuthor(update *ResponseUpdate) {
 	if update.AgentID == "" {
 		update.AgentID = a.id
 	}
-	if update.AuthorName == "" {
+	if update.AuthorName == "" && responseUpdateHasMessageData(update) {
 		update.AuthorName = a.name
 	}
 }
