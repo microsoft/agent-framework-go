@@ -8,6 +8,23 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
+func TestSource_String(t *testing.T) {
+	tests := []struct {
+		source message.Source
+		want   string
+	}{
+		{message.Source{}, "External"},
+		{message.Source{ID: "x"}, "External:x"},
+		{message.Source{Type: "middleware"}, "middleware"},
+		{message.Source{Type: "context-provider", ID: "mem"}, "context-provider:mem"},
+	}
+	for _, tt := range tests {
+		if got := tt.source.String(); got != tt.want {
+			t.Errorf("String() = %q, want %q", got, tt.want)
+		}
+	}
+}
+
 func TestMessage_Clone_ClonesAdditionalProperties(t *testing.T) {
 	original := &message.Message{
 		AdditionalProperties: map[string]any{"k": "v"},
