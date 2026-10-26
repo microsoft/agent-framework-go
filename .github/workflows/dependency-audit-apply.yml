@@ -1,0 +1,43 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Uses the audit App configuration. Applying also requires the
+# DEPENDENCY_AUDIT_ENABLE_APPLY repository variable to be true.
+
+name: Apply one dependency audit area
+
+on:
+  workflow_dispatch:
+    inputs:
+      area:
+        description: "Stable area slug from the current modernization tracker"
+        required: true
+        type: string
+      issue:
+        description: "Current tracker issue number, or 0 to find it automatically"
+        default: 0
+        type: number
+      replace_pr:
+        description: "Closed, unmerged migration PR to explicitly replace, or 0"
+        default: 0
+        type: number
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    uses: microsoft/go-infra/.github/workflows/dependency-audit-target.yml@7dd03dcc51d1b74cb282212379bfc41cb31459b4
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+      pull-requests: write
+      copilot-requests: write
+    secrets: inherit
+    with:
+      mode: apply
+      target_repo: ${{ github.repository }}
+      area: ${{ inputs.area }}
+      issue: ${{ inputs.issue }}
+      replace_pr: ${{ inputs.replace_pr }}

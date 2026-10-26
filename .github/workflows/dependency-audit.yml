@@ -1,0 +1,35 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Configure the DEPENDENCY_AUDIT_APP_ID variable and
+# DEPENDENCY_AUDIT_APP_PRIVATE_KEY secret. Run manually with initial_sha first.
+# Do not also enroll this repository in go-infra's central schedule.
+
+name: Dependency history audit
+
+on:
+  schedule:
+    - cron: "17 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      initial_sha:
+        description: "Exclusive starting commit for the first audit, as a full SHA"
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    uses: microsoft/go-infra/.github/workflows/dependency-audit-target.yml@7dd03dcc51d1b74cb282212379bfc41cb31459b4
+    permissions:
+      actions: write
+      contents: write
+      issues: write
+      pull-requests: write
+      copilot-requests: write
+    secrets: inherit
+    with:
+      target_repo: ${{ github.repository }}
+      initial_sha: ${{ inputs.initial_sha || '' }}
