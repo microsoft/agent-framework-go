@@ -355,7 +355,6 @@ func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessio
 		Memory:                             source.Memory,
 		GitHubMCPToolConfig:                source.GitHubMCPToolConfig,
 		GitHubToken:                        source.GitHubToken,
-		RemoteSession:                      source.RemoteSession,
 		ManagedSettings:                    source.ManagedSettings,
 		Streaming:                          copyBoolDefaultTrue(source.Streaming),
 	}

@@ -193,7 +193,6 @@ func TestCopyResumeSessionConfig_CopiesAllProperties(t *testing.T) {
 	assertStringSlice(t, request["pluginDirectories"], []string{"/plugins"}, "pluginDirectories")
 	assertStringSlice(t, request["instructionDirectories"], []string{"/instructions"}, "instructionDirectories")
 	assertEqual(t, request["gitHubToken"], "gh-token-123", "gitHubToken")
-	assertEqual(t, request["remoteSession"], "on", "remoteSession")
 	for _, key := range []string{"providers", "models", "capi", "modelCapabilities", "sessionLimits", "defaultAgent", "largeOutput", "toolSearch", "memory"} {
 		if request[key] == nil {
 			t.Fatalf("%s was not sent on resume", key)
@@ -1057,7 +1056,6 @@ func richSessionConfig() *copilot.SessionConfig {
 		ToolSearch:                         &copilot.ToolSearchConfig{Enabled: new(true)},
 		Memory:                             &copilot.MemoryConfiguration{Enabled: true},
 		GitHubToken:                        "gh-token-123",
-		RemoteSession:                      rpc.RemoteSessionModeOn,
 	}
 }
 
