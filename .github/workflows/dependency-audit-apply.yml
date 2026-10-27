@@ -1,8 +1,10 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# Uses the audit App configuration. Applying also requires the
-# DEPENDENCY_AUDIT_ENABLE_APPLY repository variable to be true.
+# Reuse the App already used by the porting workflows for automatic draft PRs.
+# Omit both app_id and the App secret mapping to publish a validated branch
+# and an Open a PR link instead.
+# Applying requires DEPENDENCY_AUDIT_ENABLE_APPLY=true.
 
 name: Apply one dependency audit area
 
@@ -27,16 +29,17 @@ permissions:
 
 jobs:
   apply:
-    uses: microsoft/go-infra/.github/workflows/dependency-audit-target.yml@8ff34618670d7440a08ba5e99630801a4139277b
+    uses: microsoft/go-infra/.github/workflows/dependency-audit-apply.yml@a7b202f05a5282deb46d3b6c342a2da8e07244f2
     permissions:
       actions: write
       contents: write
       issues: write
       pull-requests: write
       copilot-requests: write
-    secrets: inherit
+    secrets:
+      DEPENDENCY_AUDIT_APP_PRIVATE_KEY: ${{ secrets.GHMANAGER_GITHUBAPP_MICROSOFT_AGENT_FRAMEWORK_FOR_GO_PRIVATE_KEY_PEM }}
     with:
-      mode: apply
+      app_id: Iv23liUO5H4lTSrArWgE
       target_repo: ${{ github.repository }}
       area: ${{ inputs.area }}
       issue: ${{ inputs.issue }}

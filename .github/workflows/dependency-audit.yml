@@ -1,16 +1,13 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-# Configure the DEPENDENCY_AUDIT_APP_ID variable and
-# DEPENDENCY_AUDIT_APP_PRIVATE_KEY secret. Run manually with initial_sha first.
+# Audits use this repository's GITHUB_TOKEN, with no App credentials.
+# Run manually with initial_sha first.
 # Do not also enroll this repository in go-infra's central schedule.
 
 name: Dependency history audit
 
 on:
-  # TEMP: remove this label-only PR trigger before merging.
-  pull_request:
-    types: [labeled]
   schedule:
     - cron: "17 8 * * 1"
   workflow_dispatch:
@@ -25,29 +22,13 @@ permissions:
 
 jobs:
   audit:
-    # TEMP: allow only the labeled smoke test on this same-repository PR.
-    if: >-
-      github.event_name != 'pull_request' ||
-      (
-        github.repository == 'microsoft/agent-framework-go' &&
-        github.event.repository.fork == false &&
-        github.event.action == 'labeled' &&
-        github.event.label.name == 'dependency-audit-smoke' &&
-        github.event.pull_request.number == 1323 &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        github.event.pull_request.head.ref == 'dev/mclayton/dependency-audit-consumer' &&
-        github.event.pull_request.base.ref == github.event.repository.default_branch
-      )
-    uses: microsoft/go-infra/.github/workflows/dependency-audit-target.yml@8ff34618670d7440a08ba5e99630801a4139277b
+    uses: microsoft/go-infra/.github/workflows/dependency-audit-target.yml@a7b202f05a5282deb46d3b6c342a2da8e07244f2
     permissions:
       actions: write
-      contents: write
+      contents: read
       issues: write
-      pull-requests: write
+      pull-requests: read
       copilot-requests: write
-    secrets: inherit
     with:
-      mode: audit
       target_repo: ${{ github.repository }}
-      # TEMP: set this repository variable to the intended first-audit starting SHA.
-      initial_sha: ${{ github.event_name == 'pull_request' && vars.DEPENDENCY_AUDIT_TEST_INITIAL_SHA || inputs.initial_sha || '' }}
+      initial_sha: ${{ inputs.initial_sha || '' }}
