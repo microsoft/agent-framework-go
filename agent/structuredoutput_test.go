@@ -761,6 +761,175 @@ func TestAgent_StructuredOutput_WithAutomaticTools(t *testing.T) {
 	}
 }
 
+func TestAgent_StructuredOutput_WithMessageInjection(t *testing.T) {
+	type result struct {
+		Name string `json:"name"`
+	}
+	for _, tc := range []struct {
+		name          string
+		payloads      [2]string
+		want          any
+		wantErr       error
+		wantDecodeErr bool
+	}{
+		{name: "object", payloads: [2]string{`{"name":"superseded"}`, `{"name":"final"}`}, want: result{Name: "final"}},
+		{name: "wrapped array", payloads: [2]string{`{"data":["superseded"]}`, `{"data":["final"]}`}, want: []string{"final"}},
+		{name: "empty final response", payloads: [2]string{`{"name":"superseded"}`, ""}, want: result{}, wantErr: io.EOF},
+		{name: "invalid final response", payloads: [2]string{`{"name":"superseded"}`, "not JSON"}, want: result{}, wantDecodeErr: true},
+	} {
+		for _, ids := range []string{"absent", "provided", "late"} {
+			for _, stream := range []bool{false, true} {
+				for _, perCallHistory := range []bool{false, true} {
+					t.Run(fmt.Sprintf("%s/ids=%s/stream=%t/per-call-history=%t", tc.name, ids, stream, perCallHistory), func(t *testing.T) {
+						injection := &agent.MessageInjector{}
+						session := agenttest.CreateSession()
+						output := reflect.New(reflect.TypeOf(tc.want)).Interface()
+						var calls, formatCalls, unmarshalCalls int
+						a := agent.New(agent.ProviderConfig{
+							Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{})},
+							Run: func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+								return func(yield func(*agent.ResponseUpdate, error) bool) {
+									if _, ok := agent.GetOption(options, agent.WithResponseFormat); !ok {
+										t.Fatal("provider did not receive a response format")
+									}
+									if calls >= len(tc.payloads) {
+										t.Fatal("unexpected extra provider call")
+									}
+									payload := tc.payloads[calls]
+									calls++
+									if calls == 1 {
+										if err := injection.EnqueueMessages(session, message.NewText("revise the answer")); err != nil {
+											t.Fatal(err)
+										}
+									}
+									if payload == "" {
+										return
+									}
+									split := len(payload) / 2
+									updates := []*agent.ResponseUpdate{
+										{},
+										{Contents: message.Contents{&message.TextContent{Text: payload[:split]}}},
+										{Contents: message.Contents{&message.TextContent{Text: payload[split:]}}},
+										{
+											AdditionalProperties: map[string]any{"last-call": calls},
+											Contents:             message.Contents{&message.UsageContent{Details: message.UsageDetails{TotalTokenCount: 1}}},
+										},
+									}
+									for i, update := range updates {
+										update.AgentID = "provider-agent"
+										update.AuthorName = "provider-author"
+										update.Role = message.RoleAssistant
+										if ids == "provided" || ids == "late" && i >= 2 {
+											update.ResponseID = fmt.Sprintf("response-%d", calls)
+											if i == 1 || i == 2 {
+												update.MessageID = fmt.Sprintf("message-%d", calls)
+											}
+										}
+										original := *update
+										if !yield(update, nil) {
+											return
+										}
+										if !reflect.DeepEqual(*update, original) {
+											t.Fatal("message injection mutated a provider update")
+										}
+									}
+								}
+							},
+							Format: func(v any) (agent.ResponseFormat, error) {
+								formatCalls++
+								format, err := jsonformat.ForType(reflect.TypeOf(v))
+								if err != nil {
+									return agent.ResponseFormat{}, err
+								}
+								return jsonformat.WrapNonObjectSchema(format)
+							},
+							Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
+								unmarshalCalls++
+								f, err := jsonformat.FromResponseFormat(format)
+								if err != nil {
+									return err
+								}
+								return f.UnmarshalStructuredOutput(data, v)
+							},
+						}, agent.Config{
+							MessageInjector:                         injection,
+							RequirePerServiceCallHistoryPersistence: perCallHistory,
+						})
+						response, err := a.RunText(t.Context(), "answer", agent.WithSession(session), agent.Stream(stream), agent.WithStructuredOutput(output)).Collect()
+						if tc.wantErr != nil {
+							if !errors.Is(err, tc.wantErr) {
+								t.Fatalf("error = %v, want %v", err, tc.wantErr)
+							}
+						} else if tc.wantDecodeErr {
+							if err == nil {
+								t.Fatal("expected invalid final output to fail decoding")
+							}
+						} else if err != nil {
+							t.Fatal(err)
+						}
+						if got := reflect.ValueOf(output).Elem().Interface(); !reflect.DeepEqual(got, tc.want) {
+							t.Fatalf("structured output = %+v, want %+v", got, tc.want)
+						}
+						if calls != 2 || formatCalls != 1 || unmarshalCalls != 1 {
+							t.Fatalf("provider calls=%d, format calls=%d, unmarshal calls=%d; want 2, 1, 1", calls, formatCalls, unmarshalCalls)
+						}
+						if err != nil {
+							return
+						}
+						wantResponseID := ""
+						if ids != "absent" {
+							wantResponseID = "response-2"
+						}
+						if response.ID != wantResponseID || response.Usage().TotalTokenCount != 2 || response.AdditionalProperties["last-call"] != 2 {
+							t.Fatalf("response ID=%q, usage=%+v, properties=%v; want %q, 2 tokens, and last-call=2",
+								response.ID, response.Usage(), response.AdditionalProperties, wantResponseID)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestAgent_StructuredOutput_MessageInjectionWithoutOutput(t *testing.T) {
+	for _, explicitNil := range []bool{false, true} {
+		t.Run(fmt.Sprintf("explicit-nil=%t", explicitNil), func(t *testing.T) {
+			injection := &agent.MessageInjector{}
+			session := agenttest.CreateSession()
+			var calls, updates int
+			a := agent.New(agent.ProviderConfig{
+				Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return func(yield func(*agent.ResponseUpdate, error) bool) {
+						calls++
+						if calls == 1 {
+							if err := injection.EnqueueMessages(session, message.NewText("injected")); err != nil {
+								t.Fatal(err)
+							}
+							yield(&agent.ResponseUpdate{Contents: message.Contents{&message.TextContent{Text: "reply"}}}, nil)
+						}
+					}
+				},
+			}, agent.Config{MessageInjector: injection})
+			options := []agent.Option{agent.WithSession(session), agent.Stream(true)}
+			if explicitNil {
+				options = append(options, agent.WithStructuredOutput(nil))
+			}
+			for update, err := range a.RunText(t.Context(), "start", options...) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				updates++
+				if update.String() != "reply" {
+					t.Fatalf("unexpected update: %+v", update)
+				}
+			}
+			if calls != 2 || updates != 1 {
+				t.Fatalf("provider calls=%d, updates=%d; want 2 and 1", calls, updates)
+			}
+		})
+	}
+}
+
 func newStructuredOutputTestAgent(format func(any) (agent.ResponseFormat, error), unmarshal func(agent.ResponseFormat, []byte, any) error, run agent.RunFunc) *agent.Agent {
 	return agent.New(agent.ProviderConfig{
 		Run:       run,
