@@ -8,10 +8,6 @@
 name: Dependency history audit
 
 on:
-  # TEMP: remove the label-only PR trigger after the audit test.
-  pull_request:
-    types: [labeled]
-    branches: [main]
   schedule:
     - cron: "17 8 * * 1"
   workflow_dispatch:
@@ -26,20 +22,7 @@ permissions:
 
 jobs:
   audit:
-    # TEMP: permit only the explicit audit test on this same-repository PR.
-    if: >-
-      github.event_name != 'pull_request' ||
-      (
-        github.repository == 'microsoft/agent-framework-go' &&
-        github.event.repository.fork == false &&
-        github.event.action == 'labeled' &&
-        github.event.label.name == 'dependency-audit-smoke' &&
-        github.event.pull_request.number == 1323 &&
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        github.event.pull_request.head.ref == 'dev/mclayton/dependency-audit-consumer' &&
-        github.event.pull_request.base.ref == github.event.repository.default_branch
-      )
-    uses: microsoft/go-infra/.github/workflows/dependency-audit-target.yml@a3e9048d55b7a925bb481a03c81aba9e6385271d
+    uses: microsoft/go-infra/.github/workflows/dependency-audit-target.yml@dcf651698ac4fc17263cb4531876ebf7eca8b009
     permissions:
       actions: write
       contents: read
@@ -48,5 +31,4 @@ jobs:
       copilot-requests: write
     with:
       target_repo: ${{ github.repository }}
-      # TEMP: clear this variable after the first successful audit so later runs resume its checkpoint.
-      initial_sha: ${{ github.event_name == 'pull_request' && vars.DEPENDENCY_AUDIT_TEST_INITIAL_SHA || inputs.initial_sha || '' }}
+      initial_sha: ${{ inputs.initial_sha || '' }}
