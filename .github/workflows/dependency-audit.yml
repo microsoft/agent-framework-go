@@ -39,7 +39,7 @@ jobs:
         github.event.pull_request.head.ref == 'dev/mclayton/dependency-audit-consumer' &&
         github.event.pull_request.base.ref == github.event.repository.default_branch
       )
-    uses: microsoft/go-infra/.github/workflows/dependency-audit-target.yml@1f272d3944773d356c42a1f3d98e92f148538b19
+    uses: microsoft/go-infra/.github/workflows/dependency-audit-target.yml@a3e9048d55b7a925bb481a03c81aba9e6385271d
     permissions:
       actions: write
       contents: read
