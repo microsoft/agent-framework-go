@@ -6177,21 +6177,21 @@
         "UseExtension_MultipleProviders_AllAppliedAsync": null
       },
       "Microsoft.Agents.AI.UnitTests.MessageInjectingChatClientTests": {
-        "EnqueueMessages_ConcurrentEnqueues_DoesNotLoseMessagesAsync": "agent/harness/toolautocall.TestMessageInjection_ConcurrentEnqueuesDoNotLoseMessages",
+        "EnqueueMessages_ConcurrentEnqueues_DoesNotLoseMessagesAsync": "agent.TestMessageInjection_ConcurrentEnqueuesDoNotLoseMessages",
         "GetService_ReturnsMessageInjectingChatClient_WhenDecoratorActive": null,
         "GetService_ReturnsNull_WhenDecoratorNotActive": null,
-        "RunAsync_ActionableFCCOnLaterIteration_AggregatesUsageAcrossInjectedLoopExitAsync": null,
-        "RunAsync_DeliversInjectedMessages_AfterSessionSerializationRoundTripAsync": null,
-        "RunAsync_DoesNotLoopInternally_WhenActionableFCCPresentAsync": null,
-        "RunAsync_DrainsQueue_MessagesNotRedeliveredAsync": "agent/harness/toolautocall.TestMessageInjection_DeliversMessageQueuedBeforeRunOnce",
-        "RunAsync_IncludesInjectedMessages_WhenEnqueuedBeforeCallAsync": null,
+        "RunAsync_ActionableFCCOnLaterIteration_AggregatesUsageAcrossInjectedLoopExitAsync": "agent.TestMessageInjection_ActionableFunctionCallOnLaterIterationAggregatesUsage",
+        "RunAsync_DeliversInjectedMessages_AfterSessionSerializationRoundTripAsync": "agent.TestMessageInjection_DeliversPendingMessageAfterRunAndSessionRoundTrip",
+        "RunAsync_DoesNotLoopInternally_WhenActionableFCCPresentAsync": "agent.TestMessageInjection_DoesNotLoopWhenActionableFunctionCallsPresent",
+        "RunAsync_DrainsQueue_MessagesNotRedeliveredAsync": "agent.TestMessageInjection_DeliversMessageQueuedBeforeRunOnce",
+        "RunAsync_IncludesInjectedMessages_WhenEnqueuedBeforeCallAsync": "agent.TestMessageInjection_IncludesMessagesQueuedBeforeRun",
         "RunAsync_InnerClientReturnsDerivedResponse_PreservesRuntimeTypeWhileAggregatingUsageAsync": null,
-        "RunAsync_LoopsInternally_AggregatesUsageAcrossIterationsAsync": null,
-        "RunAsync_LoopsInternally_WhenNoActionableFCCButPendingMessagesAsync": null,
-        "RunAsync_LoopsInternally_WhenOnlyInformationalOnlyFCCAndPendingMessagesAsync": null,
-        "RunAsync_PropagatesConversationId_AcrossInternalLoopIterationsAsync": "agent/harness/toolautocall.TestMessageInjection_UpdatesConversationIDBetweenProviderCalls",
-        "RunAsync_SingleServiceCall_SurfacesUsageWithoutMutatingServiceUsageAsync": null,
-        "RunStreamingAsync_LoopsInternally_SurfacesUsageFromEveryIterationAsync": null
+        "RunAsync_LoopsInternally_AggregatesUsageAcrossIterationsAsync": "agent.TestMessageInjection_AggregatesUsageAcrossIterations",
+        "RunAsync_LoopsInternally_WhenNoActionableFCCButPendingMessagesAsync": "agent.TestMessageInjection_LoopsWhenNoActionableFunctionCallsAndPendingMessages",
+        "RunAsync_LoopsInternally_WhenOnlyInformationalOnlyFCCAndPendingMessagesAsync": "agent.TestMessageInjection_LoopsWhenOnlyInformationalFunctionCallsAndPendingMessages",
+        "RunAsync_PropagatesConversationId_AcrossInternalLoopIterationsAsync": "agent.TestMessageInjection_UpdatesConversationIDBetweenProviderCalls",
+        "RunAsync_SingleServiceCall_SurfacesUsageWithoutMutatingServiceUsageAsync": "agent.TestMessageInjection_SingleServiceCallPreservesProviderUsage",
+        "RunStreamingAsync_LoopsInternally_SurfacesUsageFromEveryIterationAsync": "agent.TestMessageInjection_StreamingSurfacesUsageFromEveryIteration"
       },
       "Microsoft.Agents.AI.UnitTests.OpenTelemetryAgentBuilderExtensionsTests": {
         "UseOpenTelemetry_ReturnsBuilderForChaining": null,
