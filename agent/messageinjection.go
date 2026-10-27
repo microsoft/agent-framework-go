@@ -78,7 +78,6 @@ func (m *MessageInjector) run(next RunFunc, ctx context.Context, messages []*mes
 				if !yield(&ResponseUpdate{resetStructuredOutput: true}, nil) {
 					return
 				}
-				resetOutput = false
 			}
 
 			var injected []*message.Message
