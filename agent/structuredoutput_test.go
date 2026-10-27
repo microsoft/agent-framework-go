@@ -6,13 +6,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"iter"
+	"reflect"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
 func TestAgent_StructuredOutput_NoStructuredOutputOption(t *testing.T) {
@@ -580,6 +588,176 @@ func TestAgent_StructuredOutput_StoresAssistantMessages(t *testing.T) {
 	}
 	if text != `{"name":"Ivy"}` {
 		t.Fatalf("expected stored assistant text to equal the JSON payload, got %q", text)
+	}
+}
+
+func TestAgent_StructuredOutput_WithAutomaticTools(t *testing.T) {
+	providerErr := errors.New("provider failed after tool execution")
+	toolErr := errors.New("tool failed")
+	for _, tc := range []struct {
+		name          string
+		intermediate  string
+		final         string
+		concurrent    bool
+		fromContext   bool
+		stopEarly     bool
+		providerErr   error
+		toolErr       error
+		wantErr       error
+		wantDecodeErr bool
+	}{
+		{name: "tool calls only", final: `{"name":"Ada"}`},
+		{name: "intermediate prose", intermediate: "Looking that up.", final: `{"name":"Ada"}`},
+		{name: "intermediate JSON", intermediate: `{"name":"intermediate"}`, final: `{"name":"Ada"}`},
+		{name: "concurrent tools", concurrent: true, final: `{"name":"Ada"}`},
+		{name: "context provider output", fromContext: true, final: `{"name":"Ada"}`},
+		{name: "consumer stops early", stopEarly: true, final: `{"name":"Ada"}`},
+		{name: "empty final response", wantErr: io.EOF, wantDecodeErr: true},
+		{name: "invalid final response", final: "not JSON", wantDecodeErr: true},
+		{name: "provider error", providerErr: providerErr, wantErr: providerErr},
+		{name: "tool error", toolErr: toolErr, wantErr: toolErr},
+	} {
+		for _, stream := range []bool{false, true} {
+			for _, perCallHistory := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/stream=%t/per-call-history=%t", tc.name, stream, perCallHistory), func(t *testing.T) {
+					output := &struct {
+						Name string `json:"name"`
+					}{}
+					var providerCalls, formatCalls, unmarshalCalls int
+					var toolCalls atomic.Int32
+					checkProviderCall := func(_ context.Context, _ []*message.Message, options ...agent.Option) {
+						providerCalls++
+						format, ok := agent.GetOption(options, agent.WithResponseFormat)
+						if !ok || format.Kind != "json" {
+							t.Fatal("expected JSON response format on every provider call")
+						}
+						if output.Name != "" || unmarshalCalls != 0 {
+							t.Fatal("structured output was decoded before tool execution completed")
+						}
+					}
+					builder := agenttest.NewResponseBuilder(checkProviderCall).
+						AddText(tc.intermediate).
+						AddFunctionCall("call-1", "lookup", `{}`).
+						AddFunctionCall("call-2", "lookup", `{}`).
+						NewTurn(checkProviderCall).
+						AddFunctionCall("call-3", "lookup", `{}`).
+						NewTurn(checkProviderCall)
+					if tc.providerErr != nil {
+						builder.AddError(tc.providerErr)
+					} else {
+						builder.AddText(tc.final)
+					}
+					runner := &agenttest.Runner{Responses: builder.Build()}
+					cfg := agent.Config{
+						RequirePerServiceCallHistoryPersistence: perCallHistory,
+						Tools: []tool.Tool{functool.MustNew(functool.Config{Name: "lookup"},
+							func(context.Context, struct{}) (string, error) {
+								toolCalls.Add(1)
+								return "found", tc.toolErr
+							})},
+					}
+					options := []agent.Option{agent.Stream(stream), agent.WithSession(agenttest.CreateSession())}
+					if tc.fromContext {
+						cfg.ContextProviders = []agent.ContextProvider{agent.NewContextProvider(agent.ContextProviderConfig{
+							SourceID: "structured-output",
+							Provide: func(context.Context, agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+								return nil, []agent.Option{agent.WithStructuredOutput(output)}, nil
+							},
+						})}
+					} else {
+						options = append(options, agent.WithStructuredOutput(output))
+					}
+					a := agent.New(agent.ProviderConfig{
+						Run: runner.Run,
+						Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{
+							AllowConcurrentInvocations:         tc.concurrent,
+							MaximumConsecutiveErrorsPerRequest: new(0),
+						})},
+						Format: func(v any) (agent.ResponseFormat, error) {
+							formatCalls++
+							return jsonformat.ForType(reflect.TypeOf(v))
+						},
+						Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
+							unmarshalCalls++
+							f, err := jsonformat.FromResponseFormat(format)
+							if err != nil {
+								return err
+							}
+							return f.UnmarshalStructuredOutput(data, v)
+						},
+					}, cfg)
+					run := a.RunText(t.Context(), "look up the name", options...)
+					if tc.stopEarly {
+						for _, err := range run {
+							if err != nil {
+								t.Fatal(err)
+							}
+							break
+						}
+						wantProviderCalls, wantToolCalls := 3, int32(3)
+						if stream {
+							wantProviderCalls, wantToolCalls = 1, 0
+						}
+						if providerCalls != wantProviderCalls || toolCalls.Load() != wantToolCalls ||
+							formatCalls != 1 || unmarshalCalls != 0 || output.Name != "" {
+							t.Fatalf("provider calls=%d, tool calls=%d, format calls=%d, unmarshal calls=%d, output=%+v; want %d, %d, 1, 0, and no output",
+								providerCalls, toolCalls.Load(), formatCalls, unmarshalCalls, output, wantProviderCalls, wantToolCalls)
+						}
+						return
+					}
+					response, err := run.Collect()
+					switch {
+					case tc.wantErr != nil:
+						if !errors.Is(err, tc.wantErr) {
+							t.Fatalf("error = %v, want %v", err, tc.wantErr)
+						}
+					case tc.wantDecodeErr:
+						if err == nil {
+							t.Fatal("expected invalid final output to fail decoding")
+						}
+					case err != nil:
+						t.Fatal(err)
+					}
+					wantProviderCalls, wantToolCalls, wantUnmarshalCalls := 3, int32(3), 1
+					if tc.toolErr != nil {
+						wantProviderCalls, wantToolCalls = 1, 1
+					}
+					if tc.providerErr != nil || tc.toolErr != nil {
+						wantUnmarshalCalls = 0
+					}
+					if providerCalls != wantProviderCalls || toolCalls.Load() != wantToolCalls ||
+						formatCalls != 1 || unmarshalCalls != wantUnmarshalCalls {
+						t.Fatalf("provider calls=%d, tool calls=%d, format calls=%d, unmarshal calls=%d; want %d, %d, 1, %d",
+							providerCalls, toolCalls.Load(), formatCalls, unmarshalCalls,
+							wantProviderCalls, wantToolCalls, wantUnmarshalCalls)
+					}
+					if err != nil {
+						if output.Name != "" {
+							t.Fatalf("output changed on failure: %+v", output)
+						}
+						return
+					}
+					if output.Name != "Ada" {
+						t.Fatalf("decoded name = %q, want Ada", output.Name)
+					}
+					if got := response.Messages[len(response.Messages)-1].String(); got != tc.final {
+						t.Fatalf("final response text = %q, want %q", got, tc.final)
+					}
+					var calls, results int
+					for content := range response.Contents() {
+						switch content.(type) {
+						case *message.FunctionCallContent:
+							calls++
+						case *message.FunctionResultContent:
+							results++
+						}
+					}
+					if calls != 3 || results != 3 {
+						t.Fatalf("response contains %d tool calls and %d results, want 3 of each", calls, results)
+					}
+				})
+			}
+		}
 	}
 }
 
