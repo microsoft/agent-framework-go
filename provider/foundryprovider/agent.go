@@ -41,8 +41,9 @@ type AgentConfig struct {
 	// opt out.
 	DisableStoreOutput bool
 
-	// OpenAIOptions configure the OpenAI-compatible per-agent client. Foundry-owned
-	// endpoint, authentication, and protocol options take precedence.
+	// OpenAIOptions configure the OpenAI-compatible per-agent client, including
+	// API-key authentication when no token credential is supplied; see [NewAgent].
+	// Foundry-owned endpoint and protocol options take precedence.
 	OpenAIOptions []option.RequestOption
 }
 
@@ -65,10 +66,27 @@ func (ServerAgent) foundryAgentTarget() {}
 //
 // The endpoint must be the Foundry project endpoint. When target is [ServerAgent],
 // NewAgent builds the server-side agent endpoint from the project endpoint and agent name.
+//
+// A non-nil credential uses Microsoft Entra authentication with the Foundry audience.
+// For API-key authentication, pass a nil credential and include azure.WithAPIKey
+// in AgentConfig.OpenAIOptions:
+//
+//	a := NewAgent(endpoint, nil, ModelDeployment("model"), AgentConfig{
+//		OpenAIOptions: []option.RequestOption{azure.WithAPIKey(apiKey)},
+//	})
+//
+// The Azure API-key option sends the api-key header instead of a bearer token.
+// Do not use option.WithAPIKey, which configures OpenAI bearer-key authentication
+// and is rejected by this client.
+//
+// API-key availability depends on the target endpoint. Published Agent Applications
+// require Microsoft Entra authentication and use application endpoints that this
+// constructor does not target.
+//
+// Configure only one authentication mode. Missing or conflicting authentication
+// is reported when a request is made. Both modes retain the SDK's HTTPS and
+// credential-origin guards.
 func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTarget, config AgentConfig) *agent.Agent {
-	if credential == nil {
-		panic("credential is required")
-	}
 	var baseURL, model string
 	var serverAgent bool
 	var targetOptions []option.RequestOption

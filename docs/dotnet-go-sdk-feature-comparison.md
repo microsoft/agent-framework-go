@@ -173,9 +173,11 @@ and OpenAI .NET 2.14.0. Explicit zero dimensions and read-only shared options re
 intentional Go adaptations.
 
 [`foundryprovider.NewEmbeddingGenerator`](../provider/foundryprovider/embedding.go)
-accepts a Foundry project endpoint, Azure token credential, and embedding
-configuration. It derives the resource origin from that project URL, shares the
-Foundry provider's authenticated client setup, uses the resource
+accepts a Foundry project or resource endpoint and embedding configuration.
+Authentication follows [`foundryprovider.NewAgent`](../provider/foundryprovider/agent.go):
+use an Azure token credential, or a nil credential with `azure.WithAPIKey` in
+`OpenAIOptions` for API-key authentication. It derives the resource origin from
+the endpoint, shares the Foundry provider's authenticated client setup, uses the resource
 `/openai/v1/embeddings` route without an `api-version` query, and delegates
 generation to the OpenAI adapter. Per-request model and dimension
 options retain the OpenAI adapter's precedence and response conversion behavior.
