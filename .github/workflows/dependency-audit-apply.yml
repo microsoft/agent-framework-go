@@ -29,7 +29,7 @@ permissions:
 
 jobs:
   apply:
-    uses: microsoft/go-infra/.github/workflows/dependency-audit-apply.yml@dcf651698ac4fc17263cb4531876ebf7eca8b009
+    uses: microsoft/go-infra/.github/workflows/dependency-audit-apply.yml@4f97a1a02d432437bf178c88c286f3011a3fa87d
     permissions:
       actions: write
       contents: write
