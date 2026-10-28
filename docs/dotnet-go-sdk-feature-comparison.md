@@ -95,7 +95,7 @@ The `go-only` view returns the original baseline and a paged `go_only` object. I
 
 ## Extract the .NET Declaration Inventory
 
-The [mapping catalog](../_catalog/dotnet-go-sdk-symbol-mapping.json) contains public declarations from the three core MAF 1.22.0 packages at `net8.0` and 6,750 test method declarations from 45 upstream test assemblies. API package metadata retain version provenance under `dotnet`; test assemblies record source commits, target frameworks, and hashes under `dotnet.tests`. Public APIs from every provider integration or external dependency are not included; existing out-of-scope assessments are retained without extracted declaration metadata.
+The [mapping catalog](../_catalog/dotnet-go-sdk-symbol-mapping.json) contains public declarations from the three core MAF 1.22.0 packages and the explicitly selected `Microsoft.Agents.AI.CosmosNoSql` `1.22.0-preview.260918.1` package at `net8.0`, plus 6,750 test method declarations from 45 upstream test assemblies. API package metadata retain version provenance under `dotnet`; test assemblies record source commits, target frameworks, and hashes under `dotnet.tests`. Public APIs from every provider integration or external dependency are not included; existing out-of-scope assessments are retained without extracted declaration metadata.
 
 The [embedding package](../embedding/) ports the core embedding abstraction family from
 [Microsoft.Extensions.AI.Abstractions](https://github.com/dotnet/extensions/tree/b10f9c0a081b5dbb7755b8f5592e1d3c3f550a3a/src/Libraries/Microsoft.Extensions.AI.Abstractions/Embeddings),

@@ -10,15 +10,10 @@
     "inventory_complete": false,
     "scope": "Selected public declarations in agent-framework/dotnet/src and this Go SDK. Source identities and API correspondences were inspected at the pinned revisions; behavioral equivalence was not re-audited. A type mapping covers only that type, not all its members. Overloads are separate member entries. External dependency declarations, including Microsoft.Extensions.AI content/tool types, and unlisted APIs have not been inventoried. The historical feature inventory remains in Git history, not as a second source of symbol mappings."
   },
-  "go_only": {
-    "provider/a2aprovider.WithConfiguration": {
-      "note": "Go exposes the incoming A2A send configuration as an agent option for hosted-agent runs. The pinned .NET handler forwards request configuration internally through run options rather than a public declaration."
-    }
-  },
   "dotnet": {
     "schema_version": 1,
     "identity_format": "ecma335-v1",
-    "sha256": "aee1d5164814288ab9a479b2c726661a1d5237266f8ec2aec9be9b090985e72c",
+    "sha256": "5f130dd58d97c339b8b5fa48d11c5c7249f239148f509f1a7521b507553bb065",
     "selection": {
       "namespaces": [],
       "include_protected": false
@@ -46,6 +41,18 @@
         "repository": "https://github.com/microsoft/agent-framework",
         "assemblies": [
           "Microsoft.Agents.AI.Abstractions"
+        ]
+      },
+      "Microsoft.Agents.AI.CosmosNoSql": {
+        "version": "1.22.0-preview.260918.1",
+        "source": "https://www.nuget.org/api/v2/",
+        "download": "https://www.nuget.org/api/v2/package/Microsoft.Agents.AI.CosmosNoSql/1.22.0-preview.260918.1",
+        "sha256": "66f049ebcbe1d78135c82f8b1d090b2f2690290cb93e8006b5d9896082e7e303",
+        "framework": "net8.0",
+        "asset_group": "lib/net8.0",
+        "repository": "https://github.com/microsoft/agent-framework",
+        "assemblies": [
+          "Microsoft.Agents.AI.CosmosNoSql"
         ]
       },
       "Microsoft.Agents.AI.Workflows": {
@@ -81,6 +88,13 @@
         "informational_version": "1.22.0+0c9944cc9f577d51277ac7c55dbc388b60a577af",
         "target_framework": ".NETCoreApp,Version=v8.0",
         "sha256": "084d23f8e4575e502d0c3e005671e4009157405ee5665b4b9e993c63b1e86f91",
+        "reference_assembly": false
+      },
+      "Microsoft.Agents.AI.CosmosNoSql": {
+        "version": "1.22.0.0",
+        "informational_version": "1.22.0-preview+0c9944cc9f577d51277ac7c55dbc388b60a577af",
+        "target_framework": ".NETCoreApp,Version=v8.0",
+        "sha256": "23f406d956362fa039ddbe673a397c372d6b9d51ae9d1e6e64488530d25f1447",
         "reference_assembly": false
       },
       "Microsoft.Agents.AI.Hosting.A2A": {
@@ -334,6 +348,11 @@
           "sha256": "f60e4c179e6e4d678003993609339049d8e8ebe72ab817487441cdb49707f472"
         }
       }
+    }
+  },
+  "go_only": {
+    "provider/a2aprovider.WithConfiguration": {
+      "note": "Go exposes the incoming A2A send configuration as an agent option for hosted-agent runs. The pinned .NET handler forwards request configuration internally through run options rather than a public declaration."
     }
   },
   "tests": {
@@ -1481,41 +1500,41 @@
     },
     "Microsoft.Agents.AI.CosmosNoSql.UnitTests": {
       "Microsoft.Agents.AI.CosmosNoSql.UnitTests.CosmosChatHistoryProviderTests": {
-        "ClearMessagesAsync_WithMessages_ShouldDeleteAndReturnCountAsync": null,
-        "ClearMessagesAsync_WithNoMessages_ShouldReturnZeroAsync": null,
-        "Constructor_WithConnectionString_ShouldCreateInstance": null,
-        "Constructor_WithHierarchicalConnectionString_ShouldCreateInstance": null,
-        "Constructor_WithHierarchicalCosmosClient_ShouldCreateInstance": null,
-        "Constructor_WithHierarchicalEndpoint_ShouldCreateInstance": null,
+        "ClearMessagesAsync_WithMessages_ShouldDeleteAndReturnCountAsync": "provider/azureprovider.TestCosmosHistoryProviderClearMessages",
+        "ClearMessagesAsync_WithNoMessages_ShouldReturnZeroAsync": "provider/azureprovider.TestCosmosHistoryProviderEmptyClear",
+        "Constructor_WithConnectionString_ShouldCreateInstance": "provider/azureprovider.TestCosmosHistoryProviderConnectionStringClient",
+        "Constructor_WithHierarchicalConnectionString_ShouldCreateInstance": "provider/azureprovider.TestCosmosHistoryProviderHierarchicalConnectionStringClient",
+        "Constructor_WithHierarchicalCosmosClient_ShouldCreateInstance": "provider/azureprovider.TestCosmosHistoryProviderHierarchicalClient",
+        "Constructor_WithHierarchicalEndpoint_ShouldCreateInstance": "provider/azureprovider.TestCosmosHistoryProviderHierarchicalTokenClient",
         "Constructor_WithNullConnectionString_ShouldThrowArgumentException": null,
-        "Constructor_WithNullStateInitializer_ShouldThrowArgumentNullException": null,
-        "Dispose_AfterUse_ShouldNotThrow": null,
-        "Dispose_MultipleCalls_ShouldNotThrow": null,
-        "FullWorkflow_AddAndGet_ShouldWorkCorrectlyAsync": null,
-        "GetMessageCountAsync_WithMessages_ShouldReturnCorrectCountAsync": null,
-        "GetMessageCountAsync_WithNoMessages_ShouldReturnZeroAsync": null,
-        "GetMessagesAsync_AfterDispose_ShouldThrowObjectDisposedExceptionAsync": null,
-        "GetMessagesAsync_DoesNotApplyInvocationFilterOrSourceAttributionAsync": null,
-        "GetMessagesAsync_WithCanceledToken_ShouldThrowOperationCanceledExceptionAsync": null,
-        "GetMessagesAsync_WithMessages_ShouldReturnAllMessagesAcrossPagesAsync": null,
-        "GetMessagesAsync_WithNoMessages_ShouldReturnEmptyAsync": null,
-        "HierarchicalAndSimplePartitioning_ShouldCoexistAsync": null,
-        "InvokedAsync_CustomStorageInputFilter_OverridesDefaultAsync": null,
-        "InvokedAsync_DefaultFilter_ExcludesChatHistoryMessagesFromStorageAsync": null,
-        "InvokedAsync_WithHierarchicalMultipleMessages_ShouldAddAllMessagesAsync": null,
-        "InvokedAsync_WithHierarchicalPartitioning_ShouldAddMessageWithMetadataAsync": null,
-        "InvokedAsync_WithMultipleMessages_ShouldAddAllMessagesAsync": null,
-        "InvokedAsync_WithNullMessageTtl_ShouldPersistWithoutTtlPropertyAsync": null,
-        "InvokedAsync_WithSingleMessage_ShouldAddMessageAsync": null,
-        "InvokingAsync_RetrievalOutputFilter_FiltersRetrievedMessagesAsync": null,
-        "InvokingAsync_WithConversationIsolation_ShouldOnlyReturnMessagesForConversationAsync": null,
-        "InvokingAsync_WithHierarchicalPartitionIsolation_ShouldIsolateMessagesByUserIdAsync": null,
-        "InvokingAsync_WithNoMessages_ShouldReturnEmptyAsync": null,
-        "MaxMessagesToRetrieve_Null_ShouldReturnAllMessagesAsync": null,
-        "MaxMessagesToRetrieve_ShouldLimitAndReturnMostRecentAsync": null,
-        "StateBag_WithHierarchicalPartitioning_ShouldPreserveStateAcrossProviderInstancesAsync": null,
-        "StateKeys_ReturnsCustomKey_WhenSetViaConstructor": null,
-        "StateKeys_ReturnsDefaultKey_WhenNoStateKeyProvided": null,
+        "Constructor_WithNullStateInitializer_ShouldThrowArgumentNullException": "provider/azureprovider.TestCosmosHistoryProviderNilInitializer",
+        "Dispose_AfterUse_ShouldNotThrow": "provider/azureprovider.TestCosmosHistoryProviderClose",
+        "Dispose_MultipleCalls_ShouldNotThrow": "provider/azureprovider.TestCosmosHistoryProviderCloseIdempotent",
+        "FullWorkflow_AddAndGet_ShouldWorkCorrectlyAsync": "provider/azureprovider.TestCosmosHistoryProviderPersistenceAcrossInstances",
+        "GetMessageCountAsync_WithMessages_ShouldReturnCorrectCountAsync": "provider/azureprovider.TestCosmosHistoryProviderMessageCount",
+        "GetMessageCountAsync_WithNoMessages_ShouldReturnZeroAsync": "provider/azureprovider.TestCosmosHistoryProviderEmptyMessageCount",
+        "GetMessagesAsync_AfterDispose_ShouldThrowObjectDisposedExceptionAsync": "provider/azureprovider.TestCosmosHistoryProviderMessagesAfterClose",
+        "GetMessagesAsync_DoesNotApplyInvocationFilterOrSourceAttributionAsync": "provider/azureprovider.TestCosmosHistoryProviderRawMessages",
+        "GetMessagesAsync_WithCanceledToken_ShouldThrowOperationCanceledExceptionAsync": "provider/azureprovider.TestCosmosHistoryProviderMessagesCanceled",
+        "GetMessagesAsync_WithMessages_ShouldReturnAllMessagesAcrossPagesAsync": "provider/azureprovider.TestCosmosHistoryProviderMessagesAcrossPages",
+        "GetMessagesAsync_WithNoMessages_ShouldReturnEmptyAsync": "provider/azureprovider.TestCosmosHistoryProviderEmptyMessages",
+        "HierarchicalAndSimplePartitioning_ShouldCoexistAsync": "provider/azureprovider.TestCosmosHistoryProviderPartitionModesCoexist",
+        "InvokedAsync_CustomStorageInputFilter_OverridesDefaultAsync": "provider/azureprovider.TestCosmosHistoryProviderExternalStorageFilter",
+        "InvokedAsync_DefaultFilter_ExcludesChatHistoryMessagesFromStorageAsync": "provider/azureprovider.TestCosmosHistoryProviderDefaultStorageFilter",
+        "InvokedAsync_WithHierarchicalMultipleMessages_ShouldAddAllMessagesAsync": "provider/azureprovider.TestCosmosHistoryProviderHierarchicalMessages",
+        "InvokedAsync_WithHierarchicalPartitioning_ShouldAddMessageWithMetadataAsync": "provider/azureprovider.TestCosmosHistoryProviderHierarchicalMessageMetadata",
+        "InvokedAsync_WithMultipleMessages_ShouldAddAllMessagesAsync": "provider/azureprovider.TestCosmosHistoryProviderMultipleMessages",
+        "InvokedAsync_WithNullMessageTtl_ShouldPersistWithoutTtlPropertyAsync": "provider/azureprovider.TestCosmosHistoryProviderOmittedTTL",
+        "InvokedAsync_WithSingleMessage_ShouldAddMessageAsync": "provider/azureprovider.TestCosmosHistoryProviderSingleMessage",
+        "InvokingAsync_RetrievalOutputFilter_FiltersRetrievedMessagesAsync": "provider/azureprovider.TestCosmosHistoryProviderRetrievalOutputFilter",
+        "InvokingAsync_WithConversationIsolation_ShouldOnlyReturnMessagesForConversationAsync": "provider/azureprovider.TestCosmosHistoryProviderConversationIsolation",
+        "InvokingAsync_WithHierarchicalPartitionIsolation_ShouldIsolateMessagesByUserIdAsync": "provider/azureprovider.TestCosmosHistoryProviderUserIsolation",
+        "InvokingAsync_WithNoMessages_ShouldReturnEmptyAsync": "provider/azureprovider.TestCosmosHistoryProviderEmptyInvocation",
+        "MaxMessagesToRetrieve_Null_ShouldReturnAllMessagesAsync": "provider/azureprovider.TestCosmosHistoryProviderUnlimitedMessages",
+        "MaxMessagesToRetrieve_ShouldLimitAndReturnMostRecentAsync": "provider/azureprovider.TestCosmosHistoryProviderLatestMessages",
+        "StateBag_WithHierarchicalPartitioning_ShouldPreserveStateAcrossProviderInstancesAsync": "provider/azureprovider.TestCosmosHistoryProviderSharedSessionRouting",
+        "StateKeys_ReturnsCustomKey_WhenSetViaConstructor": "provider/azureprovider.TestCosmosHistoryProviderCustomStateKey",
+        "StateKeys_ReturnsDefaultKey_WhenNoStateKeyProvided": "provider/azureprovider.TestCosmosHistoryProviderDefaultStateKey",
         "State_WithEmptyConversationId_ShouldThrowArgumentException": null,
         "State_WithWhitespaceConversationId_ShouldThrowArgumentException": null
       },
@@ -8547,13 +8566,20 @@
           },
           "Use(Func<AIAgent, AIAgent>) -> AIAgentBuilder": {
             "go": "agent.New(provider, agent.Config{Middlewares: []agent.Middleware{middleware}})",
-            "go_symbols": ["agent.Config.Middlewares", "agent.Middleware", "agent.New"],
+            "go_symbols": [
+              "agent.Config.Middlewares",
+              "agent.Middleware",
+              "agent.New"
+            ],
             "status": "adapted",
             "note": "Register run middleware at construction, first registered outermost, instead of adding an agent-decorator factory to a mutable builder."
           },
           "Use(Func<AIAgent, IServiceProvider, AIAgent>) -> AIAgentBuilder": {
             "go": "agent.New(provider, agent.Config{Middlewares: []agent.Middleware{middleware}})",
-            "go_symbols": ["agent.Config.Middlewares", "agent.New"],
+            "go_symbols": [
+              "agent.Config.Middlewares",
+              "agent.New"
+            ],
             "status": "partial",
             "note": "Construction-time middleware covers pipeline composition, but Go does not invoke agent factories with a build-time IServiceProvider; dependencies must be supplied/captured by the caller."
           },
@@ -8601,7 +8627,10 @@
           },
           "AIAgentBuilder(Func<IServiceProvider, AIAgent>)": {
             "go": "agent.New(provider, config)",
-            "go_symbols": ["agent.New", "agent.Config"],
+            "go_symbols": [
+              "agent.New",
+              "agent.Config"
+            ],
             "status": "partial",
             "note": "Go constructs an agent from supplied provider/config values; it has no deferred inner-agent factory invoked with services on each Build call."
           }
@@ -8612,7 +8641,11 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "agenttool.New(a, agenttool.Config{})",
-          "go_symbols": ["tool/agenttool.New", "agent.New", "agent.Config.Middlewares"],
+          "go_symbols": [
+            "tool/agenttool.New",
+            "agent.New",
+            "agent.Config.Middlewares"
+          ],
           "status": "adapted",
           "note": "Agent helper operations are distributed across constructor configuration and agenttool rather than a static extension container; this does not supply every adapter member."
         },
@@ -8721,7 +8754,9 @@
         "constructors": {
           "AIContext()": {
             "go": "agent.InvokingContext{}",
-            "go_symbols": ["agent.InvokingContext"],
+            "go_symbols": [
+              "agent.InvokingContext"
+            ],
             "status": "adapted",
             "note": "Go passes messages and options as an InvokingContext and returns provider additions separately, rather than constructing an AIContext result object."
           }
@@ -8828,13 +8863,20 @@
         "constructors": {
           "InvokedContext(AIAgent, AgentSession, IEnumerable<ChatMessage>, Exception)": {
             "go": "agent.InvokedContext{RequestMessages: messages, Err: runErr}",
-            "go_symbols": ["agent.InvokedContext", "agent.InvokedContext.Err"],
+            "go_symbols": [
+              "agent.InvokedContext",
+              "agent.InvokedContext.Err"
+            ],
             "status": "adapted",
             "note": "Construct a post-run context value with request messages and Err; agent identity comes from context.Context and session from Options. Go does not enforce the .NET constructor's null checks."
           },
           "InvokedContext(AIAgent, AgentSession, IEnumerable<ChatMessage>, IEnumerable<ChatMessage>)": {
             "go": "agent.InvokedContext{RequestMessages: requests, ResponseMessages: responses, Options: []agent.Option{agent.WithSession(session)}}",
-            "go_symbols": ["agent.InvokedContext", "agent.WithSession", "agent.AgentFromContext"],
+            "go_symbols": [
+              "agent.InvokedContext",
+              "agent.WithSession",
+              "agent.AgentFromContext"
+            ],
             "status": "adapted",
             "note": "Construct the shared completion value with message slices and a session option; agent identity is supplied separately in context.Context by Agent.Run, and nil Err denotes success.",
             "experimental": "MAAI001"
@@ -8884,7 +8926,13 @@
         "constructors": {
           "InvokingContext(AIAgent, AgentSession, AIContext)": {
             "go": "agent.InvokingContext{Messages: messages, Options: []agent.Option{agent.WithSession(session), agent.WithInstructions(instructions), agent.WithTool(t)}}",
-            "go_symbols": ["agent.InvokingContext", "agent.WithSession", "agent.WithInstructions", "agent.WithTool", "agent.AgentFromContext"],
+            "go_symbols": [
+              "agent.InvokingContext",
+              "agent.WithSession",
+              "agent.WithInstructions",
+              "agent.WithTool",
+              "agent.AgentFromContext"
+            ],
             "status": "adapted",
             "note": "Flatten AIContext into messages and additive instruction/tool options; session is an option and agent identity comes separately from the callback context, not constructor fields.",
             "experimental": "MAAI001"
@@ -9056,18 +9104,24 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "skills.Skill{}",
-          "go_symbols": ["agent/skills.Skill"],
+          "go_symbols": [
+            "agent/skills.Skill"
+          ],
           "status": "partial",
           "note": "Go code-defined skills use explicit Skill fields and callbacks; there is no class inheritance, attribute discovery, or automatic synthesized class-skill document."
         },
         "properties": {
           "Resources": {
-            "go_symbols": ["agent/skills.Skill.Resources"],
+            "go_symbols": [
+              "agent/skills.Skill.Resources"
+            ],
             "status": "adapted",
             "note": "Register resources explicitly in a slice instead of lazily reflecting attributed class members."
           },
           "Scripts": {
-            "go_symbols": ["agent/skills.Skill.Scripts"],
+            "go_symbols": [
+              "agent/skills.Skill.Scripts"
+            ],
             "status": "adapted",
             "note": "Register script callbacks explicitly instead of lazily reflecting attributed methods."
           }
@@ -9075,19 +9129,27 @@
         "methods": {
           "GetContentAsync(CancellationToken) -> ValueTask<string>": {
             "go": "skill.GetContent(ctx)",
-            "go_symbols": ["agent/skills.Skill.GetContent"],
+            "go_symbols": [
+              "agent/skills.Skill.GetContent"
+            ],
             "status": "partial",
             "note": "The callback supplies content, but Go does not synthesize and cache the class-skill XML document from frontmatter, instructions, resources, and scripts."
           },
           "GetResourceAsync(string, CancellationToken) -> ValueTask<AgentSkillResource>": {
             "go": "for _, resource := range skill.Resources { if resource.Name == name { _ = resource; break } }",
-            "go_symbols": ["agent/skills.Skill.Resources", "agent/skills.Resource.Name"],
+            "go_symbols": [
+              "agent/skills.Skill.Resources",
+              "agent/skills.Resource.Name"
+            ],
             "status": "adapted",
             "note": "Look up the explicitly registered resource by name in the slice; Go has no reflected class-member lookup method."
           },
           "GetScriptAsync(string, CancellationToken) -> ValueTask<AgentSkillScript>": {
             "go": "for _, script := range skill.Scripts { if script.Name == name { _ = script; break } }",
-            "go_symbols": ["agent/skills.Skill.Scripts", "agent/skills.Script.Name"],
+            "go_symbols": [
+              "agent/skills.Skill.Scripts",
+              "agent/skills.Script.Name"
+            ],
             "status": "adapted",
             "note": "Look up the explicitly registered script by name in the slice rather than using class-member discovery."
           }
@@ -9271,7 +9333,9 @@
         },
         "properties": {
           "Frontmatter": {
-            "go_symbols": ["agent/skills.Skill.Frontmatter"],
+            "go_symbols": [
+              "agent/skills.Skill.Frontmatter"
+            ],
             "status": "mapped"
           },
           "Path": {
@@ -9283,19 +9347,28 @@
         "methods": {
           "GetContentAsync(CancellationToken) -> ValueTask<string>": {
             "go": "skill.GetContent(ctx)",
-            "go_symbols": ["agent/skills.Skill.GetContent", "agent/skills/fsskills.Source.Skills"],
+            "go_symbols": [
+              "agent/skills.Skill.GetContent",
+              "agent/skills/fsskills.Source.Skills"
+            ],
             "status": "adapted",
             "note": "File discovery installs a GetContent callback that caches raw SKILL.md plus available-resource/script blocks; there is no distinct file-skill method."
           },
           "GetResourceAsync(string, CancellationToken) -> ValueTask<AgentSkillResource>": {
             "go": "for _, resource := range skill.Resources { if resource.Name == name { _ = resource; break } }",
-            "go_symbols": ["agent/skills.Skill.Resources", "agent/skills.Resource.Name"],
+            "go_symbols": [
+              "agent/skills.Skill.Resources",
+              "agent/skills.Resource.Name"
+            ],
             "status": "adapted",
             "note": "File-backed resources are named values in Skill.Resources; callers perform the lookup rather than call a file-skill accessor."
           },
           "GetScriptAsync(string, CancellationToken) -> ValueTask<AgentSkillScript>": {
             "go": "for _, script := range skill.Scripts { if script.Name == name { _ = script; break } }",
-            "go_symbols": ["agent/skills.Skill.Scripts", "agent/skills.Script.Name"],
+            "go_symbols": [
+              "agent/skills.Skill.Scripts",
+              "agent/skills.Script.Name"
+            ],
             "status": "adapted",
             "note": "File-backed scripts are named values in Skill.Scripts rather than retrieved by a separate accessor."
           }
@@ -9390,7 +9463,9 @@
           },
           "Invoke(AgentFileSkill, AgentFileSkillScript, JsonElement?, IServiceProvider, CancellationToken) -> Task<object>": {
             "go": "runner(ctx, skill, script, arguments)",
-            "go_symbols": ["agent/skills.ScriptRunner"],
+            "go_symbols": [
+              "agent/skills.ScriptRunner"
+            ],
             "status": "partial",
             "note": "Go invokes ScriptRunner directly and returns (any, error); it accepts positional []string arguments, not arbitrary raw JSON, and has no IServiceProvider parameter."
           }
@@ -9430,7 +9505,11 @@
         "constructors": {
           "AgentFileSkillsSource(IEnumerable<string>, AgentFileSkillScriptRunner, AgentFileSkillsSourceOptions, ILoggerFactory)": {
             "go": "fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: runner, Logger: logger}, filesystems...)",
-            "go_symbols": ["agent/skills/fsskills.NewSourceOptions", "agent/skills/fsskills.SourceOptions.ScriptRunner", "agent/skills/fsskills.SourceOptions.Logger"],
+            "go_symbols": [
+              "agent/skills/fsskills.NewSourceOptions",
+              "agent/skills/fsskills.SourceOptions.ScriptRunner",
+              "agent/skills/fsskills.SourceOptions.Logger"
+            ],
             "status": "adapted",
             "note": "Supply fs.FS roots instead of directory strings and put discovery settings, runner, and slog logger into a value options struct; runner arguments are positional strings."
           },
@@ -9490,7 +9569,9 @@
         "constructors": {
           "AgentFileSkillsSourceOptions()": {
             "go": "fsskills.SourceOptions{}",
-            "go_symbols": ["agent/skills/fsskills.SourceOptions"],
+            "go_symbols": [
+              "agent/skills/fsskills.SourceOptions"
+            ],
             "status": "adapted",
             "note": "Use zero-value options; the source factory applies the default extensions and search depth when corresponding fields are nil."
           }
@@ -9568,14 +9649,20 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "skills.NewInMemorySource(skill)",
-          "go_symbols": ["agent/skills.NewInMemorySource", "agent/skills.Source"],
+          "go_symbols": [
+            "agent/skills.NewInMemorySource",
+            "agent/skills.Source"
+          ],
           "status": "adapted",
           "note": "An unexported slice-backed implementation is returned through Source rather than a public concrete in-memory source class."
         },
         "methods": {
           "GetSkillsAsync(AgentSkillsSourceContext, CancellationToken) -> Task<IList<AgentSkill>>": {
             "go": "source.Skills(ctx)",
-            "go_symbols": ["agent/skills.Source.Skills", "agent/skills.NewInMemorySource"],
+            "go_symbols": [
+              "agent/skills.Source.Skills",
+              "agent/skills.NewInMemorySource"
+            ],
             "status": "adapted",
             "note": "Retrieve the in-memory skill slice through Source.Skills(context.Context); this implementation does not need the .NET agent/session argument."
           }
@@ -9793,7 +9880,9 @@
         "constructors": {
           "AgentModeProviderOptions()": {
             "go": "agentmode.Config{}",
-            "go_symbols": ["agent/harness/agentmode.Config"],
+            "go_symbols": [
+              "agent/harness/agentmode.Config"
+            ],
             "status": "adapted",
             "note": "Use a zero-value config; agentmode.New applies default modes, instructions, initial mode, and enabled tools."
           }
@@ -9827,7 +9916,10 @@
         "constructors": {
           "AgentMode(string, string)": {
             "go": "agentmode.Mode{Name: \"plan\", Instructions: \"Plan the work.\"}",
-            "go_symbols": ["agent/harness/agentmode.Mode", "agent/harness/agentmode.New"],
+            "go_symbols": [
+              "agent/harness/agentmode.Mode",
+              "agent/harness/agentmode.New"
+            ],
             "status": "adapted",
             "note": "Construct a Mode value; nonblank name/instructions validation occurs when creating the provider rather than in a mode constructor."
           }
@@ -9861,13 +9953,17 @@
         "methods": {
           "Equals(AgentRequestMessageSourceAttribution) -> bool": {
             "go": "var left, right message.Source; _ = left == right",
-            "go_symbols": ["message.Source"],
+            "go_symbols": [
+              "message.Source"
+            ],
             "status": "adapted",
             "note": "Source is a comparable Go value: == compares its type and ID exactly rather than invoking an Equals method."
           },
           "Equals(object) -> bool": {
             "go": "var left message.Source; var candidate any = message.Source{}; right, ok := candidate.(message.Source); _ = ok && left == right",
-            "go_symbols": ["message.Source"],
+            "go_symbols": [
+              "message.Source"
+            ],
             "status": "adapted",
             "note": "Type-assert an arbitrary value to Source before comparing; Go has no object-taking Equals method."
           },
@@ -9885,13 +9981,17 @@
           },
           "op_Equality(AgentRequestMessageSourceAttribution, AgentRequestMessageSourceAttribution) -> bool": {
             "go": "var left, right message.Source; _ = left == right",
-            "go_symbols": ["message.Source"],
+            "go_symbols": [
+              "message.Source"
+            ],
             "status": "adapted",
             "note": "The comparable Source struct uses Go's built-in == operator to compare type and ID."
           },
           "op_Inequality(AgentRequestMessageSourceAttribution, AgentRequestMessageSourceAttribution) -> bool": {
             "go": "var left, right message.Source; _ = left != right",
-            "go_symbols": ["message.Source"],
+            "go_symbols": [
+              "message.Source"
+            ],
             "status": "adapted",
             "note": "The comparable Source struct uses Go's built-in != operator to compare type and ID."
           }
@@ -9959,13 +10059,17 @@
         "methods": {
           "Equals(AgentRequestMessageSourceType) -> bool": {
             "go": "var left, right message.SourceType; _ = left == right",
-            "go_symbols": ["message.SourceType"],
+            "go_symbols": [
+              "message.SourceType"
+            ],
             "status": "adapted",
             "note": "Compare Go SourceType values directly; their local category strings need not match the .NET Value spellings."
           },
           "Equals(object) -> bool": {
             "go": "var left message.SourceType; var candidate any = message.SourceType(\"custom\"); right, ok := candidate.(message.SourceType); _ = ok && left == right",
-            "go_symbols": ["message.SourceType"],
+            "go_symbols": [
+              "message.SourceType"
+            ],
             "status": "adapted",
             "note": "Type-assert an arbitrary value to SourceType before comparing; Go has no object-taking Equals method."
           },
@@ -9977,19 +10081,25 @@
           },
           "ToString() -> string": {
             "go": "string(message.SourceType(\"custom\"))",
-            "go_symbols": ["message.SourceType"],
+            "go_symbols": [
+              "message.SourceType"
+            ],
             "status": "adapted",
             "note": "Convert SourceType to string; Go uses local category values and an empty string for external input, unlike the .NET External spelling."
           },
           "op_Equality(AgentRequestMessageSourceType, AgentRequestMessageSourceType) -> bool": {
             "go": "var left, right message.SourceType; _ = left == right",
-            "go_symbols": ["message.SourceType"],
+            "go_symbols": [
+              "message.SourceType"
+            ],
             "status": "adapted",
             "note": "Go's string-backed SourceType compares directly with ==."
           },
           "op_Inequality(AgentRequestMessageSourceType, AgentRequestMessageSourceType) -> bool": {
             "go": "var left, right message.SourceType; _ = left != right",
-            "go_symbols": ["message.SourceType"],
+            "go_symbols": [
+              "message.SourceType"
+            ],
             "status": "adapted",
             "note": "Go's string-backed SourceType compares directly with !=."
           }
@@ -10089,20 +10199,27 @@
           },
           "ToString() -> string": {
             "go": "response.String()",
-            "go_symbols": ["agent.Response.String"],
+            "go_symbols": [
+              "agent.Response.String"
+            ],
             "status": "mapped"
           }
         },
         "constructors": {
           "AgentResponse()": {
             "go": "agent.Response{}",
-            "go_symbols": ["agent.Response"],
+            "go_symbols": [
+              "agent.Response"
+            ],
             "status": "mapped",
             "note": "The Go zero value has a nil Messages slice instead of an allocated empty list; both contain no messages."
           },
           "AgentResponse(ChatMessage)": {
             "go": "agent.Response{Messages: []*message.Message{msg}}",
-            "go_symbols": ["agent.Response", "agent.Response.Messages"],
+            "go_symbols": [
+              "agent.Response",
+              "agent.Response.Messages"
+            ],
             "status": "adapted",
             "note": "Initialize the Messages slice with the one message instead of calling a constructor."
           },
@@ -10114,7 +10231,10 @@
           },
           "AgentResponse(IList<ChatMessage>)": {
             "go": "agent.Response{Messages: messages}",
-            "go_symbols": ["agent.Response", "agent.Response.Messages"],
+            "go_symbols": [
+              "agent.Response",
+              "agent.Response.Messages"
+            ],
             "status": "adapted",
             "note": "Supply a Go message slice directly; the response retains the slice rather than wrapping an IList."
           }
@@ -10171,7 +10291,10 @@
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
           "go": "stream.Collect()",
-          "go_symbols": ["agent.ResponseStream.Collect", "agent.Response.Update"],
+          "go_symbols": [
+            "agent.ResponseStream.Collect",
+            "agent.Response.Update"
+          ],
           "status": "adapted",
           "note": "Go folds streaming updates through Collect or Response.Update; there is no extension-method class or conversion to Microsoft.Extensions.AI response types."
         },
@@ -10300,14 +10423,18 @@
         "methods": {
           "ToString() -> string": {
             "go": "update.String()",
-            "go_symbols": ["agent.ResponseUpdate.String"],
+            "go_symbols": [
+              "agent.ResponseUpdate.String"
+            ],
             "status": "mapped"
           }
         },
         "constructors": {
           "AgentResponseUpdate()": {
             "go": "agent.ResponseUpdate{}",
-            "go_symbols": ["agent.ResponseUpdate"],
+            "go_symbols": [
+              "agent.ResponseUpdate"
+            ],
             "status": "mapped"
           },
           "AgentResponseUpdate(ChatResponseUpdate)": {
@@ -10318,13 +10445,21 @@
           },
           "AgentResponseUpdate(ChatRole?, IList<AIContent>)": {
             "go": "agent.ResponseUpdate{Role: role, Contents: contents}",
-            "go_symbols": ["agent.ResponseUpdate", "agent.ResponseUpdate.Contents", "agent.ResponseUpdate.Role"],
+            "go_symbols": [
+              "agent.ResponseUpdate",
+              "agent.ResponseUpdate.Contents",
+              "agent.ResponseUpdate.Role"
+            ],
             "status": "adapted",
             "note": "Use a struct literal; the zero Go role means no explicit role and Contents is a Go slice."
           },
           "AgentResponseUpdate(ChatRole?, string)": {
             "go": "agent.ResponseUpdate{Role: role, Contents: message.Contents{&message.TextContent{Text: text}}}",
-            "go_symbols": ["agent.ResponseUpdate", "message.Contents", "message.TextContent"],
+            "go_symbols": [
+              "agent.ResponseUpdate",
+              "message.Contents",
+              "message.TextContent"
+            ],
             "status": "adapted",
             "note": "Wrap non-nil text in a TextContent item in the Contents slice; Go does not distinguish a null role from the zero role."
           }
@@ -10379,7 +10514,11 @@
         "constructors": {
           "AgentRunContext(AIAgent, AgentSession, IReadOnlyCollection<ChatMessage>, AgentRunOptions)": {
             "go": "agent.InvokingContext{Messages: messages, Options: options}",
-            "go_symbols": ["agent.InvokingContext", "agent.AgentFromContext", "agent.WithSession"],
+            "go_symbols": [
+              "agent.InvokingContext",
+              "agent.AgentFromContext",
+              "agent.WithSession"
+            ],
             "status": "adapted",
             "note": "Go passes run messages and typed options explicitly; retrieve agent identity from context.Context and the session from options. No aggregate run-context constructor or .NET null checks are needed."
           }
@@ -10436,7 +10575,9 @@
         "constructors": {
           "AgentRunOptions()": {
             "go": "[]agent.Option{}",
-            "go_symbols": ["agent.Option"],
+            "go_symbols": [
+              "agent.Option"
+            ],
             "status": "adapted",
             "note": "Go uses variadic typed options rather than allocating an AgentRunOptions object."
           }
@@ -10484,20 +10625,27 @@
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
           "go": "session.InMemoryHistory(\"\")",
-          "go_symbols": ["agent.Session.InMemoryHistory", "agent.Session.SetInMemoryHistory"],
+          "go_symbols": [
+            "agent.Session.InMemoryHistory",
+            "agent.Session.SetInMemoryHistory"
+          ],
           "status": "adapted",
           "note": "The history extension methods are ordinary methods on Go Session; this type mapping does not imply a separate extension-method container."
         },
         "methods": {
           "SetInMemoryChatHistory(AgentSession, List<ChatMessage>, string, JsonSerializerOptions) -> void": {
             "go": "session.SetInMemoryHistory(\"\", messages)",
-            "go_symbols": ["agent.Session.SetInMemoryHistory"],
+            "go_symbols": [
+              "agent.Session.SetInMemoryHistory"
+            ],
             "status": "mapped",
             "note": "Go uses encoding/json without per-call JsonSerializerOptions; an empty state key selects the Go provider's default. Call SetInMemoryHistory after editing retrieved history to persist changes."
           },
           "TryGetInMemoryChatHistory(AgentSession, out List<ChatMessage>, string, JsonSerializerOptions) -> bool": {
             "go": "session.InMemoryHistory(\"\")",
-            "go_symbols": ["agent.Session.InMemoryHistory"],
+            "go_symbols": [
+              "agent.Session.InMemoryHistory"
+            ],
             "status": "mapped",
             "note": "Go returns messages and error rather than a bool/out parameter; a nil slice represents missing or null history. It uses encoding/json without per-call JsonSerializerOptions, and an empty state key selects the Go provider's default."
           }
@@ -10508,32 +10656,45 @@
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
           "go": "agent.Session{}",
-          "go_symbols": ["agent.Session", "agent.Session.Get", "agent.Session.Set", "agent.Session.Delete"],
+          "go_symbols": [
+            "agent.Session",
+            "agent.Session.Get",
+            "agent.Session.Set",
+            "agent.Session.Delete"
+          ],
           "status": "partial",
           "note": "Session owns concurrent state directly rather than exporting a separate bag. Individual operations and lazy decoding are synchronized; JSON enumeration can reflect overlapping writes, while UnmarshalJSON atomically replaces state and service ID. Go preserves raw JSON after a read rather than reserializing cached values as .NET does; call Set after edits."
         },
         "properties": {
           "Count": {
-            "go_symbols": ["agent.Session.Count"],
+            "go_symbols": [
+              "agent.Session.Count"
+            ],
             "status": "mapped"
           }
         },
         "methods": {
           "Deserialize(JsonElement) -> AgentSessionStateBag": {
             "go": "json.Unmarshal(data, session)",
-            "go_symbols": ["agent.Session.UnmarshalJSON"],
+            "go_symbols": [
+              "agent.Session.UnmarshalJSON"
+            ],
             "status": "partial",
             "note": "Go deserializes a complete Session envelope with a State field, not a standalone state-bag JsonElement."
           },
           "GetValue<T>(string, JsonSerializerOptions) -> T": {
             "go": "session.Get(\"key\", &value)",
-            "go_symbols": ["agent.Session.Get"],
+            "go_symbols": [
+              "agent.Session.Get"
+            ],
             "status": "partial",
             "note": "Go Get writes to a destination pointer but reports unreadable stored values as not found instead of throwing. A deserialized session preserves raw JSON after reads, and Go has no per-call JsonSerializerOptions."
           },
           "Serialize() -> JsonElement": {
             "go": "json.Marshal(session)",
-            "go_symbols": ["agent.Session.MarshalJSON"],
+            "go_symbols": [
+              "agent.Session.MarshalJSON"
+            ],
             "status": "partial",
             "note": "Go serializes the whole Session envelope as JSON bytes, not a standalone state-bag JsonElement."
           },
@@ -10565,7 +10726,9 @@
         "constructors": {
           "AgentSessionStateBag()": {
             "go": "agent.Session{}",
-            "go_symbols": ["agent.Session"],
+            "go_symbols": [
+              "agent.Session"
+            ],
             "status": "adapted",
             "note": "The zero-value Session owns an initially empty state map; Go has no separate state-bag object."
           }
@@ -10576,20 +10739,27 @@
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
           "go": "json.Marshal(session)",
-          "go_symbols": ["agent.Session.MarshalJSON", "agent.Session.UnmarshalJSON"],
+          "go_symbols": [
+            "agent.Session.MarshalJSON",
+            "agent.Session.UnmarshalJSON"
+          ],
           "status": "partial",
           "note": "Go serializes state through Session JSON methods without registering a converter; a standalone bag-only JSON converter is not exported."
         },
         "methods": {
           "Read(ref Utf8JsonReader, Type, JsonSerializerOptions) -> AgentSessionStateBag": {
             "go": "json.Unmarshal(data, session)",
-            "go_symbols": ["agent.Session.UnmarshalJSON"],
+            "go_symbols": [
+              "agent.Session.UnmarshalJSON"
+            ],
             "status": "partial",
             "note": "Go decodes the enclosing Session JSON with encoding/json; it has no standalone state-bag converter or per-call serializer options."
           },
           "Write(Utf8JsonWriter, AgentSessionStateBag, JsonSerializerOptions) -> void": {
             "go": "json.Marshal(session)",
-            "go_symbols": ["agent.Session.MarshalJSON"],
+            "go_symbols": [
+              "agent.Session.MarshalJSON"
+            ],
             "status": "partial",
             "note": "Go encodes the Session envelope, not a standalone bag JSON object; JSON settings are controlled by Go types rather than per-call options."
           }
@@ -10609,14 +10779,20 @@
         "experimental": "MAAI001",
         "mapping": {
           "go": "store = a2aprovider.NewInMemorySessionStore()",
-          "go_symbols": ["provider/a2aprovider.SessionStore", "provider/a2aprovider.NewInMemorySessionStore"],
+          "go_symbols": [
+            "provider/a2aprovider.SessionStore",
+            "provider/a2aprovider.NewInMemorySessionStore"
+          ],
           "status": "adapted",
           "note": "The recent A2A host store persists sessions by A2A context ID and returns independent JSON snapshots. It does not expose the general AgentSessionStoreKey partition model or service discovery."
         },
         "methods": {
           "GetOrCreateSessionAsync(AIAgent, AgentSessionStoreKey, CancellationToken) -> ValueTask<AgentSession>": {
             "go": "session, err = store.Get(ctx, contextID)\nif err == nil && session == nil {\n    session, err = a.CreateSession(ctx)\n}",
-            "go_symbols": ["provider/a2aprovider.SessionStore.Get", "agent.Agent.CreateSession"],
+            "go_symbols": [
+              "provider/a2aprovider.SessionStore.Get",
+              "agent.Agent.CreateSession"
+            ],
             "status": "partial",
             "note": "A2A hosting composes SessionStore.Get with agent session creation when handling a request; the store interface itself only exposes Get and Save and uses a context ID instead of AgentSessionStoreKey partitions."
           },
@@ -10634,13 +10810,17 @@
           },
           "GetSessionAsync(AIAgent, AgentSessionStoreKey, CancellationToken) -> ValueTask<AgentSession>": {
             "go": "session, err = store.Get(ctx, contextID)",
-            "go_symbols": ["provider/a2aprovider.SessionStore.Get"],
+            "go_symbols": [
+              "provider/a2aprovider.SessionStore.Get"
+            ],
             "status": "adapted",
             "note": "Get returns an independently owned session snapshot or nil when absent. Go scopes the key to an A2A context ID and host-provided store isolation instead of taking the owning agent plus AgentSessionStoreKey partitions."
           },
           "SaveSessionAsync(AIAgent, AgentSessionStoreKey, AgentSession, CancellationToken) -> ValueTask": {
             "go": "err = store.Save(ctx, contextID, session)",
-            "go_symbols": ["provider/a2aprovider.SessionStore.Save"],
+            "go_symbols": [
+              "provider/a2aprovider.SessionStore.Save"
+            ],
             "status": "adapted",
             "note": "Save persists a serializable session snapshot for an A2A context ID. The Go API omits the owning agent parameter and AgentSessionStoreKey partitions; hosts that share stores must enforce their own trusted isolation."
           }
@@ -10804,19 +10984,28 @@
         "methods": {
           "ValidateCompatibility(string, out string) -> bool": {
             "go": "frontmatter.Validate()",
-            "go_symbols": ["agent/skills.Frontmatter.Validate", "agent/skills.Frontmatter.Compatibility"],
+            "go_symbols": [
+              "agent/skills.Frontmatter.Validate",
+              "agent/skills.Frontmatter.Compatibility"
+            ],
             "status": "partial",
             "note": "Validate checks compatibility as part of the entire frontmatter and returns an error; earlier name/description failures take precedence. The 500-length limit counts UTF-8 bytes in Go, not UTF-16 code units, so non-ASCII inputs can be rejected earlier."
           },
           "ValidateDescription(string, out string) -> bool": {
             "go": "frontmatter.Validate()",
-            "go_symbols": ["agent/skills.Frontmatter.Validate", "agent/skills.Frontmatter.Description"],
+            "go_symbols": [
+              "agent/skills.Frontmatter.Validate",
+              "agent/skills.Frontmatter.Description"
+            ],
             "status": "partial",
             "note": "Validate also checks name and compatibility rather than exposing an independent description validator. The 1024-length limit counts UTF-8 bytes in Go, not UTF-16 code units, so non-ASCII inputs can be rejected earlier."
           },
           "ValidateName(string, out string) -> bool": {
             "go": "frontmatter.Validate()",
-            "go_symbols": ["agent/skills.Frontmatter.Validate", "agent/skills.Frontmatter.Name"],
+            "go_symbols": [
+              "agent/skills.Frontmatter.Validate",
+              "agent/skills.Frontmatter.Name"
+            ],
             "status": "partial",
             "note": "Validate checks name first and then the other frontmatter fields; Go does not export the independent name validator or a bool/out-reason contract."
           }
@@ -10978,18 +11167,26 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "skills.NewContextProvider(skills.ContextProviderOptions{})",
-          "go_symbols": ["agent/skills.NewContextProvider", "agent.ContextProvider", "agent/skills.ContextProviderOptions"],
+          "go_symbols": [
+            "agent/skills.NewContextProvider",
+            "agent.ContextProvider",
+            "agent/skills.ContextProviderOptions"
+          ],
           "status": "adapted",
           "note": "A factory returns the shared context-provider interface with integrated source aggregation, caching, and deduplication rather than a concrete provider class."
         },
         "properties": {
           "AllToolsAutoApprovalRule": {
-            "go_symbols": ["agent/skills.AllToolsAutoApprovalRule"],
+            "go_symbols": [
+              "agent/skills.AllToolsAutoApprovalRule"
+            ],
             "status": "adapted",
             "note": "Use the exported function as an auto-approval rule rather than retrieve a static delegate-valued property."
           },
           "ReadOnlyToolsAutoApprovalRule": {
-            "go_symbols": ["agent/skills.ReadOnlyToolsAutoApprovalRule"],
+            "go_symbols": [
+              "agent/skills.ReadOnlyToolsAutoApprovalRule"
+            ],
             "status": "adapted",
             "note": "Use the exported function matching load_skill and read_skill_resource rather than a static delegate property."
           }
@@ -11005,7 +11202,10 @@
         "constructors": {
           "AgentSkillsProvider(AgentSkill[])": {
             "go": "skills.NewContextProvider(skills.ContextProviderOptions{Skills: registeredSkills})",
-            "go_symbols": ["agent/skills.NewContextProvider", "agent/skills.ContextProviderOptions.Skills"],
+            "go_symbols": [
+              "agent/skills.NewContextProvider",
+              "agent/skills.ContextProviderOptions.Skills"
+            ],
             "status": "adapted",
             "note": "Supply the skill slice in value options; provider-integrated caching and first-name-wins deduplication replace constructor-created source decorators."
           },
@@ -11020,19 +11220,33 @@
           },
           "AgentSkillsProvider(IEnumerable<AgentSkill>, AgentSkillsProviderOptions, ILoggerFactory)": {
             "go": "skills.NewContextProvider(skills.ContextProviderOptions{Skills: registeredSkills, Logger: logger})",
-            "go_symbols": ["agent/skills.NewContextProvider", "agent/skills.ContextProviderOptions.Skills", "agent/skills.ContextProviderOptions.Logger"],
+            "go_symbols": [
+              "agent/skills.NewContextProvider",
+              "agent/skills.ContextProviderOptions.Skills",
+              "agent/skills.ContextProviderOptions.Logger"
+            ],
             "status": "adapted",
             "note": "Combine in-memory skills, provider settings, and a slog logger in ContextProviderOptions instead of positional class-constructor arguments."
           },
           "AgentSkillsProvider(IEnumerable<string>, AgentFileSkillScriptRunner, AgentFileSkillsSourceOptions, AgentSkillsProviderOptions, ILoggerFactory)": {
             "go": "source := fsskills.NewSourceOptions(fileOptions, filesystems...); skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, Logger: logger})",
-            "go_symbols": ["agent/skills/fsskills.NewSourceOptions", "agent/skills/fsskills.SourceOptions", "agent/skills.NewContextProvider", "agent/skills.ContextProviderOptions.Sources"],
+            "go_symbols": [
+              "agent/skills/fsskills.NewSourceOptions",
+              "agent/skills/fsskills.SourceOptions",
+              "agent/skills.NewContextProvider",
+              "agent/skills.ContextProviderOptions.Sources"
+            ],
             "status": "adapted",
             "note": "Compose file discovery over fs.FS roots with a skills provider; file options hold the runner/logger and provider options hold runtime settings. Go runners accept positional string arguments, not arbitrary JSON."
           },
           "AgentSkillsProvider(string, AgentFileSkillScriptRunner, AgentFileSkillsSourceOptions, AgentSkillsProviderOptions, ILoggerFactory)": {
             "go": "source := fsskills.NewSourceOptions(fileOptions, filesystem); skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, Logger: logger})",
-            "go_symbols": ["agent/skills/fsskills.NewSourceOptions", "agent/skills/fsskills.SourceOptions", "agent/skills.NewContextProvider", "agent/skills.ContextProviderOptions.Sources"],
+            "go_symbols": [
+              "agent/skills/fsskills.NewSourceOptions",
+              "agent/skills/fsskills.SourceOptions",
+              "agent/skills.NewContextProvider",
+              "agent/skills.ContextProviderOptions.Sources"
+            ],
             "status": "adapted",
             "note": "Create a file source from one fs.FS root and register it in provider options; runner/discovery settings and provider settings are configured separately, with positional string runner arguments."
           }
@@ -11063,7 +11277,11 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "skills.NewContextProvider(skills.ContextProviderOptions{})",
-          "go_symbols": ["agent/skills.ContextProviderOptions", "agent/skills.NewContextProvider", "agent/skills/fsskills.NewSourceOptions"],
+          "go_symbols": [
+            "agent/skills.ContextProviderOptions",
+            "agent/skills.NewContextProvider",
+            "agent/skills/fsskills.NewSourceOptions"
+          ],
           "status": "adapted",
           "note": "Compose source factories and value options instead of a fluent builder; caching, filtering, and deduplication are integrated provider settings."
         },
@@ -11086,7 +11304,10 @@
           },
           "UseCachingOptions(Action<CachingAgentSkillsSourceOptions>) -> AgentSkillsProviderBuilder": {
             "go": "skills.ContextProviderOptions{CacheIsolationKeySelector: selector, RefreshInterval: &interval}",
-            "go_symbols": ["agent/skills.ContextProviderOptions.CacheIsolationKeySelector", "agent/skills.ContextProviderOptions.RefreshInterval"],
+            "go_symbols": [
+              "agent/skills.ContextProviderOptions.CacheIsolationKeySelector",
+              "agent/skills.ContextProviderOptions.RefreshInterval"
+            ],
             "status": "adapted",
             "note": "Go sets refresh interval and cache isolation key directly on ContextProviderOptions rather than through a builder configuration callback."
           },
@@ -11252,7 +11473,9 @@
         "constructors": {
           "AgentSkillsProviderOptions()": {
             "go": "skills.ContextProviderOptions{}",
-            "go_symbols": ["agent/skills.ContextProviderOptions"],
+            "go_symbols": [
+              "agent/skills.ContextProviderOptions"
+            ],
             "status": "adapted",
             "note": "Use value options; the zero value keeps default instructions, approval requirements, and non-detailed script errors."
           }
@@ -11291,7 +11514,10 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "agent.AgentFromContext(ctx)",
-          "go_symbols": ["agent.AgentFromContext", "agent/skills.Source.Skills"],
+          "go_symbols": [
+            "agent.AgentFromContext",
+            "agent/skills.Source.Skills"
+          ],
           "status": "partial",
           "note": "Source.Skills receives context.Context and can read the initiating agent during Agent.Run, but receives no explicit agent/session context and cannot retrieve the run's session."
         },
@@ -11334,7 +11560,11 @@
         "methods": {
           "GetSkillsAsync(AgentSkillsSourceContext, CancellationToken) -> Task<IList<AgentSkill>>": {
             "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: sources, DisableCaching: true, DisableSourceDeduplication: true}).Invoking(ctx, invoking)",
-            "go_symbols": ["agent/skills.NewContextProvider", "agent/skills.ContextProviderOptions.Sources", "agent.ContextProvider.Invoking"],
+            "go_symbols": [
+              "agent/skills.NewContextProvider",
+              "agent/skills.ContextProviderOptions.Sources",
+              "agent.ContextProvider.Invoking"
+            ],
             "status": "partial",
             "note": "The provider loads sources sequentially in registration order; disabling caching and deduplication preserves repeated aggregation. Its public result is context messages/options, not an aggregated skill list or agent/session-bearing source call."
           }
@@ -11342,7 +11572,12 @@
         "constructors": {
           "AggregatingAgentSkillsSource(IEnumerable<AgentSkillsSource>)": {
             "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: sources, DisableCaching: true, DisableSourceDeduplication: true})",
-            "go_symbols": ["agent/skills.NewContextProvider", "agent/skills.ContextProviderOptions.Sources", "agent/skills.ContextProviderOptions.DisableSourceDeduplication", "agent/skills.ContextProviderOptions.DisableCaching"],
+            "go_symbols": [
+              "agent/skills.NewContextProvider",
+              "agent/skills.ContextProviderOptions.Sources",
+              "agent/skills.ContextProviderOptions.DisableSourceDeduplication",
+              "agent/skills.ContextProviderOptions.DisableCaching"
+            ],
             "status": "partial",
             "note": "Source aggregation is integrated into a context provider, not a reusable Source decorator returning a skill list or owning/disposal-managing its child sources."
           }
@@ -11632,7 +11867,12 @@
         "methods": {
           "GetSkillsAsync(AgentSkillsSourceContext, CancellationToken) -> Task<IList<AgentSkill>>": {
             "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}}).Invoking(ctx, invoking)",
-            "go_symbols": ["agent/skills.NewContextProvider", "agent.ContextProvider.Invoking", "agent/skills.ContextProviderOptions.RefreshInterval", "agent/skills.ContextProviderOptions.CacheIsolationKeySelector"],
+            "go_symbols": [
+              "agent/skills.NewContextProvider",
+              "agent.ContextProvider.Invoking",
+              "agent/skills.ContextProviderOptions.RefreshInterval",
+              "agent/skills.ContextProviderOptions.CacheIsolationKeySelector"
+            ],
             "status": "partial",
             "note": "Go caches the assembled provider context with per-key single-fetch coordination and optional expiry; it does not expose a reusable caching source that returns cached skill lists."
           }
@@ -11640,7 +11880,11 @@
         "constructors": {
           "CachingAgentSkillsSource(AgentSkillsSource, CachingAgentSkillsSourceOptions)": {
             "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, RefreshInterval: interval, CacheIsolationKeySelector: selector})",
-            "go_symbols": ["agent/skills.NewContextProvider", "agent/skills.ContextProviderOptions.RefreshInterval", "agent/skills.ContextProviderOptions.CacheIsolationKeySelector"],
+            "go_symbols": [
+              "agent/skills.NewContextProvider",
+              "agent/skills.ContextProviderOptions.RefreshInterval",
+              "agent/skills.ContextProviderOptions.CacheIsolationKeySelector"
+            ],
             "status": "partial",
             "note": "Configure provider-level context caching instead of wrapping a Source; cache selectors receive Go invocation context and the result cannot be reused as a source decorator."
           }
@@ -11651,25 +11895,33 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "skills.ContextProviderOptions{}",
-          "go_symbols": ["agent/skills.ContextProviderOptions"],
+          "go_symbols": [
+            "agent/skills.ContextProviderOptions"
+          ],
           "status": "adapted",
           "note": "Go configures caching directly on ContextProviderOptions rather than a separate decorator-options type."
         },
         "properties": {
           "CacheIsolationKeySelector": {
-            "go_symbols": ["agent/skills.ContextProviderOptions.CacheIsolationKeySelector"],
+            "go_symbols": [
+              "agent/skills.ContextProviderOptions.CacheIsolationKeySelector"
+            ],
             "status": "adapted",
             "note": "Go's selector receives the invocation context and InvokingContext instead of an AgentSkillsSourceContext."
           },
           "RefreshInterval": {
-            "go_symbols": ["agent/skills.ContextProviderOptions.RefreshInterval"],
+            "go_symbols": [
+              "agent/skills.ContextProviderOptions.RefreshInterval"
+            ],
             "status": "mapped"
           }
         },
         "constructors": {
           "CachingAgentSkillsSourceOptions()": {
             "go": "skills.ContextProviderOptions{}",
-            "go_symbols": ["agent/skills.ContextProviderOptions"],
+            "go_symbols": [
+              "agent/skills.ContextProviderOptions"
+            ],
             "status": "adapted",
             "note": "Go has no separate decorator-options constructor; caching fields are set on the zero-value ContextProviderOptions."
           }
@@ -11783,25 +12035,49 @@
           },
           "RunAsync<T>(AgentSession, JsonSerializerOptions, ChatClientAgentRunOptions, CancellationToken) -> Task<AgentResponse<T>>": {
             "go": "a.Run(ctx, nil, agent.WithSession(session), agent.WithStructuredOutput(&result), agent.Stream(false)).Collect()",
-            "go_symbols": ["agent.Agent.Run", "agent.WithSession", "agent.WithStructuredOutput", "agent.Stream", "agent.ResponseStream.Collect"],
+            "go_symbols": [
+              "agent.Agent.Run",
+              "agent.WithSession",
+              "agent.WithStructuredOutput",
+              "agent.Stream",
+              "agent.ResponseStream.Collect"
+            ],
             "status": "adapted",
             "note": "Run with no new messages and assign decoded output through a pointer while collecting response metadata; Go uses provider format/unmarshal hooks rather than a generic response wrapper and JsonSerializerOptions."
           },
           "RunAsync<T>(ChatMessage, AgentSession, JsonSerializerOptions, ChatClientAgentRunOptions, CancellationToken) -> Task<AgentResponse<T>>": {
             "go": "a.RunMessage(ctx, msg, agent.WithSession(session), agent.WithStructuredOutput(&result), agent.Stream(false)).Collect()",
-            "go_symbols": ["agent.Agent.RunMessage", "agent.WithSession", "agent.WithStructuredOutput", "agent.Stream", "agent.ResponseStream.Collect"],
+            "go_symbols": [
+              "agent.Agent.RunMessage",
+              "agent.WithSession",
+              "agent.WithStructuredOutput",
+              "agent.Stream",
+              "agent.ResponseStream.Collect"
+            ],
             "status": "adapted",
             "note": "A single-message run fills the output pointer and separately returns the collected response; serialization is provider-configured rather than passed as JsonSerializerOptions."
           },
           "RunAsync<T>(IEnumerable<ChatMessage>, AgentSession, JsonSerializerOptions, ChatClientAgentRunOptions, CancellationToken) -> Task<AgentResponse<T>>": {
             "go": "a.Run(ctx, messages, agent.WithSession(session), agent.WithStructuredOutput(&result), agent.Stream(false)).Collect()",
-            "go_symbols": ["agent.Agent.Run", "agent.WithSession", "agent.WithStructuredOutput", "agent.Stream", "agent.ResponseStream.Collect"],
+            "go_symbols": [
+              "agent.Agent.Run",
+              "agent.WithSession",
+              "agent.WithStructuredOutput",
+              "agent.Stream",
+              "agent.ResponseStream.Collect"
+            ],
             "status": "adapted",
             "note": "Compose the message-slice run, structured-output pointer option, and collection; typed data is assigned separately from Response and uses provider serialization hooks."
           },
           "RunAsync<T>(string, AgentSession, JsonSerializerOptions, ChatClientAgentRunOptions, CancellationToken) -> Task<AgentResponse<T>>": {
             "go": "a.RunText(ctx, \"Describe the result\", agent.WithSession(session), agent.WithStructuredOutput(&result), agent.Stream(false)).Collect()",
-            "go_symbols": ["agent.Agent.RunText", "agent.WithSession", "agent.WithStructuredOutput", "agent.Stream", "agent.ResponseStream.Collect"],
+            "go_symbols": [
+              "agent.Agent.RunText",
+              "agent.WithSession",
+              "agent.WithStructuredOutput",
+              "agent.Stream",
+              "agent.ResponseStream.Collect"
+            ],
             "status": "adapted",
             "note": "The text convenience run uses WithStructuredOutput to fill caller-owned typed output while Collect returns metadata, instead of returning AgentResponse<T> with per-call JsonSerializerOptions."
           },
@@ -11875,7 +12151,11 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "agent.Config{}",
-          "go_symbols": ["agent.Config", "agent.ProviderConfig", "agent/harness/toolautocall.Config"],
+          "go_symbols": [
+            "agent.Config",
+            "agent.ProviderConfig",
+            "agent/harness/toolautocall.Config"
+          ],
           "status": "adapted",
           "note": "Construction settings are distributed across agent configuration, provider configuration, and automatic-tool middleware configuration rather than one mutable chat-agent options class."
         },
@@ -11887,7 +12167,9 @@
             "status": "mapped"
           },
           "AllowConcurrentInvocation": {
-            "go_symbols": ["agent/harness/toolautocall.Config.AllowConcurrentInvocations"],
+            "go_symbols": [
+              "agent/harness/toolautocall.Config.AllowConcurrentInvocations"
+            ],
             "status": "adapted",
             "note": "Configure concurrency on the automatic-tool middleware rather than chat-agent construction options; the default remains serial local function invocation."
           },
@@ -11898,7 +12180,11 @@
             "status": "mapped"
           },
           "ChatOptions": {
-            "go_symbols": ["agent.Config.RunOptions", "agent.Option", "provider/openaiprovider.ChatCompletionNewParams"],
+            "go_symbols": [
+              "agent.Config.RunOptions",
+              "agent.Option",
+              "provider/openaiprovider.ChatCompletionNewParams"
+            ],
             "status": "partial",
             "note": "Default settings are typed run options and provider request wrappers; Go has no common ChatOptions object or general field-wise merge with per-run request wrappers."
           },
@@ -11915,12 +12201,16 @@
             "status": "mapped"
           },
           "DisableApprovalNotRequiredFunctionBypassing": {
-            "go_symbols": ["agent/harness/toolautocall.Config.DisableApprovalNotRequiredFunctionBypassing"],
+            "go_symbols": [
+              "agent/harness/toolautocall.Config.DisableApprovalNotRequiredFunctionBypassing"
+            ],
             "status": "adapted",
             "note": "Configure the opt-out on toolautocall middleware rather than chat-agent options; bypassing remains enabled by default for session-backed local execution."
           },
           "DisableApprovalResponseBinding": {
-            "go_symbols": ["agent/harness/toolautocall.Config.DisableApprovalResponseBinding"],
+            "go_symbols": [
+              "agent/harness/toolautocall.Config.DisableApprovalResponseBinding"
+            ],
             "status": "adapted",
             "note": "Configure the opt-out on toolautocall middleware rather than chat-agent options; session-backed response binding remains enabled by default."
           },
@@ -11962,7 +12252,11 @@
             "status": "mapped"
           },
           "UseProvidedChatClientAsIs": {
-            "go_symbols": ["agent.ProviderConfig.Middlewares", "agent.Config.Middlewares", "agent/harness/toolautocall.New"],
+            "go_symbols": [
+              "agent.ProviderConfig.Middlewares",
+              "agent.Config.Middlewares",
+              "agent/harness/toolautocall.New"
+            ],
             "status": "partial",
             "note": "Go callers explicitly compose agent/provider middleware, including automatic tool invocation; no single boolean suppresses the complete default chat-client decorator stack."
           },
@@ -11984,7 +12278,10 @@
         "constructors": {
           "ChatClientAgentOptions()": {
             "go": "agent.Config{}",
-            "go_symbols": ["agent.Config", "agent/harness/toolautocall.Config"],
+            "go_symbols": [
+              "agent.Config",
+              "agent/harness/toolautocall.Config"
+            ],
             "status": "adapted",
             "note": "Use zero-value construction structs; agent.New supplies true conflict defaults for nil pointers, while tool concurrency/approval switches are configured separately in toolautocall.Config."
           }
@@ -11995,7 +12292,11 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "[]agent.Option{agent.WithInstructions(\"Be concise\")}",
-          "go_symbols": ["agent.Option", "agent.Config.RunOptions", "provider/openaiprovider.ChatCompletionNewParams"],
+          "go_symbols": [
+            "agent.Option",
+            "agent.Config.RunOptions",
+            "provider/openaiprovider.ChatCompletionNewParams"
+          ],
           "status": "partial",
           "note": "Typed options represent per-run chat settings, but there is no per-run chat-client factory or general field-wise ChatOptions merge."
         },
@@ -12041,7 +12342,11 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "agent.Session{}",
-          "go_symbols": ["agent.Session", "agent.Session.ServiceID", "agent.Session.SetServiceID"],
+          "go_symbols": [
+            "agent.Session",
+            "agent.Session.ServiceID",
+            "agent.Session.SetServiceID"
+          ],
           "status": "adapted",
           "note": "Use the shared session type with provider service ID and serializable state; Go has no chat-client-specific session subclass."
         },
@@ -12059,20 +12364,27 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "memory.NewHistoryProvider(store, \"history\", dims, stateInit, memory.Config{})",
-          "go_symbols": ["agent/memory.HistoryProvider", "agent/memory.NewHistoryProvider"],
+          "go_symbols": [
+            "agent/memory.HistoryProvider",
+            "agent/memory.NewHistoryProvider"
+          ],
           "status": "adapted",
           "note": "Go returns the provider and an error for collection-configuration failures, but panics on invalid arguments; it stores through the shared vectordata.Store/Collection abstractions rather than VectorStore/VectorStoreCollection."
         },
         "properties": {
           "StateKeys": {
-            "go_symbols": ["agent/memory.HistoryProvider.StateKeys"],
+            "go_symbols": [
+              "agent/memory.HistoryProvider.StateKeys"
+            ],
             "status": "mapped"
           }
         },
         "methods": {
           "Dispose() -> void": {
             "go": "provider.Close()",
-            "go_symbols": ["agent/memory.HistoryProvider.Close"],
+            "go_symbols": [
+              "agent/memory.HistoryProvider.Close"
+            ],
             "status": "adapted",
             "note": "Close is an optimization that releases the collection early if it implements io.Closer and never closes the borrowed store; Go also relies on runtime.AddCleanup as a fallback."
           }
@@ -12080,7 +12392,10 @@
         "constructors": {
           "ChatHistoryMemoryProvider(VectorStore, string, int, Func<AgentSession, ChatHistoryMemoryProvider.State>, ChatHistoryMemoryProviderOptions, ILoggerFactory)": {
             "go": "memory.NewHistoryProvider(store, collectionName, vectorDimensions, stateInitializer, memory.Config{})",
-            "go_symbols": ["agent/memory.NewHistoryProvider", "agent/memory.Config"],
+            "go_symbols": [
+              "agent/memory.NewHistoryProvider",
+              "agent/memory.Config"
+            ],
             "status": "adapted",
             "note": "Go takes a *vectordata.Store, panics on invalid arguments, returns (*HistoryProvider, error) for collection-configuration failures, and configures options through memory.Config instead of a nullable options/logger-factory pair."
           }
@@ -12091,23 +12406,31 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "memory.State{}",
-          "go_symbols": ["agent/memory.State"],
+          "go_symbols": [
+            "agent/memory.State"
+          ],
           "status": "mapped"
         },
         "properties": {
           "SearchScope": {
-            "go_symbols": ["agent/memory.State.SearchScope"],
+            "go_symbols": [
+              "agent/memory.State.SearchScope"
+            ],
             "status": "mapped"
           },
           "StorageScope": {
-            "go_symbols": ["agent/memory.State.StorageScope"],
+            "go_symbols": [
+              "agent/memory.State.StorageScope"
+            ],
             "status": "mapped"
           }
         },
         "constructors": {
           "State(ChatHistoryMemoryProviderScope, ChatHistoryMemoryProviderScope)": {
             "go": "memory.State{StorageScope: storage, SearchScope: &search}",
-            "go_symbols": ["agent/memory.State"],
+            "go_symbols": [
+              "agent/memory.State"
+            ],
             "status": "adapted",
             "note": "Go uses an exported struct literal instead of a constructor; StorageScope is a value and SearchScope is a pointer that defaults to StorageScope when nil."
           }
@@ -12118,55 +12441,79 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "memory.Config{}",
-          "go_symbols": ["agent/memory.Config"],
+          "go_symbols": [
+            "agent/memory.Config"
+          ],
           "status": "mapped"
         },
         "properties": {
           "ContextPrompt": {
-            "go_symbols": ["agent/memory.Config.ContextPrompt"],
+            "go_symbols": [
+              "agent/memory.Config.ContextPrompt"
+            ],
             "status": "mapped"
           },
           "EnableSensitiveTelemetryData": {
-            "go_symbols": ["agent/memory.Config.LogSensitiveData"],
+            "go_symbols": [
+              "agent/memory.Config.LogSensitiveData"
+            ],
             "status": "mapped"
           },
           "FunctionToolDescription": {
-            "go_symbols": ["agent/memory.Config.FunctionToolDescription"],
+            "go_symbols": [
+              "agent/memory.Config.FunctionToolDescription"
+            ],
             "status": "mapped"
           },
           "FunctionToolName": {
-            "go_symbols": ["agent/memory.Config.FunctionToolName"],
+            "go_symbols": [
+              "agent/memory.Config.FunctionToolName"
+            ],
             "status": "mapped"
           },
           "MaxResults": {
-            "go_symbols": ["agent/memory.Config.MaxResults"],
+            "go_symbols": [
+              "agent/memory.Config.MaxResults"
+            ],
             "status": "mapped"
           },
           "Redactor": {
-            "go_symbols": ["agent/memory.Config.Redactor"],
+            "go_symbols": [
+              "agent/memory.Config.Redactor"
+            ],
             "status": "adapted",
             "note": "Go takes a func(string) string instead of a Redactor service; it is ignored when LogSensitiveData is true, matching .NET's EnableSensitiveTelemetryData precedence."
           },
           "SearchInputMessageFilter": {
-            "go_symbols": ["agent/memory.Config.SearchInputMessageFilter"],
+            "go_symbols": [
+              "agent/memory.Config.SearchInputMessageFilter"
+            ],
             "status": "adapted",
             "note": "Go uses a messagefilter.Filter instead of a Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>; nil defaults to messagefilter.ExternalOnly."
           },
           "SearchTime": {
-            "go_symbols": ["agent/memory.Config.SearchTime"],
+            "go_symbols": [
+              "agent/memory.Config.SearchTime"
+            ],
             "status": "mapped"
           },
           "StateKey": {
-            "go_symbols": ["agent/memory.Config.StateKey"],
+            "go_symbols": [
+              "agent/memory.Config.StateKey"
+            ],
             "status": "mapped"
           },
           "StorageInputRequestMessageFilter": {
-            "go_symbols": ["agent/memory.Config.StorageInputRequestMessageFilter"],
+            "go_symbols": [
+              "agent/memory.Config.StorageInputRequestMessageFilter"
+            ],
             "status": "adapted",
             "note": "Go uses a messagefilter.Filter instead of a Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>; nil defaults to messagefilter.ExternalOnly."
           },
           "StorageInputResponseMessageFilter": {
-            "go_symbols": ["agent/memory.Config.StorageInputResponseMessageFilter"],
+            "go_symbols": [
+              "agent/memory.Config.StorageInputResponseMessageFilter"
+            ],
             "status": "adapted",
             "note": "Go uses a messagefilter.Filter instead of a Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>; nil passes all response messages through, matching .NET's default."
           }
@@ -12174,7 +12521,9 @@
         "constructors": {
           "ChatHistoryMemoryProviderOptions()": {
             "go": "memory.Config{}",
-            "go_symbols": ["agent/memory.Config"],
+            "go_symbols": [
+              "agent/memory.Config"
+            ],
             "status": "mapped"
           }
         }
@@ -12185,18 +12534,24 @@
         "kind": "enum",
         "mapping": {
           "go": "var behavior memory.SearchBehavior",
-          "go_symbols": ["agent/memory.SearchBehavior"],
+          "go_symbols": [
+            "agent/memory.SearchBehavior"
+          ],
           "status": "mapped"
         },
         "constants": {
           "BeforeAIInvoke": {
             "go": "memory.BeforeInvoke",
-            "go_symbols": ["agent/memory.BeforeInvoke"],
+            "go_symbols": [
+              "agent/memory.BeforeInvoke"
+            ],
             "status": "mapped"
           },
           "OnDemandFunctionCalling": {
             "go": "memory.OnDemandFunctionCalling",
-            "go_symbols": ["agent/memory.OnDemandFunctionCalling"],
+            "go_symbols": [
+              "agent/memory.OnDemandFunctionCalling"
+            ],
             "status": "mapped"
           }
         }
@@ -12206,37 +12561,51 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "memory.Scope{}",
-          "go_symbols": ["agent/memory.Scope"],
+          "go_symbols": [
+            "agent/memory.Scope"
+          ],
           "status": "adapted",
           "note": "Go uses pointer fields so a nil ID leaves that dimension unrestricted, versus .NET's nullable string properties with the same meaning."
         },
         "properties": {
           "AgentId": {
-            "go_symbols": ["agent/memory.Scope.AgentID"],
+            "go_symbols": [
+              "agent/memory.Scope.AgentID"
+            ],
             "status": "mapped"
           },
           "ApplicationId": {
-            "go_symbols": ["agent/memory.Scope.ApplicationID"],
+            "go_symbols": [
+              "agent/memory.Scope.ApplicationID"
+            ],
             "status": "mapped"
           },
           "SessionId": {
-            "go_symbols": ["agent/memory.Scope.SessionID"],
+            "go_symbols": [
+              "agent/memory.Scope.SessionID"
+            ],
             "status": "mapped"
           },
           "UserId": {
-            "go_symbols": ["agent/memory.Scope.UserID"],
+            "go_symbols": [
+              "agent/memory.Scope.UserID"
+            ],
             "status": "mapped"
           }
         },
         "constructors": {
           "ChatHistoryMemoryProviderScope()": {
             "go": "memory.Scope{}",
-            "go_symbols": ["agent/memory.Scope"],
+            "go_symbols": [
+              "agent/memory.Scope"
+            ],
             "status": "mapped"
           },
           "ChatHistoryMemoryProviderScope(ChatHistoryMemoryProviderScope)": {
             "go": "_ = scope",
-            "go_symbols": ["agent/memory.Scope"],
+            "go_symbols": [
+              "agent/memory.Scope"
+            ],
             "status": "adapted",
             "note": "Scope is a value type; assigning or passing it by value copies the struct instead of calling a clone constructor."
           }
@@ -12294,7 +12663,11 @@
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
           "go": "agent.InvokedContext{}",
-          "go_symbols": ["agent.InvokedContext", "agent.AgentFromContext", "agent.GetOption"],
+          "go_symbols": [
+            "agent.InvokedContext",
+            "agent.AgentFromContext",
+            "agent.GetOption"
+          ],
           "status": "adapted",
           "note": "History and AI context providers share Go InvokedContext; agent identity is in context.Context and session in Options."
         },
@@ -12337,13 +12710,20 @@
         "constructors": {
           "InvokedContext(AIAgent, AgentSession, IEnumerable<ChatMessage>, Exception)": {
             "go": "agent.InvokedContext{RequestMessages: messages, Err: runErr}",
-            "go_symbols": ["agent.InvokedContext", "agent.InvokedContext.Err"],
+            "go_symbols": [
+              "agent.InvokedContext",
+              "agent.InvokedContext.Err"
+            ],
             "status": "adapted",
             "note": "Set Err and request messages in the shared Go context value; agent/session come from context.Context and Options, without .NET constructor validation."
           },
           "InvokedContext(AIAgent, AgentSession, IEnumerable<ChatMessage>, IEnumerable<ChatMessage>)": {
             "go": "agent.InvokedContext{RequestMessages: requests, ResponseMessages: responses, Options: []agent.Option{agent.WithSession(session)}}",
-            "go_symbols": ["agent.InvokedContext", "agent.WithSession", "agent.AgentFromContext"],
+            "go_symbols": [
+              "agent.InvokedContext",
+              "agent.WithSession",
+              "agent.AgentFromContext"
+            ],
             "status": "adapted",
             "note": "History uses the shared completion struct with request/response slices and a session option; agent identity is in context.Context and nil Err indicates success.",
             "experimental": "MAAI001"
@@ -12355,7 +12735,10 @@
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
           "go": "agent.InvokingContext{Messages: messages, Options: options}",
-          "go_symbols": ["agent.InvokingContext", "agent.GetOption"],
+          "go_symbols": [
+            "agent.InvokingContext",
+            "agent.GetOption"
+          ],
           "status": "adapted",
           "note": "History and AI context providers share Go InvokingContext; session is an option and agent identity comes from context.Context."
         },
@@ -12387,7 +12770,11 @@
         "constructors": {
           "InvokingContext(AIAgent, AgentSession, IEnumerable<ChatMessage>)": {
             "go": "agent.InvokingContext{Messages: messages, Options: []agent.Option{agent.WithSession(session)}}",
-            "go_symbols": ["agent.InvokingContext", "agent.WithSession", "agent.AgentFromContext"],
+            "go_symbols": [
+              "agent.InvokingContext",
+              "agent.WithSession",
+              "agent.AgentFromContext"
+            ],
             "status": "adapted",
             "note": "Construct a shared read-only invocation value; session is encoded in Options and agent identity is supplied separately by Agent.Run's context.",
             "experimental": "MAAI001"
@@ -12399,7 +12786,10 @@
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
           "go": "msg.WithSource(message.Source{Type: sourceType, ID: sourceID})",
-          "go_symbols": ["message.Message.WithSource", "message.Source"],
+          "go_symbols": [
+            "message.Message.WithSource",
+            "message.Source"
+          ],
           "status": "adapted",
           "note": "Go stores attribution in Message.Source and uses WithSource to clone and stamp messages, rather than an extension-method container."
         },
@@ -12508,7 +12898,9 @@
         "constructors": {
           "CompletionMarkerLoopEvaluatorOptions()": {
             "go": "loop.CompletionMarkerConfig{Marker: \"DONE\"}",
-            "go_symbols": ["agent/harness/loop.CompletionMarkerConfig"],
+            "go_symbols": [
+              "agent/harness/loop.CompletionMarkerConfig"
+            ],
             "status": "adapted",
             "note": "A nil FeedbackMessageTemplate selects the default; Go combines the separately required completion marker and template options in one value config."
           }
@@ -12540,10 +12932,211 @@
         "area": "operations",
         "assembly": "Microsoft.Agents.AI.CosmosNoSql",
         "mapping": {
-          "go": "",
-          "go_symbols": [],
-          "status": "unmapped",
-          "note": "No Cosmos chat-history provider was located; intent is unknown. The declaring namespace is Microsoft.Agents.AI, not Microsoft.Agents.AI.CosmosNoSql."
+          "go": "azureprovider.NewCosmosHistoryProvider(client, databaseID, containerID, stateInitializer, azureprovider.CosmosHistoryProviderConfig{})",
+          "go_symbols": [
+            "provider/azureprovider.CosmosHistoryProvider",
+            "provider/azureprovider.CosmosHistoryProviderConfig",
+            "provider/azureprovider.CosmosHistoryState",
+            "provider/azureprovider.NewCosmosHistoryProvider"
+          ],
+          "status": "adapted",
+          "note": "Cosmos history composes a caller-configured native client with constructor-time configuration and session-backed routing state. Go message JSON uses the Message discriminator; explicit zero TTL omits the item property. State is a Go struct whose conversation ID is validated when the provider is used, rather than by a state constructor."
+        },
+        "properties": {
+          "ContainerId": {
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryProvider.ContainerID"
+            ],
+            "status": "adapted",
+            "note": "The constructor captures the container ID; Go exposes a read-only accessor rather than an init property."
+          },
+          "DatabaseId": {
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryProvider.DatabaseID"
+            ],
+            "status": "adapted",
+            "note": "The constructor captures the database ID; Go exposes a read-only accessor rather than an init property."
+          },
+          "MaxBatchSize": {
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryProviderConfig.MaxBatchSize"
+            ],
+            "status": "adapted",
+            "note": "Configured at construction rather than mutated on the provider. Nil defaults to 100; explicit values must be between 1 and 100."
+          },
+          "MaxItemCount": {
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryProviderConfig.MaxItemCount"
+            ],
+            "status": "adapted",
+            "note": "Configured at construction rather than mutated on the provider. Nil defaults to 100; explicit values must be positive or -1."
+          },
+          "MaxMessagesToRetrieve": {
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryProviderConfig.MaxMessagesToRetrieve"
+            ],
+            "status": "adapted",
+            "note": "Configured at construction rather than mutated on the provider. Nil is unlimited, zero retrieves no messages, and negative values are rejected."
+          },
+          "MessageTtlSeconds": {
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryProviderConfig.MessageTTLSeconds"
+            ],
+            "status": "adapted",
+            "note": "Configured at construction. Nil uses the 86400-second default; explicit zero omits ttl, corresponding to the .NET null setting. -1 disables item expiration."
+          },
+          "StateKeys": {
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryProvider.StateKeys"
+            ],
+            "status": "mapped"
+          }
+        },
+        "methods": {
+          "ClearMessagesAsync(AgentSession, CancellationToken) -> Task<int>": {
+            "go": "history.ClearMessages(ctx, session)",
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryProvider.ClearMessages"
+            ],
+            "status": "adapted",
+            "note": "Go validates batch success and chunks deletes independently of query page size. It returns the committed deletion count together with any later error and retains session routing state."
+          },
+          "Dispose() -> void": {
+            "go": "history.Close()",
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryProvider.Close"
+            ],
+            "status": "mapped"
+          },
+          "GetMessageCountAsync(AgentSession, CancellationToken) -> Task<int>": {
+            "go": "history.MessageCount(ctx, session)",
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryProvider.MessageCount"
+            ],
+            "status": "adapted",
+            "note": "Counts all matching documents independently of retrieval limits and filters. Go consumes all query pages rather than assuming a single aggregate page."
+          },
+          "GetMessagesAsync(AgentSession, CancellationToken) -> Task<IEnumerable<ChatMessage>>": {
+            "go": "history.Messages(ctx, session)",
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryProvider.Messages"
+            ],
+            "status": "adapted",
+            "note": "Returns a materialized slice in timestamp order without invocation filters or source attribution. Storage uses Go message JSON and the Message discriminator, not the .NET document format."
+          }
+        },
+        "constructors": {
+          "CosmosChatHistoryProvider(CosmosClient, string, string, Func<AgentSession, CosmosChatHistoryProvider.State>, bool, string, Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>, Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>, Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>)": {
+            "go": "azureprovider.NewCosmosHistoryProvider(client, databaseID, containerID, stateInitializer, azureprovider.CosmosHistoryProviderConfig{OwnsClient: ownsClient, StateKey: stateKey, ProvideOutputMessageFilter: provideOutputMessageFilter, StoreInputRequestMessageFilter: storeInputRequestMessageFilter, StoreInputResponseMessageFilter: storeInputResponseMessageFilter})",
+            "go_symbols": [
+              "provider/azureprovider.NewCosmosHistoryProvider",
+              "provider/azureprovider.CosmosHistoryProviderConfig"
+            ],
+            "status": "adapted",
+            "note": "Accepts a native Go Cosmos client and captures ownership, state key, and message filters in a config value rather than optional constructor arguments."
+          },
+          "CosmosChatHistoryProvider(string, TokenCredential, string, string, Func<AgentSession, CosmosChatHistoryProvider.State>, string, Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>, Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>, Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>)": {
+            "go": "azureprovider.NewCosmosHistoryProvider(client, databaseID, containerID, stateInitializer, azureprovider.CosmosHistoryProviderConfig{OwnsClient: true, StateKey: stateKey})",
+            "go_symbols": [
+              "provider/azureprovider.NewCosmosHistoryProvider",
+              "provider/azureprovider.CosmosHistoryProviderConfig"
+            ],
+            "status": "adapted",
+            "note": "Create the native client with azcosmos.NewClient and an Azure token credential, then pass OwnsClient=true to match provider-owned lifetime. State key and filters are constructor-time config fields."
+          },
+          "CosmosChatHistoryProvider(string, string, string, Func<AgentSession, CosmosChatHistoryProvider.State>, string, Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>, Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>, Func<IEnumerable<ChatMessage>, IEnumerable<ChatMessage>>)": {
+            "go": "azureprovider.NewCosmosHistoryProvider(client, databaseID, containerID, stateInitializer, azureprovider.CosmosHistoryProviderConfig{OwnsClient: true, StateKey: stateKey})",
+            "go_symbols": [
+              "provider/azureprovider.NewCosmosHistoryProvider",
+              "provider/azureprovider.CosmosHistoryProviderConfig"
+            ],
+            "status": "adapted",
+            "note": "Create the native client with azcosmos.NewClientFromConnectionString, then pass OwnsClient=true to match provider-owned lifetime. Connection-string parsing stays in the SDK; state key and filters are config fields."
+          }
+        }
+      },
+      "CosmosChatHistoryProvider.State": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI.CosmosNoSql",
+        "mapping": {
+          "go": "azureprovider.CosmosHistoryState{ConversationID: conversationID, TenantID: tenantID, UserID: userID}",
+          "go_symbols": [
+            "provider/azureprovider.CosmosHistoryState"
+          ],
+          "status": "adapted",
+          "note": "Routing state is a Go struct stored by pointer in agent.Session. Optional tenant and user IDs use pointers, and provider operations validate the conversation ID."
+        },
+        "properties": {
+          "ConversationId": {
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryState.ConversationID"
+            ],
+            "status": "mapped"
+          },
+          "TenantId": {
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryState.TenantID"
+            ],
+            "status": "mapped"
+          },
+          "UserId": {
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryState.UserID"
+            ],
+            "status": "mapped"
+          }
+        },
+        "constructors": {
+          "State(string, string, string)": {
+            "go": "azureprovider.CosmosHistoryState{ConversationID: conversationID, TenantID: tenantID, UserID: userID}",
+            "go_symbols": [
+              "provider/azureprovider.CosmosHistoryState"
+            ],
+            "status": "adapted",
+            "note": "Use a struct literal rather than a state constructor. Nonblank conversation IDs are validated when the provider uses the state."
+          }
+        }
+      },
+      "CosmosDBChatExtensions": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI.CosmosNoSql",
+        "mapping": {
+          "go": "agent.Config{HistoryProvider: history}",
+          "go_symbols": [
+            "agent.Config.HistoryProvider",
+            "provider/azureprovider.NewCosmosHistoryProvider"
+          ],
+          "status": "adapted",
+          "note": "Compose a CosmosHistoryProvider with agent.Config.HistoryProvider rather than adding Cosmos-specific agent option wrappers. Go requires an explicit state initializer; use a UUID-producing initializer for the extension's default behavior."
+        },
+        "methods": {
+          "WithCosmosDBChatHistoryProvider(ChatClientAgentOptions, CosmosClient, string, string, Func<AgentSession, CosmosChatHistoryProvider.State>) -> ChatClientAgentOptions": {
+            "go": "agent.Config{HistoryProvider: history}",
+            "go_symbols": [
+              "agent.Config.HistoryProvider",
+              "provider/azureprovider.NewCosmosHistoryProvider"
+            ],
+            "status": "adapted",
+            "note": "Construct a borrowing provider and assign it to the agent config. Supply the initializer explicitly, generating a conversation UUID when the .NET optional initializer would be omitted."
+          },
+          "WithCosmosDBChatHistoryProvider(ChatClientAgentOptions, string, string, string, Func<AgentSession, CosmosChatHistoryProvider.State>) -> ChatClientAgentOptions": {
+            "go": "agent.Config{HistoryProvider: history}",
+            "go_symbols": [
+              "agent.Config.HistoryProvider",
+              "provider/azureprovider.NewCosmosHistoryProvider"
+            ],
+            "status": "adapted",
+            "note": "Create the native client with azcosmos.NewClientFromConnectionString, construct an owning provider, and assign it to the agent config. Go requires an explicit initializer."
+          },
+          "WithCosmosDBChatHistoryProviderUsingManagedIdentity(ChatClientAgentOptions, string, string, string, TokenCredential, Func<AgentSession, CosmosChatHistoryProvider.State>) -> ChatClientAgentOptions": {
+            "go": "agent.Config{HistoryProvider: history}",
+            "go_symbols": [
+              "agent.Config.HistoryProvider",
+              "provider/azureprovider.NewCosmosHistoryProvider"
+            ],
+            "status": "adapted",
+            "note": "Create the native client with azcosmos.NewClient and the managed-identity token credential, construct an owning provider, and assign it to the agent config. Go requires an explicit initializer."
+          }
         }
       },
       "DeduplicatingAgentSkillsSource": {
@@ -12561,7 +13154,11 @@
         "methods": {
           "GetSkillsAsync(AgentSkillsSourceContext, CancellationToken) -> Task<IList<AgentSkill>>": {
             "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, DisableCaching: true}).Invoking(ctx, invoking)",
-            "go_symbols": ["agent/skills.NewContextProvider", "agent/skills.ContextProviderOptions.DisableSourceDeduplication", "agent.ContextProvider.Invoking"],
+            "go_symbols": [
+              "agent/skills.NewContextProvider",
+              "agent/skills.ContextProviderOptions.DisableSourceDeduplication",
+              "agent.ContextProvider.Invoking"
+            ],
             "status": "partial",
             "note": "Provider loading removes later case-insensitive name duplicates by default and logs them, but returns assembled context rather than a deduplicated skill list from a reusable source."
           }
@@ -12569,7 +13166,11 @@
         "constructors": {
           "DeduplicatingAgentSkillsSource(AgentSkillsSource, ILoggerFactory)": {
             "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, DisableCaching: true, Logger: logger})",
-            "go_symbols": ["agent/skills.NewContextProvider", "agent/skills.ContextProviderOptions.DisableSourceDeduplication", "agent/skills.ContextProviderOptions.Logger"],
+            "go_symbols": [
+              "agent/skills.NewContextProvider",
+              "agent/skills.ContextProviderOptions.DisableSourceDeduplication",
+              "agent/skills.ContextProviderOptions.Logger"
+            ],
             "status": "partial",
             "note": "Default provider-level first-name-wins deduplication replaces the decorator; no independent deduplicating Source or owned-source disposal is exposed."
           }
@@ -12622,12 +13223,18 @@
         },
         "properties": {
           "Description": {
-            "go_symbols": ["agent.Agent.Description", "agent.Config.Middlewares"],
+            "go_symbols": [
+              "agent.Agent.Description",
+              "agent.Config.Middlewares"
+            ],
             "status": "adapted",
             "note": "Middleware decorates the same Agent, so Description remains its configured value rather than forwarding from an inner agent."
           },
           "Name": {
-            "go_symbols": ["agent.Agent.Name", "agent.Config.Middlewares"],
+            "go_symbols": [
+              "agent.Agent.Name",
+              "agent.Config.Middlewares"
+            ],
             "status": "adapted",
             "note": "Middleware decorates the same Agent, so Name remains its configured value rather than forwarding from an inner agent."
           }
@@ -13457,29 +14064,40 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "filememory.ListEntry{Type: \"file\"}",
-          "go_symbols": ["agent/harness/filememory.ListEntry"],
+          "go_symbols": [
+            "agent/harness/filememory.ListEntry"
+          ],
           "status": "adapted",
           "note": "Memory listings return Go values whose Type is file. Optional descriptions use empty strings with omitempty rather than nullable strings."
         },
         "properties": {
           "Description": {
-            "go_symbols": ["agent/harness/filememory.ListEntry.Description"],
+            "go_symbols": [
+              "agent/harness/filememory.ListEntry.Description"
+            ],
             "status": "adapted",
             "note": "An absent description is an empty Go string and is omitted from JSON."
           },
           "Name": {
-            "go_symbols": ["agent/harness/filememory.ListEntry.Name"],
+            "go_symbols": [
+              "agent/harness/filememory.ListEntry.Name"
+            ],
             "status": "mapped"
           },
           "Type": {
-            "go_symbols": ["agent/harness/filememory.ListEntry.Type"],
+            "go_symbols": [
+              "agent/harness/filememory.ListEntry.Type"
+            ],
             "status": "mapped"
           }
         },
         "constructors": {
           "FileListEntry()": {
             "go": "filememory.ListEntry{Type: \"file\"}",
-            "go_symbols": ["agent/harness/filememory.ListEntry", "agent/harness/filememory.ListEntry.Type"],
+            "go_symbols": [
+              "agent/harness/filememory.ListEntry",
+              "agent/harness/filememory.ListEntry.Type"
+            ],
             "status": "adapted",
             "note": "Use a value literal with Type set to file to reproduce the .NET constructor default; the provider sets this field on every listing result."
           }
@@ -13490,20 +14108,27 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "filememory.New(rootDirectory, filememory.Config{})",
-          "go_symbols": ["agent/harness/filememory.New", "agent/harness/filememory.Provider"],
+          "go_symbols": [
+            "agent/harness/filememory.New",
+            "agent/harness/filememory.Provider"
+          ],
           "status": "partial",
           "note": "The Go context provider supplies seven memory tools, session working-folder state and index injection over SDK-internal filesystem storage. Public custom-store injection is deferred while the experimental storage contract remains internal. Description sidecars append _description.md to the full filename to avoid collisions across extensions."
         },
         "properties": {
           "StateKeys": {
-            "go_symbols": ["agent/harness/filememory.Provider.StateKeys"],
+            "go_symbols": [
+              "agent/harness/filememory.Provider.StateKeys"
+            ],
             "status": "mapped"
           }
         },
         "methods": {
           "Dispose() -> void": {
             "go": "provider.Close()",
-            "go_symbols": ["agent/harness/filememory.Provider.Close"],
+            "go_symbols": [
+              "agent/harness/filememory.Provider.Close"
+            ],
             "status": "adapted",
             "note": "Close optionally releases the owned filesystem root handle early and cancels automatic runtime cleanup after success. The runtime cleanup fallback closes storage when the provider and its tools become unreachable; synchronization needs no disposal."
           }
@@ -13511,7 +14136,13 @@
         "constructors": {
           "FileMemoryProvider(AgentFileStore, Func<AgentSession, FileMemoryState>, FileMemoryProviderOptions)": {
             "go": "filememory.New(rootDirectory, filememory.Config{Instructions: new(\"Remember useful notes.\"), StateInitializer: initializeState})",
-            "go_symbols": ["agent/harness/filememory.New", "agent/harness/filememory.Config", "agent/harness/filememory.Config.Instructions", "agent/harness/filememory.Config.StateInitializer", "agent/harness/filememory.State"],
+            "go_symbols": [
+              "agent/harness/filememory.New",
+              "agent/harness/filememory.Config",
+              "agent/harness/filememory.Config.Instructions",
+              "agent/harness/filememory.Config.StateInitializer",
+              "agent/harness/filememory.State"
+            ],
             "status": "partial",
             "note": "The constructor takes a filesystem root directory, returns setup errors, and registers runtime cleanup for owned storage; Close can release it early. Optional instructions and the synchronous state initializer use a value Config. Public custom-store injection is deferred while the experimental storage contract remains internal."
           }
@@ -13519,37 +14150,51 @@
         "constants": {
           "DeleteFileToolName": {
             "go": "filememory.DeleteFileToolName",
-            "go_symbols": ["agent/harness/filememory.DeleteFileToolName"],
+            "go_symbols": [
+              "agent/harness/filememory.DeleteFileToolName"
+            ],
             "status": "mapped"
           },
           "GrepToolName": {
             "go": "filememory.GrepToolName",
-            "go_symbols": ["agent/harness/filememory.GrepToolName"],
+            "go_symbols": [
+              "agent/harness/filememory.GrepToolName"
+            ],
             "status": "mapped"
           },
           "LsToolName": {
             "go": "filememory.LsToolName",
-            "go_symbols": ["agent/harness/filememory.LsToolName"],
+            "go_symbols": [
+              "agent/harness/filememory.LsToolName"
+            ],
             "status": "mapped"
           },
           "ReadFileToolName": {
             "go": "filememory.ReadFileToolName",
-            "go_symbols": ["agent/harness/filememory.ReadFileToolName"],
+            "go_symbols": [
+              "agent/harness/filememory.ReadFileToolName"
+            ],
             "status": "mapped"
           },
           "ReplaceLinesToolName": {
             "go": "filememory.ReplaceLinesToolName",
-            "go_symbols": ["agent/harness/filememory.ReplaceLinesToolName"],
+            "go_symbols": [
+              "agent/harness/filememory.ReplaceLinesToolName"
+            ],
             "status": "mapped"
           },
           "ReplaceToolName": {
             "go": "filememory.ReplaceToolName",
-            "go_symbols": ["agent/harness/filememory.ReplaceToolName"],
+            "go_symbols": [
+              "agent/harness/filememory.ReplaceToolName"
+            ],
             "status": "mapped"
           },
           "WriteToolName": {
             "go": "filememory.WriteToolName",
-            "go_symbols": ["agent/harness/filememory.WriteToolName"],
+            "go_symbols": [
+              "agent/harness/filememory.WriteToolName"
+            ],
             "status": "mapped"
           }
         }
@@ -13559,20 +14204,26 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "filememory.Config{}",
-          "go_symbols": ["agent/harness/filememory.Config"],
+          "go_symbols": [
+            "agent/harness/filememory.Config"
+          ],
           "status": "adapted",
           "note": "Constructor configuration is a Go value struct that also carries the state-initializer callback."
         },
         "properties": {
           "Instructions": {
-            "go_symbols": ["agent/harness/filememory.Config.Instructions"],
+            "go_symbols": [
+              "agent/harness/filememory.Config.Instructions"
+            ],
             "status": "mapped"
           }
         },
         "constructors": {
           "FileMemoryProviderOptions()": {
             "go": "filememory.Config{}",
-            "go_symbols": ["agent/harness/filememory.Config"],
+            "go_symbols": [
+              "agent/harness/filememory.Config"
+            ],
             "status": "adapted",
             "note": "The zero Config uses default instructions and the store root; no options constructor is needed."
           }
@@ -13583,19 +14234,25 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "filememory.State{}",
-          "go_symbols": ["agent/harness/filememory.State"],
+          "go_symbols": [
+            "agent/harness/filememory.State"
+          ],
           "status": "mapped"
         },
         "properties": {
           "WorkingFolder": {
-            "go_symbols": ["agent/harness/filememory.State.WorkingFolder"],
+            "go_symbols": [
+              "agent/harness/filememory.State.WorkingFolder"
+            ],
             "status": "mapped"
           }
         },
         "constructors": {
           "FileMemoryState()": {
             "go": "filememory.State{}",
-            "go_symbols": ["agent/harness/filememory.State"],
+            "go_symbols": [
+              "agent/harness/filememory.State"
+            ],
             "status": "adapted",
             "note": "The zero-value State has an empty WorkingFolder, matching the constructor's store-root default."
           }
@@ -13798,7 +14455,12 @@
         "methods": {
           "GetSkillsAsync(AgentSkillsSourceContext, CancellationToken) -> Task<IList<AgentSkill>>": {
             "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, SkillFilter: filter, DisableCaching: true}).Invoking(ctx, invoking)",
-            "go_symbols": ["agent/skills.NewContextProvider", "agent/skills.ContextProviderOptions.SkillFilter", "agent/skills.ContextProviderOptions.DisableCaching", "agent.ContextProvider.Invoking"],
+            "go_symbols": [
+              "agent/skills.NewContextProvider",
+              "agent/skills.ContextProviderOptions.SkillFilter",
+              "agent/skills.ContextProviderOptions.DisableCaching",
+              "agent.ContextProvider.Invoking"
+            ],
             "status": "partial",
             "note": "Filtering runs during provider context assembly, not through a list-returning source decorator. The predicate receives only a skill, without the .NET agent/session source context."
           }
@@ -13806,7 +14468,11 @@
         "constructors": {
           "FilteringAgentSkillsSource(AgentSkillsSource, Func<AgentSkill, AgentSkillsSourceContext, bool>, ILoggerFactory)": {
             "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, SkillFilter: filter, DisableCaching: true, Logger: logger})",
-            "go_symbols": ["agent/skills.NewContextProvider", "agent/skills.ContextProviderOptions.SkillFilter", "agent/skills.ContextProviderOptions.DisableCaching"],
+            "go_symbols": [
+              "agent/skills.NewContextProvider",
+              "agent/skills.ContextProviderOptions.SkillFilter",
+              "agent/skills.ContextProviderOptions.DisableCaching"
+            ],
             "status": "partial",
             "note": "A provider option replaces the decorator; DisableCaching reevaluates the filter each invocation, but the Go predicate lacks agent/session arguments and cannot produce a standalone filtered Source."
           }
@@ -13853,7 +14519,11 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "agent.Config{FunctionMiddlewares: []agent.FunctionInvocationMiddleware{middleware}}",
-          "go_symbols": ["agent.Config.FunctionMiddlewares", "agent.FunctionInvocationMiddleware", "agent.FunctionInvocationContext"],
+          "go_symbols": [
+            "agent.Config.FunctionMiddlewares",
+            "agent.FunctionInvocationMiddleware",
+            "agent.FunctionInvocationContext"
+          ],
           "status": "adapted",
           "note": "Register function-invocation middleware in agent configuration instead of a static extension container creating a delegating agent."
         },
@@ -13975,14 +14645,23 @@
         "assembly": "Microsoft.Agents.AI.Harness",
         "mapping": {
           "go": "harness.AgentConfig(harness.Config{}, agent.Config{})",
-          "go_symbols": ["agent/harness.AgentConfig", "agent.Config", "agent.Agent"],
+          "go_symbols": [
+            "agent/harness.AgentConfig",
+            "agent.Config",
+            "agent.Agent"
+          ],
           "status": "adapted",
           "note": "Source-reviewed at ebcf4db7f9462ef6c377761e0b3159c4c5a73027, outside the current binary-extraction scope. AgentConfig applies stable defaults to an ordinary provider-backed agent and returns setup errors. File memory has runtime cleanup rather than a separate harness lifetime object. Existing middleware and the core agent retain execution, approval, history and sessions. Experimental composition options are excluded; tracing decorates supported model adapters using neutral metadata."
         },
         "constructors": {
           "HarnessAgent(IChatClient, HarnessAgentOptions, ILoggerFactory, IServiceProvider)": {
             "go": "cfg, _ := harness.AgentConfig(harness.Config{}, agent.Config{}); openaiprovider.NewAgent(client, openaiprovider.AgentConfig{Config: cfg})",
-            "go_symbols": ["agent/harness.AgentConfig", "agent.Config", "agent.Config.Logger", "provider/openaiprovider.NewAgent"],
+            "go_symbols": [
+              "agent/harness.AgentConfig",
+              "agent.Config",
+              "agent.Config.Logger",
+              "provider/openaiprovider.NewAgent"
+            ],
             "status": "adapted",
             "note": "Pass harness options and common agent configuration to AgentConfig before calling the normal provider constructor. Agent identity and logging remain in agent.Config; dependencies are supplied directly instead of through IServiceProvider. Filesystem setup returns an error, and unreachable file-memory providers clean up their handles automatically."
           }
@@ -13990,7 +14669,9 @@
         "constants": {
           "DefaultInstructions": {
             "go": "harness.DefaultInstructions",
-            "go_symbols": ["agent/harness.DefaultInstructions"],
+            "go_symbols": [
+              "agent/harness.DefaultInstructions"
+            ],
             "status": "adapted",
             "note": "Built-in Go guidance preserves task decomposition, tool use, progress updates, adapting after failures and concise completion summaries without promising identical prompt wording."
           }
@@ -14001,22 +14682,36 @@
         "assembly": "Microsoft.Agents.AI.Harness",
         "mapping": {
           "go": "harness.Config{}",
-          "go_symbols": ["agent/harness.Config", "agent.Config", "agent/harness/toolautocall.Config"],
+          "go_symbols": [
+            "agent/harness.Config",
+            "agent.Config",
+            "agent/harness/toolautocall.Config"
+          ],
           "status": "adapted",
           "note": "Source-reviewed at ebcf4db7f9462ef6c377761e0b3159c4c5a73027, outside the current binary-extraction scope. Stable options are distributed across harness configuration, common agent configuration and the provider's existing tool-invocation configuration. The 11 MAAI001 composition options are intentional exclusions, not claims that every .NET option was ported."
         },
         "properties": {
           "AIContextProviders": {
-            "go_symbols": ["agent.Config.ContextProviders", "agent/harness.AgentConfig"],
+            "go_symbols": [
+              "agent.Config.ContextProviders",
+              "agent/harness.AgentConfig"
+            ],
             "status": "adapted",
             "note": "Caller context providers follow the enabled Todo, mode, FileMemory and skills providers; AgentConfig does not mutate the caller's slice."
           },
           "AgentModeProviderOptions": {
-            "go_symbols": ["agent/harness.Config.AgentMode", "agent/harness/agentmode.Config"],
+            "go_symbols": [
+              "agent/harness.Config.AgentMode",
+              "agent/harness/agentmode.Config"
+            ],
             "status": "mapped"
           },
           "AgentSkillsSource": {
-            "go_symbols": ["agent/harness.Config.Skills", "agent/skills.ContextProviderOptions.Sources", "agent/skills.Source"],
+            "go_symbols": [
+              "agent/harness.Config.Skills",
+              "agent/skills.ContextProviderOptions.Sources",
+              "agent/skills.Source"
+            ],
             "status": "adapted",
             "note": "Supply sources through Skills.Sources. Non-nil Skills.Sources or Skills.Skills replaces default working-directory discovery, including empty collections. Default discovery and resource access exclude the reserved agent-file-memory subtree; caller sources retain their own access policy."
           },
@@ -14033,12 +14728,23 @@
             "experimental": "MAAI001"
           },
           "ChatHistoryProvider": {
-            "go_symbols": ["agent.Config.HistoryProvider", "agent/harness.AgentConfig"],
+            "go_symbols": [
+              "agent.Config.HistoryProvider",
+              "agent/harness.AgentConfig"
+            ],
             "status": "adapted",
             "note": "AgentConfig preserves supplied history or creates session-backed in-memory history. It enables per-service-call persistence, defaults warning/throwing on history conflicts to false, and retains explicit caller conflict settings."
           },
           "ChatOptions": {
-            "go_symbols": ["agent.Config.Tools", "agent.Config.RunOptions", "provider/openaiprovider.AgentConfig.Instructions", "provider/openaiprovider.ResponsesNewParams", "provider/openaiprovider.ChatCompletionNewParams", "provider/anthropicprovider.MessageNewParams", "provider/geminiprovider.GenerateContentConfig"],
+            "go_symbols": [
+              "agent.Config.Tools",
+              "agent.Config.RunOptions",
+              "provider/openaiprovider.AgentConfig.Instructions",
+              "provider/openaiprovider.ResponsesNewParams",
+              "provider/openaiprovider.ChatCompletionNewParams",
+              "provider/anthropicprovider.MessageNewParams",
+              "provider/geminiprovider.GenerateContentConfig"
+            ],
             "status": "adapted",
             "note": "Use common Tools and RunOptions plus the provider's existing native-parameter options instead of a shared ChatOptions class. Harness instructions precede caller instructions, and native model and request settings remain with the selected provider."
           },
@@ -14049,24 +14755,34 @@
             "experimental": "MAAI001"
           },
           "Description": {
-            "go_symbols": ["agent.Config.Description"],
+            "go_symbols": [
+              "agent.Config.Description"
+            ],
             "status": "mapped"
           },
           "DisableAgentModeProvider": {
-            "go_symbols": ["agent/harness.Config.DisableAgentMode"],
+            "go_symbols": [
+              "agent/harness.Config.DisableAgentMode"
+            ],
             "status": "mapped"
           },
           "DisableAgentSkillsProvider": {
-            "go_symbols": ["agent/harness.Config.DisableSkills"],
+            "go_symbols": [
+              "agent/harness.Config.DisableSkills"
+            ],
             "status": "mapped"
           },
           "DisableApprovalNotRequiredFunctionBypassing": {
-            "go_symbols": ["agent/harness/toolautocall.Config.DisableApprovalNotRequiredFunctionBypassing"],
+            "go_symbols": [
+              "agent/harness/toolautocall.Config.DisableApprovalNotRequiredFunctionBypassing"
+            ],
             "status": "adapted",
             "note": "Use the existing provider configuration's ToolAutoCall settings. Safe-function bypassing stays enabled by default; harness configuration does not add another invocation loop or override the setting."
           },
           "DisableApprovalResponseBinding": {
-            "go_symbols": ["agent/harness/toolautocall.Config.DisableApprovalResponseBinding"],
+            "go_symbols": [
+              "agent/harness/toolautocall.Config.DisableApprovalResponseBinding"
+            ],
             "status": "adapted",
             "note": "Use the existing provider configuration's ToolAutoCall settings. Session-backed approval-response binding stays enabled by default and remains independent of harness auto-approval middleware."
           },
@@ -14077,25 +14793,36 @@
             "experimental": "MAAI001"
           },
           "DisableFileMemory": {
-            "go_symbols": ["agent/harness.Config.DisableFileMemory"],
+            "go_symbols": [
+              "agent/harness.Config.DisableFileMemory"
+            ],
             "status": "mapped"
           },
           "DisableOpenTelemetry": {
-            "go_symbols": ["agent/harness.Config.DisableOpenTelemetry", "provider/otelprovider.MiddlewareConfig.DisableModelTracing"],
+            "go_symbols": [
+              "agent/harness.Config.DisableOpenTelemetry",
+              "provider/otelprovider.MiddlewareConfig.DisableModelTracing"
+            ],
             "status": "adapted",
             "note": "Disables harness-installed agent, tool and supported model-adapter tracing. Model tracing is enabled by default by the shared middleware for ordinary and harness agents; Go exposes DisableModelTracing to retain agent/tool-only output. Feature-usage tracking has its existing independent opt-out; independently installed application tracing is not removed."
           },
           "DisableTodoProvider": {
-            "go_symbols": ["agent/harness.Config.DisableTodo"],
+            "go_symbols": [
+              "agent/harness.Config.DisableTodo"
+            ],
             "status": "mapped"
           },
           "DisableToolAutoApproval": {
-            "go_symbols": ["agent/harness.Config.DisableToolApproval"],
+            "go_symbols": [
+              "agent/harness.Config.DisableToolApproval"
+            ],
             "status": "adapted",
             "note": "Omits standing-rule and auto-approval middleware, not the model provider's tool-approval requirements. Approval-required calls can still pause for a caller decision."
           },
           "DisableWebSearch": {
-            "go_symbols": ["agent/harness.Config.DisableWebSearch"],
+            "go_symbols": [
+              "agent/harness.Config.DisableWebSearch"
+            ],
             "status": "mapped"
           },
           "FileAccessProviderOptions": {
@@ -14117,12 +14844,17 @@
             "experimental": "MAAI001"
           },
           "HarnessInstructions": {
-            "go_symbols": ["agent/harness.Config.Instructions", "agent/harness.DefaultInstructions"],
+            "go_symbols": [
+              "agent/harness.Config.Instructions",
+              "agent/harness.DefaultInstructions"
+            ],
             "status": "adapted",
             "note": "Nil uses the built-in guidance; an empty or whitespace-only string omits harness instructions. AgentConfig prepends nonblank guidance before caller run options without replacing caller instructions. Go adapters retain their existing instruction-joining rules."
           },
           "Id": {
-            "go_symbols": ["agent.Config.ID"],
+            "go_symbols": [
+              "agent.Config.ID"
+            ],
             "status": "mapped"
           },
           "LoopAgentOptions": {
@@ -14150,28 +14882,40 @@
             "experimental": "MAAI001"
           },
           "MaximumIterationsPerRequest": {
-            "go_symbols": ["agent/harness/toolautocall.Config.MaximumIterationsPerRequest"],
+            "go_symbols": [
+              "agent/harness/toolautocall.Config.MaximumIterationsPerRequest"
+            ],
             "status": "adapted",
             "note": "Use the existing provider configuration's ToolAutoCall settings. Nil retains the tool middleware's default of 40; Go additionally permits zero to disable automatic invocation. The harness does not replace the provider's tool loop."
           },
           "Name": {
-            "go_symbols": ["agent.Config.Name"],
+            "go_symbols": [
+              "agent.Config.Name"
+            ],
             "status": "mapped"
           },
           "OpenTelemetrySourceName": {
-            "go_symbols": ["agent/harness.Config.OpenTelemetry", "provider/otelprovider.MiddlewareConfig.SourceName"],
+            "go_symbols": [
+              "agent/harness.Config.OpenTelemetry",
+              "provider/otelprovider.MiddlewareConfig.SourceName"
+            ],
             "status": "adapted",
             "note": "Sets the shared agent/tool/model instrumentation scope. Empty retains the Go SDK scope github.com/microsoft/agent-framework-go rather than the .NET scope name. Global tracer/meter providers remain application-owned."
           },
           "ToolApprovalAgentOptions": {
-            "go_symbols": ["agent/harness.Config.ToolApproval", "agent/harness/toolapproval.Config"],
+            "go_symbols": [
+              "agent/harness.Config.ToolApproval",
+              "agent/harness/toolapproval.Config"
+            ],
             "status": "mapped"
           }
         },
         "constructors": {
           "HarnessAgentOptions()": {
             "go": "harness.Config{}",
-            "go_symbols": ["agent/harness.Config"],
+            "go_symbols": [
+              "agent/harness.Config"
+            ],
             "status": "adapted",
             "note": "Use the zero-value Go configuration for enabled stable components. Common agent settings are passed separately to AgentConfig, and tool-invocation settings remain on the normal provider configuration."
           }
@@ -14290,7 +15034,11 @@
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
           "go": "agent.NewInMemoryHistoryProvider(agent.InMemoryHistoryProviderConfig{})",
-          "go_symbols": ["agent.NewInMemoryHistoryProvider", "agent.InMemoryHistoryProviderConfig", "agent/compaction.NewHistoryProvider"],
+          "go_symbols": [
+            "agent.NewInMemoryHistoryProvider",
+            "agent.InMemoryHistoryProviderConfig",
+            "agent/compaction.NewHistoryProvider"
+          ],
           "status": "adapted",
           "note": "Go returns a HistoryProvider interface from a config factory. Reducer-backed history uses the separate compaction provider, and history access lives on Session."
         },
@@ -14314,13 +15062,17 @@
         "methods": {
           "GetMessages(AgentSession) -> List<ChatMessage>": {
             "go": "session.InMemoryHistory(\"\")",
-            "go_symbols": ["agent.Session.InMemoryHistory"],
+            "go_symbols": [
+              "agent.Session.InMemoryHistory"
+            ],
             "status": "adapted",
             "note": "Read history from the session instead of the provider. Unlike GetMessages with a null session, a nil Go session returns an error; missing or null history returns a nil slice."
           },
           "SetMessages(AgentSession, List<ChatMessage>) -> void": {
             "go": "session.SetInMemoryHistory(\"\", messages)",
-            "go_symbols": ["agent.Session.SetInMemoryHistory"],
+            "go_symbols": [
+              "agent.Session.SetInMemoryHistory"
+            ],
             "status": "adapted",
             "note": "Replace history through the session instead of the provider. Go accepts a nil message slice and returns an error for a nil session; .NET rejects null messages and allows a null session."
           }
@@ -14348,7 +15100,10 @@
         },
         "properties": {
           "Messages": {
-            "go_symbols": ["agent.Session.InMemoryHistory", "agent.Session.SetInMemoryHistory"],
+            "go_symbols": [
+              "agent.Session.InMemoryHistory",
+              "agent.Session.SetInMemoryHistory"
+            ],
             "status": "adapted",
             "note": "Read or replace messages through the session's history methods; the internal state container remains private. Call SetInMemoryHistory after editing returned history to persist changes across serialization."
           }
@@ -14438,7 +15193,9 @@
         "constructors": {
           "InMemoryChatHistoryProviderOptions()": {
             "go": "agent.InMemoryHistoryProviderConfig{}",
-            "go_symbols": ["agent.InMemoryHistoryProviderConfig"],
+            "go_symbols": [
+              "agent.InMemoryHistoryProviderConfig"
+            ],
             "status": "adapted",
             "note": "A zero Go config supplies plain in-memory history defaults; reducer-backed storage uses compaction.HistoryProviderConfig with a required Strategy."
           }
@@ -14511,7 +15268,11 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "agent.Config{Logger: logger}",
-          "go_symbols": ["agent.Config.Logger", "agent.Config.DisableRunLogs", "agent.Config.LogSensitiveData"],
+          "go_symbols": [
+            "agent.Config.Logger",
+            "agent.Config.DisableRunLogs",
+            "agent.Config.LogSensitiveData"
+          ],
           "status": "adapted",
           "note": "Run logging is constructor-installed slog middleware, not a public delegating-agent class. Sensitive payload logging requires the separate LogSensitiveData opt-in."
         },
@@ -14540,7 +15301,11 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "agent.Config{Logger: logger}",
-          "go_symbols": ["agent.Config.Logger", "agent.Config.DisableRunLogs", "agent.Config.LogSensitiveData"],
+          "go_symbols": [
+            "agent.Config.Logger",
+            "agent.Config.DisableRunLogs",
+            "agent.Config.LogSensitiveData"
+          ],
           "status": "adapted",
           "note": "Select logging through construction config rather than builder extensions, dependency-injected logger factories, and a LoggingAgent configuration callback."
         },
@@ -14655,7 +15420,9 @@
         "constructors": {
           "LoopAgentOptions()": {
             "go": "loop.Config{}",
-            "go_symbols": ["agent/harness/loop.Config"],
+            "go_symbols": [
+              "agent/harness/loop.Config"
+            ],
             "status": "adapted",
             "note": "Use zero-value loop config for the same optional settings; nil MaxIterations selects ten and evaluators are registered separately in Config.Evaluators."
           }
@@ -14731,7 +15498,11 @@
         "constructors": {
           "LoopContext(AIAgent, AgentSession, IReadOnlyList<ChatMessage>, AgentResponse, AgentRunOptions)": {
             "go": "loop.Context{InitialMessages: messages, LastResponse: response, Options: []agent.Option{agent.WithSession(session)}}",
-            "go_symbols": ["agent/harness/loop.Context", "agent.WithSession", "agent.AgentFromContext"],
+            "go_symbols": [
+              "agent/harness/loop.Context",
+              "agent.WithSession",
+              "agent.AgentFromContext"
+            ],
             "status": "adapted",
             "note": "Construct a loop state value without constructor null validation; run options include the session and agent identity is supplied separately through context.Context."
           }
@@ -14839,7 +15610,10 @@
         "assembly": "Microsoft.Agents.AI.Abstractions",
         "mapping": {
           "go": "agent.InvokingContext{Messages: messages, Options: options}",
-          "go_symbols": ["agent.InvokingContext", "agent.GetOption"],
+          "go_symbols": [
+            "agent.InvokingContext",
+            "agent.GetOption"
+          ],
           "status": "adapted",
           "note": "Message and general AI context providers share Go InvokingContext; agent identity comes from context.Context and session from Options."
         },
@@ -14871,7 +15645,11 @@
         "constructors": {
           "InvokingContext(AIAgent, AgentSession, IEnumerable<ChatMessage>)": {
             "go": "agent.InvokingContext{Messages: messages, Options: []agent.Option{agent.WithSession(session)}}",
-            "go_symbols": ["agent.InvokingContext", "agent.WithSession", "agent.AgentFromContext"],
+            "go_symbols": [
+              "agent.InvokingContext",
+              "agent.WithSession",
+              "agent.AgentFromContext"
+            ],
             "status": "adapted",
             "note": "Message providers share the invocation struct; pass session through options and obtain the agent from the callback context instead of storing both as fields.",
             "experimental": "MAAI001"
@@ -14906,13 +15684,24 @@
           },
           "GetResponseAsync(IEnumerable<ChatMessage>, ChatOptions, CancellationToken) -> Task<ChatResponse>": {
             "go": "a := agent.New(provider, agent.Config{MessageInjector: injector}); a.Run(ctx, messages, agent.WithSession(session), agent.Stream(false)).Collect()",
-            "go_symbols": ["agent.Config.MessageInjector", "agent.Agent.Run", "agent.WithSession", "agent.Stream", "agent.ResponseStream.Collect"],
+            "go_symbols": [
+              "agent.Config.MessageInjector",
+              "agent.Agent.Run",
+              "agent.WithSession",
+              "agent.Stream",
+              "agent.ResponseStream.Collect"
+            ],
             "status": "adapted",
             "note": "Run through an agent configured with the injector rather than directly call a chat-client decorator; non-streaming injection returns the final provider response with accumulated usage."
           },
           "GetStreamingResponseAsync(IEnumerable<ChatMessage>, ChatOptions, CancellationToken) -> IAsyncEnumerable<ChatResponseUpdate>": {
             "go": "a := agent.New(provider, agent.Config{MessageInjector: injector}); a.Run(ctx, messages, agent.WithSession(session), agent.Stream(true))",
-            "go_symbols": ["agent.Config.MessageInjector", "agent.Agent.Run", "agent.WithSession", "agent.Stream"],
+            "go_symbols": [
+              "agent.Config.MessageInjector",
+              "agent.Agent.Run",
+              "agent.WithSession",
+              "agent.Stream"
+            ],
             "status": "adapted",
             "note": "Configured agent execution streams updates through the private injection middleware, including internally repeated provider calls, instead of exposing a separate chat-client streaming method."
           }
@@ -14920,7 +15709,11 @@
         "constructors": {
           "MessageInjectingChatClient(IChatClient)": {
             "go": "agent.New(provider, agent.Config{MessageInjector: new(agent.MessageInjector{})})",
-            "go_symbols": ["agent.New", "agent.Config.MessageInjector", "agent.MessageInjector"],
+            "go_symbols": [
+              "agent.New",
+              "agent.Config.MessageInjector",
+              "agent.MessageInjector"
+            ],
             "status": "adapted",
             "note": "Supply a zero-ready MessageInjector in agent configuration; construction installs provider-boundary injection middleware rather than wrapping an IChatClient object."
           }
@@ -14970,7 +15763,11 @@
           },
           "OpenTelemetryAgent(AIAgent, string, bool)": {
             "go": "otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: sourceName, DisableModelTracing: !autoWire})",
-            "go_symbols": ["provider/otelprovider.NewMiddleware", "provider/otelprovider.MiddlewareConfig.SourceName", "provider/otelprovider.MiddlewareConfig.DisableModelTracing"],
+            "go_symbols": [
+              "provider/otelprovider.NewMiddleware",
+              "provider/otelprovider.MiddlewareConfig.SourceName",
+              "provider/otelprovider.MiddlewareConfig.DisableModelTracing"
+            ],
             "status": "partial",
             "note": "Compose run telemetry middleware and invert the auto-wire flag into DisableModelTracing. Go instruments supported model adapters, not arbitrary IChatClient stacks, and offers no sensitive-payload capture property.",
             "experimental": "MAAI001"
@@ -14982,7 +15779,11 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "agent.Config{Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})}}",
-          "go_symbols": ["provider/otelprovider.NewMiddleware", "provider/otelprovider.MiddlewareConfig", "agent.Config.Middlewares"],
+          "go_symbols": [
+            "provider/otelprovider.NewMiddleware",
+            "provider/otelprovider.MiddlewareConfig",
+            "agent.Config.Middlewares"
+          ],
           "status": "adapted",
           "note": "Install configured OpenTelemetry middleware during agent construction instead of using a fluent builder extension and a decorator-configuration callback."
         },
@@ -15100,7 +15901,10 @@
         },
         "properties": {
           "StateKey": {
-            "go_symbols": ["agent.Session.Get", "agent.Session.Set"],
+            "go_symbols": [
+              "agent.Session.Get",
+              "agent.Session.Set"
+            ],
             "status": "adapted",
             "note": "The caller holds the state key and supplies it to Session.Get and Session.Set; Go has no constructed generic provider-state helper with a StateKey accessor."
           }
@@ -15127,7 +15931,10 @@
         "constructors": {
           "ProviderSessionState(Func<AgentSession, TState>, string, JsonSerializerOptions)": {
             "go": "session.Set(key, initialState)",
-            "go_symbols": ["agent.Session.Get", "agent.Session.Set"],
+            "go_symbols": [
+              "agent.Session.Get",
+              "agent.Session.Set"
+            ],
             "status": "adapted",
             "note": "Go composes Session.Get and Set with a caller-held key and initializer instead of constructing a configured generic state object; there are no per-helper JSON serializer options."
           }
@@ -15673,7 +16480,9 @@
         "constructors": {
           "TodoItem()": {
             "go": "todo.Item{}",
-            "go_symbols": ["agent/harness/todo.Item"],
+            "go_symbols": [
+              "agent/harness/todo.Item"
+            ],
             "status": "adapted",
             "note": "Use a zero-value struct; its optional description is an empty string rather than a nullable reference."
           }
@@ -15762,7 +16571,9 @@
         "constructors": {
           "TodoProviderOptions()": {
             "go": "todo.Options{}",
-            "go_symbols": ["agent/harness/todo.Options"],
+            "go_symbols": [
+              "agent/harness/todo.Options"
+            ],
             "status": "adapted",
             "note": "Use zero-value options; nil instructions/builder retain default formatting and false leaves todo-list message injection enabled."
           }
@@ -15812,14 +16623,22 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "agent.Config{Middlewares: []agent.Middleware{toolapproval.New(toolapproval.Config{})}}",
-          "go_symbols": ["agent/harness/toolapproval.New", "agent/harness/toolapproval.Config", "agent.Config.Middlewares"],
+          "go_symbols": [
+            "agent/harness/toolapproval.New",
+            "agent/harness/toolapproval.Config",
+            "agent.Config.Middlewares"
+          ],
           "status": "adapted",
           "note": "Register standing-rule approval middleware at construction rather than use an extension container wrapping the agent."
         },
         "methods": {
           "UseToolApproval(AIAgentBuilder, ToolApprovalAgentOptions) -> AIAgentBuilder": {
             "go": "agent.Config{Middlewares: []agent.Middleware{toolapproval.New(toolapproval.Config{})}}",
-            "go_symbols": ["agent/harness/toolapproval.New", "agent/harness/toolapproval.Config", "agent.Config.Middlewares"],
+            "go_symbols": [
+              "agent/harness/toolapproval.New",
+              "agent/harness/toolapproval.Config",
+              "agent.Config.Middlewares"
+            ],
             "status": "adapted",
             "note": "Place toolapproval.New in the agent middleware list around the inner tool-execution path; configure rules and reinvocation limits by value instead of a builder extension."
           }
@@ -15862,7 +16681,9 @@
         "constructors": {
           "ToolApprovalAgentOptions()": {
             "go": "toolapproval.Config{}",
-            "go_symbols": ["agent/harness/toolapproval.Config"],
+            "go_symbols": [
+              "agent/harness/toolapproval.Config"
+            ],
             "status": "adapted",
             "note": "Use zero-value config: no heuristic rules and nil iteration limit select defaults. Go uses encoding/json internally rather than configurable JsonSerializerOptions."
           }
@@ -15873,7 +16694,10 @@
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
           "go": "request.AlwaysApproveToolResponse()",
-          "go_symbols": ["message.ToolApprovalRequestContent.AlwaysApproveToolResponse", "message.ToolApprovalRequestContent.AlwaysApproveToolWithArgumentsResponse"],
+          "go_symbols": [
+            "message.ToolApprovalRequestContent.AlwaysApproveToolResponse",
+            "message.ToolApprovalRequestContent.AlwaysApproveToolWithArgumentsResponse"
+          ],
           "status": "adapted",
           "note": "Standing-approval helpers are instance methods on ToolApprovalRequestContent rather than extension methods; a reason can be set on the returned response."
         },
@@ -18684,6 +19508,54 @@
             ],
             "status": "adapted",
             "note": "Constructor becomes a variadic participant factory; Go reports invalid participants when Build is called."
+          }
+        }
+      },
+      "CosmosDBWorkflowExtensions": {
+        "area": "workflows",
+        "assembly": "Microsoft.Agents.AI.CosmosNoSql",
+        "mapping": {
+          "go": "",
+          "go_symbols": [],
+          "status": "unmapped",
+          "unreviewed": true
+        },
+        "methods": {
+          "CreateCheckpointStore(CosmosClient, string, string) -> CosmosCheckpointStore": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          },
+          "CreateCheckpointStore(string, string, string) -> CosmosCheckpointStore": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          },
+          "CreateCheckpointStore<T>(CosmosClient, string, string) -> CosmosCheckpointStore<T>": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          },
+          "CreateCheckpointStore<T>(string, string, string) -> CosmosCheckpointStore<T>": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          },
+          "CreateCheckpointStoreUsingManagedIdentity(string, string, string, TokenCredential) -> CosmosCheckpointStore": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          },
+          "CreateCheckpointStoreUsingManagedIdentity<T>(string, string, string, TokenCredential) -> CosmosCheckpointStore<T>": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
           }
         }
       },
@@ -24380,6 +25252,26 @@
           "go_symbols": [],
           "status": "unmapped",
           "note": "Separate non-generic JsonElement specialization of the Cosmos store; no Go counterpart was located and intent is unknown."
+        },
+        "constructors": {
+          "CosmosCheckpointStore(CosmosClient, string, string)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          },
+          "CosmosCheckpointStore(string, TokenCredential, string, string)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          },
+          "CosmosCheckpointStore(string, string, string)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          }
         }
       },
       "CosmosCheckpointStore<T>": {
@@ -24390,6 +25282,64 @@
           "go_symbols": [],
           "status": "unmapped",
           "note": "No Cosmos checkpoint-store counterpart was located; generated Foundry Cosmos index DTOs are not checkpoint stores. Intent is unknown."
+        },
+        "properties": {
+          "ContainerId": {
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          },
+          "DatabaseId": {
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          }
+        },
+        "methods": {
+          "CreateCheckpointAsync(string, JsonElement, CheckpointInfo) -> ValueTask<CheckpointInfo>": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          },
+          "Dispose() -> void": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          },
+          "RetrieveCheckpointAsync(string, CheckpointInfo) -> ValueTask<JsonElement>": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          },
+          "RetrieveIndexAsync(string, CheckpointInfo) -> ValueTask<IEnumerable<CheckpointInfo>>": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          }
+        },
+        "constructors": {
+          "CosmosCheckpointStore(CosmosClient, string, string)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          },
+          "CosmosCheckpointStore(string, TokenCredential, string, string)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          },
+          "CosmosCheckpointStore(string, string, string)": {
+            "go": "",
+            "go_symbols": [],
+            "status": "unmapped",
+            "unreviewed": true
+          }
         }
       },
       "DirectEdgeInfo": {
@@ -25404,24 +26354,6 @@
           }
         }
       },
-      "ChatClientHarnessExtensions": {
-        "area": "agents",
-        "assembly": "Microsoft.Agents.AI.Harness",
-        "mapping": {
-          "go": "harness.AgentConfig(harness.Config{}, agent.Config{})",
-          "go_symbols": ["agent/harness.AgentConfig"],
-          "status": "adapted",
-          "note": "Source-reviewed at ebcf4db7f9462ef6c377761e0b3159c4c5a73027, outside the current binary-extraction scope. Go uses a top-level configuration function and the normal provider constructor rather than an extension-method container."
-        },
-        "methods": {
-          "AsHarnessAgent(IChatClient, HarnessAgentOptions, ILoggerFactory, IServiceProvider) -> HarnessAgent": {
-            "go": "cfg, _ := harness.AgentConfig(harness.Config{}, agent.Config{}); openaiprovider.NewAgent(client, openaiprovider.AgentConfig{Config: cfg})",
-            "go_symbols": ["agent/harness.AgentConfig", "provider/openaiprovider.NewAgent", "provider/openaiprovider.AgentConfig"],
-            "status": "adapted",
-            "note": "Apply AgentConfig before calling the ordinary provider constructor. The result remains an agent.Agent, with automatic file-memory cleanup rather than a separate resource-owning harness object."
-          }
-        }
-      },
       "ChatClientExtensions": {
         "area": "unclassified",
         "assembly": "Microsoft.Agents.AI",
@@ -25453,6 +26385,30 @@
             ],
             "status": "adapted",
             "note": "Identity and tools become Go configuration fields and instructions a default run option; provider construction and dependencies remain explicit rather than IChatClient extension/DI arguments."
+          }
+        }
+      },
+      "ChatClientHarnessExtensions": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI.Harness",
+        "mapping": {
+          "go": "harness.AgentConfig(harness.Config{}, agent.Config{})",
+          "go_symbols": [
+            "agent/harness.AgentConfig"
+          ],
+          "status": "adapted",
+          "note": "Source-reviewed at ebcf4db7f9462ef6c377761e0b3159c4c5a73027, outside the current binary-extraction scope. Go uses a top-level configuration function and the normal provider constructor rather than an extension-method container."
+        },
+        "methods": {
+          "AsHarnessAgent(IChatClient, HarnessAgentOptions, ILoggerFactory, IServiceProvider) -> HarnessAgent": {
+            "go": "cfg, _ := harness.AgentConfig(harness.Config{}, agent.Config{}); openaiprovider.NewAgent(client, openaiprovider.AgentConfig{Config: cfg})",
+            "go_symbols": [
+              "agent/harness.AgentConfig",
+              "provider/openaiprovider.NewAgent",
+              "provider/openaiprovider.AgentConfig"
+            ],
+            "status": "adapted",
+            "note": "Apply AgentConfig before calling the ordinary provider constructor. The result remains an agent.Agent, with automatic file-memory cleanup rather than a separate resource-owning harness object."
           }
         }
       }

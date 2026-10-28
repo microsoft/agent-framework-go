@@ -25,6 +25,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	azfake "github.com/Azure/azure-sdk-for-go/sdk/azcore/fake"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	"github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -52,6 +53,7 @@ import (
 	"github.com/microsoft/agent-framework-go/provider/a2aprovider"
 	"github.com/microsoft/agent-framework-go/provider/aguiprovider"
 	"github.com/microsoft/agent-framework-go/provider/anthropicprovider"
+	"github.com/microsoft/agent-framework-go/provider/azureprovider"
 	"github.com/microsoft/agent-framework-go/provider/copilotprovider"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/provider/geminiprovider"
@@ -82,6 +84,11 @@ var featureActivationCases = []struct {
 	{"harness-mask-disabled", nil, []string{featureMaskDisabledEnvVar + "=true"}},
 	{"history-provide", []int{13}, nil},
 	{"history-store", []int{13}, nil},
+	{"cosmos-history-unused", nil, nil},
+	{"cosmos-history-provide", []int{58}, nil},
+	{"cosmos-history-store", []int{58}, nil},
+	{"cosmos-history-count", []int{58}, nil},
+	{"cosmos-history-clear", []int{58}, nil},
 	{"chat-history-memory", []int{4}, nil},
 	{"chat-history-memory-on-demand", []int{4}, nil},
 	{"text-search", []int{6}, nil},
@@ -554,6 +561,46 @@ func runFeatureActivation(t *testing.T, name string) {
 			}
 			_, err := p.Invoking(ctx, invoking)
 			return err
+		}
+	case "cosmos-history-unused", "cosmos-history-provide", "cosmos-history-store", "cosmos-history-count", "cosmos-history-clear":
+		client, err := azcosmos.NewClient("https://cosmos.example", &azfake.TokenCredential{}, &azcosmos.ClientOptions{
+			ClientOptions: azcore.ClientOptions{Transport: &http.Client{Transport: activationTransport(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Path == "/" {
+					return activationResponse(req, `{"id":"test","readableLocations":[{"name":"local","databaseAccountEndpoint":"https://cosmos.example/"}],"writableLocations":[{"name":"local","databaseAccountEndpoint":"https://cosmos.example/"}]}`), nil
+				}
+				if name == "cosmos-history-count" {
+					return activationResponse(req, `{"Documents":[0]}`), nil
+				}
+				return activationResponse(req, `{"Documents":[]}`), nil
+			})}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(client.Close)
+		p, err := azureprovider.NewCosmosHistoryProvider(client, "sample", "history",
+			func(*agent.Session) *azureprovider.CosmosHistoryState {
+				return &azureprovider.CosmosHistoryState{ConversationID: "conversation"}
+			}, azureprovider.CosmosHistoryProviderConfig{MaxMessagesToRetrieve: new(0)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		activate = func() error {
+			switch name {
+			case "cosmos-history-unused":
+				return nil
+			case "cosmos-history-provide":
+				_, err := p.Invoking(ctx, invoking)
+				return err
+			case "cosmos-history-store":
+				return p.Invoked(ctx, agent.InvokedContext{})
+			case "cosmos-history-count":
+				_, err := p.MessageCount(ctx, nil)
+				return err
+			default:
+				_, err := p.ClearMessages(ctx, nil)
+				return err
+			}
 		}
 	case "chat-history-memory", "chat-history-memory-on-demand":
 		config := memory.Config{}

@@ -1,4 +1,6 @@
-# Azure AI Search
+# Azure integrations
+
+## Azure AI Search
 
 Azure AI Search indexes back typed and dynamic VectorData collections, including
 the [chat-history memory provider](../../agent/memory/).
@@ -68,7 +70,7 @@ Behavior follows the
 
 See the [runnable example](../../examples/02-agents/providers/azure/ai_search/).
 
-## Live validation
+### Live validation
 
 The integration tests create uniquely named indexes and delete only those indexes.
 They require permission to manage indexes and documents.
@@ -84,3 +86,8 @@ Set `AZURE_AI_SEARCH_API_KEY` to test key authentication instead of Entra ID.
 Generated-vector and chat-history memory tests additionally use
 `FOUNDRY_PROJECT_ENDPOINT` and a `FOUNDRY_EMBEDDING_MODEL` deployment producing
 3072-dimensional vectors (default `text-embedding-3-large`).
+
+## Cosmos DB chat history
+
+Use [`CosmosHistoryProvider`](cosmosdb_history.go) for persistent conversation
+history in Cosmos DB. See its Go doc comments for usage and configuration.
