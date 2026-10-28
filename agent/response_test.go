@@ -695,6 +695,19 @@ func TestResponse_Update_RawRepresentation(t *testing.T) {
 	}
 }
 
+func TestResponse_Update_RawRepresentationOnlyDoesNotCreateMessage(t *testing.T) {
+	resp := &agent.Response{}
+
+	resp.Update(&agent.ResponseUpdate{RawRepresentation: "raw-lifecycle-event"})
+
+	if len(resp.Messages) != 0 {
+		t.Fatalf("expected no messages for raw-only response update, got %d", len(resp.Messages))
+	}
+	if resp.RawRepresentation != "raw-lifecycle-event" {
+		t.Fatalf("expected raw representation on response, got %#v", resp.RawRepresentation)
+	}
+}
+
 func TestResponse_ToUpdates_RoundTripPreservesRawRepresentationWithContinuationToken(t *testing.T) {
 	// A response with a message raw representation and a continuation token emits
 	// a trailing metadata-only update (RawRepresentation nil). Collecting the
@@ -1076,13 +1089,18 @@ func TestResponse_ToUpdates_ConversationIDOnMetadataUpdate(t *testing.T) {
 	}
 }
 
-func TestResponse_ToUpdates_WithFinishReasonOnlyProducesEmptySlice(t *testing.T) {
+func TestResponse_ToUpdates_WithFinishReasonOnlyProducesMetadataUpdate(t *testing.T) {
 	resp := &agent.Response{FinishReason: "length"}
 
 	updates := resp.ToUpdates()
 
-	if len(updates) != 0 {
-		t.Fatalf("expected no updates, got %d", len(updates))
+	if len(updates) != 1 {
+		t.Fatalf("expected one metadata update, got %d", len(updates))
+	}
+	var collected agent.Response
+	collected.Update(updates[0])
+	if collected.FinishReason != "length" || len(collected.Messages) != 0 {
+		t.Fatalf("collected = %#v, want finish reason without messages", &collected)
 	}
 }
 
@@ -1173,6 +1191,124 @@ func TestResponse_ToUpdates_WithAdditionalPropertiesOnlyProducesSingleUpdate(t *
 	}
 	if updates[0].AdditionalProperties["key"] != "value" {
 		t.Errorf("expected key value, got %v", updates[0].AdditionalProperties["key"])
+	}
+}
+
+func TestResponse_ToUpdates_RoundTripDoesNotCreateMessageForResponseMetadata(t *testing.T) {
+	tests := []struct {
+		name         string
+		response     *agent.Response
+		wantToken    string
+		wantProperty any
+	}{
+		{
+			name:      "continuation token",
+			response:  &agent.Response{ContinuationToken: "token-123"},
+			wantToken: "token-123",
+		},
+		{
+			name:         "additional properties",
+			response:     &agent.Response{AdditionalProperties: map[string]any{"key": "value"}},
+			wantProperty: "value",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var collected agent.Response
+			for _, update := range tt.response.ToUpdates() {
+				collected.Update(update)
+			}
+
+			if len(collected.Messages) != 0 {
+				t.Fatalf("expected no messages after round trip, got %d", len(collected.Messages))
+			}
+			if collected.ContinuationToken != tt.wantToken {
+				t.Errorf("continuation token = %q, want %q", collected.ContinuationToken, tt.wantToken)
+			}
+			if got := collected.AdditionalProperties["key"]; got != tt.wantProperty {
+				t.Errorf("additional property = %v, want %v", got, tt.wantProperty)
+			}
+		})
+	}
+}
+
+func TestResponse_ToUpdates_RoundTripPreservesResponseMetadataWithoutMessages(t *testing.T) {
+	original := &agent.Response{
+		AgentID: "agent", ID: "response", ConversationID: new("conversation"),
+		FinishReason: "stop", CreatedAt: time.Now(), RawRepresentation: "raw-response",
+	}
+	var collected agent.Response
+	for _, update := range original.ToUpdates() {
+		collected.Update(update)
+	}
+	if !reflect.DeepEqual(&collected, original) {
+		t.Fatalf("collected = %#v, want %#v", &collected, original)
+	}
+}
+
+func TestResponse_ToUpdates_PreservesEmptyRoleOnMessageData(t *testing.T) {
+	for _, msg := range []*message.Message{
+		{ID: "message-id"},
+		{AuthorName: "author"},
+		{Contents: message.Contents{&message.TextContent{Text: "hello"}}},
+	} {
+		updates := (&agent.Response{Messages: []*message.Message{msg}}).ToUpdates()
+		if len(updates) != 1 || updates[0].Role != "" {
+			t.Fatalf("ToUpdates normalized an already identifiable message: %#v", updates)
+		}
+	}
+}
+
+func TestResponse_ToUpdates_RoundTripPreservesMetadataOnlyMessages(t *testing.T) {
+	createdAt := time.Date(2026, time.September, 20, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name    string
+		message *message.Message
+	}{
+		{
+			name: "additional properties",
+			message: &message.Message{
+				// MessageID is required by the response-update property scoping contract.
+				ID:                   "metadata-message",
+				AdditionalProperties: map[string]any{"key": "value"},
+			},
+		},
+		{
+			name: "created at",
+			message: &message.Message{
+				CreatedAt: createdAt,
+			},
+		},
+		{
+			name: "raw representation",
+			message: &message.Message{
+				RawRepresentation: "raw-message",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			original := &agent.Response{Messages: []*message.Message{tt.message}}
+			var collected agent.Response
+			for _, update := range original.ToUpdates() {
+				collected.Update(update)
+			}
+
+			if len(collected.Messages) != 1 {
+				t.Fatalf("message count = %d, want 1", len(collected.Messages))
+			}
+			if got := collected.Messages[0].AdditionalProperties["key"]; got != tt.message.AdditionalProperties["key"] {
+				t.Errorf("additional property = %v, want %v", got, tt.message.AdditionalProperties["key"])
+			}
+			if got := collected.Messages[0].CreatedAt; !got.Equal(tt.message.CreatedAt) {
+				t.Errorf("created at = %v, want %v", got, tt.message.CreatedAt)
+			}
+			if got := collected.Messages[0].RawRepresentation; got != tt.message.RawRepresentation {
+				t.Errorf("raw representation = %v, want %v", got, tt.message.RawRepresentation)
+			}
+		})
 	}
 }
 

@@ -220,7 +220,7 @@ func TestAGUIAgentRun_ConfigInstructionsBecomeSystemMessage(t *testing.T) {
 	}
 }
 
-func TestAGUIAgentRun_WithEmptyEventStream_EmitsMetadataUpdate(t *testing.T) {
+func TestAGUIAgentRun_WithEmptyEventStream_DoesNotCreateMessage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
 		writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
@@ -233,13 +233,8 @@ func TestAGUIAgentRun_WithEmptyEventStream_EmitsMetadataUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("run error: %v", err)
 	}
-	if len(resp.Messages) == 0 {
-		t.Fatal("expected at least one metadata message")
-	}
-	for _, msg := range resp.Messages {
-		if msg.Role != message.RoleAssistant {
-			t.Fatalf("message role = %q, want %q", msg.Role, message.RoleAssistant)
-		}
+	if len(resp.Messages) != 0 {
+		t.Fatalf("messages length = %d, want 0", len(resp.Messages))
 	}
 }
 

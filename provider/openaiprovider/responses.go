@@ -1144,7 +1144,6 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 		ResponseID:   resp.ID,
 		FinishReason: finishReason,
 		CreatedAt:    time.Unix(int64(resp.CreatedAt), 0),
-		Role:         message.RoleAssistant,
 	}
 	// Only set ContinuationToken if it's not empty
 	if contToken != "" {
@@ -1477,11 +1476,12 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 	}
 
 	// Lifecycle metadata belongs to the response, not the active message.
-	// Omit its MessageID without resetting the state used by content updates.
+	// Omit its Role and MessageID without resetting the state used by content updates.
 	var u *agent.ResponseUpdate
 	switch event := update.AsAny().(type) {
 	case responses.ResponseCreatedEvent:
-		u = createUpdate(message.RoleAssistant, nil)
+		u = createUpdate("", nil)
+		u.Role = ""
 		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
@@ -1491,7 +1491,8 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		}
 
 	case responses.ResponseQueuedEvent:
-		u = createUpdate(message.RoleAssistant, nil)
+		u = createUpdate("", nil)
+		u.Role = ""
 		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
@@ -1501,7 +1502,8 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		}
 
 	case responses.ResponseInProgressEvent:
-		u = createUpdate(message.RoleAssistant, nil)
+		u = createUpdate("", nil)
+		u.Role = ""
 		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
@@ -1522,13 +1524,14 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			state.anyFunctions = true
 			state.role = message.RoleAssistant
 		}
-		u = createUpdate(message.RoleAssistant, nil)
+		u = createUpdate("", nil)
 		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
 			u.ContinuationToken = contToken
 		}
 
 	case responses.ResponseCompletedEvent:
-		u = createUpdate(message.RoleAssistant, nil)
+		u = createUpdate("", nil)
+		u.Role = ""
 		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
@@ -1543,7 +1546,8 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		}
 
 	case responses.ResponseIncompleteEvent:
-		u = createUpdate(message.RoleAssistant, nil)
+		u = createUpdate("", nil)
+		u.Role = ""
 		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
@@ -1554,7 +1558,8 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 		}
 
 	case responses.ResponseFailedEvent:
-		u = createUpdate(message.RoleAssistant, nil)
+		u = createUpdate("", nil)
+		u.Role = ""
 		u.MessageID = ""
 		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
 		u.ResponseID = event.Response.ID
@@ -1668,7 +1673,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 
 	case responses.ResponseOutputItemDoneEvent:
 		// Create update for all output item done events
-		u = createUpdate(message.RoleAssistant, nil)
+		u = createUpdate("", nil)
 		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
 			u.ContinuationToken = contToken
 		}
@@ -1776,7 +1781,7 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			u.ContinuationToken = contToken
 		}
 	default:
-		u = createUpdate(message.RoleAssistant, nil)
+		u = createUpdate("", nil)
 		if contToken := createContinuationToken(responseID, update.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
 			u.ContinuationToken = contToken
 		}

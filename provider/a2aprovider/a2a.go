@@ -289,7 +289,11 @@ func sendMsg(session *agent.Session, contextID string, seq iter.Seq2[a2a.Event, 
 				yield(nil, err)
 				return
 			}
-			update := newResponseUpdate(e, e.Metadata, string(e.TaskID), messageID, message.RoleAssistant, contents)
+			role := message.Role("")
+			if messageID != "" || len(contents) > 0 {
+				role = message.RoleAssistant
+			}
+			update := newResponseUpdate(e, e.Metadata, string(e.TaskID), messageID, role, contents)
 			update.FinishReason = finishReasonForTaskState(e.Status.State)
 			if !forward(update, nil) {
 				return
@@ -384,7 +388,11 @@ func yieldTask(yield func(*agent.ResponseUpdate, error) bool, task *a2a.Task, sp
 	if task.Status.Message != nil {
 		messageID = task.Status.Message.ID
 	}
-	update := newResponseUpdate(task, cloneMetadata(task.Metadata), string(task.ID), messageID, message.RoleAssistant, contents)
+	role := message.Role("")
+	if messageID != "" || len(contents) > 0 {
+		role = message.RoleAssistant
+	}
+	update := newResponseUpdate(task, cloneMetadata(task.Metadata), string(task.ID), messageID, role, contents)
 	update.ContinuationToken = continuationToken
 	update.FinishReason = finishReason
 	return yield(update, nil)
