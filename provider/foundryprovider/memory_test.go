@@ -75,6 +75,12 @@ func TestNewMemoryProviderSucceedsWithValidParameters(t *testing.T) {
 	}
 }
 
+func TestNewMemoryProviderRejectsEmptyStoreName(t *testing.T) {
+	assertPanics(t, func() {
+		foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "", validScope, foundryprovider.MemoryProviderConfig{})
+	}, "memory store name is required")
+}
+
 func TestNewMemoryProviderUsesCustomSearchInputFilter(t *testing.T) {
 	called := false
 	filter := func(context.Context, []*message.Message) ([]*message.Message, error) {

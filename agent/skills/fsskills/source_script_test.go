@@ -4,6 +4,7 @@ package fsskills_test
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -149,12 +150,23 @@ func TestFileSource_WithRunner_ScriptsCanRun(t *testing.T) {
 		if script.Name != "scripts/test.py" {
 			t.Fatalf("expected scripts/test.py, got %q", script.Name)
 		}
+		scriptFS, ok := script.AdditionalProperties["fsskills.scriptFS"].(fs.FS)
+		if !ok {
+			t.Fatalf("script does not expose its backing filesystem: %#v", script.AdditionalProperties)
+		}
+		content, err := fs.ReadFile(scriptFS, script.Name)
+		if err != nil || string(content) != "print('ok')" {
+			t.Fatalf("runner script file = %q, %v, want scripts/test.py", content, err)
+		}
 		return "executed", nil
 	}}, os.DirFS(root))
 
 	loaded, err := source.Skills(t.Context())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(loaded) != 1 || len(loaded[0].Scripts) != 1 {
+		t.Fatalf("Skills() = %#v, want one executable script", loaded)
 	}
 	result, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], nil)
 	if err != nil {
@@ -818,5 +830,136 @@ func TestFileSource_Runner_ReceivesScriptMetadata(t *testing.T) {
 	}
 	if !hasFSKey || gotFS == nil {
 		t.Errorf("runner received no fsskills.scriptFS in AdditionalProperties (hasKey=%v value=%v)", hasFSKey, gotFS)
+	}
+}
+
+func TestFileScript_Run_DelegatesToRunner(t *testing.T) {
+	called := false
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+			called = true
+			return "executed", nil
+		},
+	}, fstest.MapFS{
+		"my-skill/SKILL.md":  {Data: []byte("---\nname: my-skill\ndescription: A file skill\n---\nContent")},
+		"my-skill/run-me.sh": {Data: []byte("")},
+	})
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || len(loaded[0].Scripts) != 1 {
+		t.Fatalf("Skills() = %#v, want one file-backed script", loaded)
+	}
+
+	got, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || got != "executed" {
+		t.Fatalf("Run() = %#v; runner called = %t", got, called)
+	}
+}
+
+func TestFileScript_Run_ForwardsStringArray(t *testing.T) {
+	var captured []string
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, arguments []string) (any, error) {
+			captured = arguments
+			return "done", nil
+		},
+	}, fstest.MapFS{
+		"my-skill/SKILL.md":      {Data: []byte("---\nname: my-skill\ndescription: A skill\n---\nContent")},
+		"my-skill/array-test.sh": {Data: []byte("")},
+	})
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || len(loaded[0].Scripts) != 1 {
+		t.Fatalf("Skills() = %#v, want one file-backed script", loaded)
+	}
+	args := []string{"arg1", "arg2", "arg3"}
+
+	if _, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], args); err != nil {
+		t.Fatal(err)
+	}
+	if captured == nil || !slices.Equal(captured, args) {
+		t.Fatalf("runner arguments = %v, want %v", captured, args)
+	}
+}
+
+func TestFileScript_Run_WithoutRunnerReturnsError(t *testing.T) {
+	source := fsskills.NewSource(fstest.MapFS{
+		"my-skill/SKILL.md":     {Data: []byte("---\nname: my-skill\ndescription: A skill\n---\nContent")},
+		"my-skill/no-runner.sh": {Data: []byte("")},
+	})
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || len(loaded[0].Scripts) != 1 {
+		t.Fatalf("Skills() = %#v, want discovery without a runner to succeed", loaded)
+	}
+
+	got, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], nil)
+	if err == nil || !strings.Contains(err.Error(), "no file script runner was provided") || got != nil {
+		t.Fatalf("Run() = %#v, %v, want missing runner error", got, err)
+	}
+}
+
+func TestFileSkill_ResourcesAndScripts_RendersResourcesFirst(t *testing.T) {
+	source := fsskills.NewSource(fstest.MapFS{
+		"my-skill/SKILL.md":     {Data: []byte("---\nname: my-skill\ndescription: A skill\n---\nOriginal content")},
+		"my-skill/reference.md": {Data: []byte("value")},
+		"my-skill/build.sh":     {Data: []byte("")},
+	})
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 {
+		t.Fatalf("Skills() = %#v, want one file-backed skill", loaded)
+	}
+
+	content, err := loaded[0].GetContent(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	resourceIndex := strings.Index(content, "<available_resources>")
+	scriptIndex := strings.Index(content, "<available_scripts>")
+	if resourceIndex < 0 || scriptIndex < 0 || resourceIndex >= scriptIndex {
+		t.Fatalf("resource and script blocks are missing or misordered: %q", content)
+	}
+}
+
+func TestFileSkill_NoResourcesOrScripts_EmitsBothEmptyPeers(t *testing.T) {
+	const raw = "---\nname: my-skill\ndescription: A skill\n---\nOriginal content only"
+	source := rawSkillSource("my-skill", raw, fsskills.SourceOptions{})
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 {
+		t.Fatalf("Skills() = %#v, want one file-backed skill", loaded)
+	}
+
+	content, err := loaded[0].GetContent(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(content, raw) || !strings.Contains(content, "<available_resources />") || !strings.Contains(content, "<available_scripts />") {
+		t.Fatalf("content = %q, want original document and both empty peers", content)
+	}
+}
+
+func TestFileSource_RunScript_RejectsReplacedSymlinkWithoutCallingRunner(t *testing.T) {
+	fsys := fstest.MapFS{
+		"run-symlink-skill/SKILL.md":       {Data: []byte("---\nname: run-symlink-skill\ndescription: A skill\n---\nRun scripts.")},
+		"run-symlink-skill/scripts/run.py": {Data: []byte("print('safe')")},
+		"outside.py":                       {Data: []byte("print('outside')")},
+	}
+	called := false
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+			called = true
+			return nil, nil
+		},
+	}, fsys)
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || len(loaded[0].Scripts) != 1 {
+		t.Fatalf("Skills() = %#v, want one script", loaded)
+	}
+	script := loaded[0].Scripts[0]
+	fsys["run-symlink-skill/scripts/run.py"] = &fstest.MapFile{Mode: fs.ModeSymlink, Data: []byte("../../outside.py")}
+
+	got, err := script.Run(t.Context(), loaded[0], nil)
+	if err == nil || !strings.Contains(err.Error(), "symbolic link") || got != nil || called {
+		t.Fatalf("Run() = %#v, %v; runner called = %t, want rejected replacement", got, err, called)
 	}
 }

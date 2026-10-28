@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -40,6 +42,52 @@ func attributeValue(t *testing.T, attrs []workflowobservability.Attribute, key s
 	}
 	t.Fatalf("attribute %q not found", key)
 	return ""
+}
+
+type telemetryThrowingMessage struct{ err error }
+
+func (message telemetryThrowingMessage) MarshalJSON() ([]byte, error) {
+	panic(message.err)
+}
+
+func TestSensitiveData_MessageSerializationInvalidOperationUsesFallback(t *testing.T) {
+	span := &fakeSpan{}
+	telemetry := observability.New(observability.Options{
+		Tracer: &fakeTracer{span: span}, EnableSensitiveData: true,
+	})
+	_, activity := telemetry.StartMessageSend(t.Context(), "source", "target", telemetryThrowingMessage{err: errors.New("invalid operation")})
+	if activity == nil {
+		t.Fatal("expected message activity")
+	}
+	defer activity.End()
+	if got, want := attributeValue(t, span.attrs, observability.TagMessageContent), "[Unserializable: observability_test.telemetryThrowingMessage]"; got != want {
+		t.Fatalf("message content = %q, want %q", got, want)
+	}
+}
+
+func TestSensitiveData_MessageSerializationAnyExceptionUsesFallback(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{"ArgumentException", errors.New("invalid argument")},
+		{"IOException", &os.PathError{Op: "read", Path: "message", Err: io.ErrUnexpectedEOF}},
+		{"OperationCanceledException", context.Canceled},
+		{"TimeoutException", context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			span := &fakeSpan{}
+			telemetry := observability.New(observability.Options{Tracer: &fakeTracer{span: span}, EnableSensitiveData: true})
+			_, activity := telemetry.StartMessageSend(t.Context(), "source", "target", telemetryThrowingMessage{err: test.err})
+			if activity == nil {
+				t.Fatal("expected message activity")
+			}
+			defer activity.End()
+			if got, want := attributeValue(t, span.attrs, observability.TagMessageContent), "[Unserializable: observability_test.telemetryThrowingMessage]"; got != want {
+				t.Fatalf("message content = %q, want %q", got, want)
+			}
+		})
+	}
 }
 
 func TestErrorAttributesShortTypeName(t *testing.T) {

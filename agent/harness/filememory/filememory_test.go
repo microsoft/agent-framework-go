@@ -93,6 +93,483 @@ func writeMemory(t *testing.T, tools map[string]tool.FuncTool, name, content, de
 	return callMemoryTool(t, tools, WriteToolName, string(args))
 }
 
+func assertMemoryMissing(t *testing.T, store filestore.Store, name string) {
+	t.Helper()
+	if _, err := store.Read(t.Context(), name); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("%q error = %v, want not-exist", name, err)
+	}
+}
+
+func TestFileMemory_Constructor_WithDefaults_Succeeds(t *testing.T) {
+	p, err := New(t.TempDir(), Config{})
+	if err != nil || p == nil {
+		t.Fatalf("constructor = %v, %v", p, err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+}
+
+func TestFileMemory_Constructor_WithStateInitializer_Succeeds(t *testing.T) {
+	p, err := New(t.TempDir(), Config{StateInitializer: func(*agent.Session) State { return State{WorkingFolder: "custom"} }})
+	if err != nil || p == nil {
+		t.Fatalf("constructor = %v, %v", p, err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+}
+
+func TestFileMemory_ProvideAIContextAsync_ReturnsTools(t *testing.T) {
+	_, _, _, tools := newMemoryFixture(t, Config{})
+	if len(tools) != 7 {
+		t.Fatalf("tool count=%d, want 7", len(tools))
+	}
+}
+
+func TestFileMemory_ProvideAIContextAsync_ReturnsInstructions(t *testing.T) {
+	p, _, session, _ := newMemoryFixture(t, Config{})
+	_, opts, err := p.Invoking(t.Context(), agent.InvokingContext{Options: []agent.Option{agent.WithSession(session)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instructions := strings.Join(slices.Collect(agent.AllOptions(opts, agent.WithInstructions)), "\n")
+	for _, want := range []string{"file-based memory", "compacted"} {
+		if !strings.Contains(instructions, want) {
+			t.Errorf("instructions missing %q: %q", want, instructions)
+		}
+	}
+}
+
+func TestFileMemory_SaveFile_CreatesFile(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	writeMemory(t, tools, "notes.md", "Test content", "")
+	if got := readStore(t, store, "notes.md"); got != "Test content" {
+		t.Fatalf("content=%q", got)
+	}
+}
+
+func TestFileMemory_SaveFile_WithCustomState_CreatesInSubfolder(t *testing.T) {
+	p, store, session, tools := newMemoryFixture(t, Config{StateInitializer: func(*agent.Session) State { return State{WorkingFolder: "session123"} }})
+	writeMemory(t, tools, "notes.md", "Session content", "")
+	var state State
+	if found, err := session.Get(p.StateKeys()[0], &state); err != nil || !found || state.WorkingFolder != "session123" {
+		t.Fatalf("state=%+v, found=%v, err=%v", state, found, err)
+	}
+	if got := readStore(t, store, "session123/notes.md"); got != "Session content" {
+		t.Fatalf("content=%q", got)
+	}
+}
+
+func TestFileMemory_ReadFile_ExistingFile_ReturnsContent(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	if err := store.Write(t.Context(), "notes.md", "Stored content"); err != nil {
+		t.Fatal(err)
+	}
+	if got := callMemoryTool(t, tools, ReadFileToolName, `{"fileName":"notes.md"}`); got != "Stored content" {
+		t.Fatalf("read=%v", got)
+	}
+}
+
+func TestFileMemory_ReadFile_NonExistent_ReturnsNotFoundMessage(t *testing.T) {
+	_, _, _, tools := newMemoryFixture(t, Config{})
+	got := callMemoryTool(t, tools, ReadFileToolName, `{"fileName":"nonexistent.md"}`)
+	if text, ok := got.(string); !ok || !strings.Contains(text, "not found") {
+		t.Fatalf("read=%v", got)
+	}
+}
+
+func TestFileMemory_ReadFile_InternalFile_Throws(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	if err := store.Write(t.Context(), "memories.md", "internal"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tools[ReadFileToolName].Call(t.Context(), `{"fileName":"memories.md"}`); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("read internal error=%v", err)
+	}
+}
+
+func TestFileMemory_DeleteFile_ExistingFile_DeletesAndReturnsConfirmation(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	if err := store.Write(t.Context(), "notes.md", "Content"); err != nil {
+		t.Fatal(err)
+	}
+	if got := callMemoryTool(t, tools, DeleteFileToolName, `{"fileName":"notes.md"}`); !strings.Contains(fmt.Sprint(got), "deleted") {
+		t.Fatalf("delete result=%v", got)
+	}
+	assertMemoryMissing(t, store, "notes.md")
+}
+
+func TestFileMemory_DeleteFile_InternalFile_Throws(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	if err := store.Write(t.Context(), "memories.md", "internal"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tools[DeleteFileToolName].Call(t.Context(), `{"fileName":"memories.md"}`); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("delete internal error=%v", err)
+	}
+	_ = readStore(t, store, "memories.md")
+}
+
+func TestFileMemory_ListFiles_HidesDescriptionFiles(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	for name, content := range map[string]string{"notes.md": "Content", "notes_description.md": "Desc"} {
+		if err := store.Write(t.Context(), name, content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := callMemoryTool(t, tools, LsToolName, "{}").([]ListEntry)
+	if len(got) != 1 || got[0].Name != "notes.md" {
+		t.Fatalf("listing=%+v", got)
+	}
+}
+
+func TestFileMemory_SearchFiles_FindsMatchingContent(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	if err := store.Write(t.Context(), "notes.md", "Important research findings about AI"); err != nil {
+		t.Fatal(err)
+	}
+	got := callMemoryTool(t, tools, GrepToolName, `{"regexPattern":"research findings","globPattern":""}`).([]searchResult)
+	if len(got) != 1 || got[0].FileName != "notes.md" || len(got[0].MatchingLines) == 0 {
+		t.Fatalf("search=%+v", got)
+	}
+}
+
+func TestFileMemory_SearchFiles_WithFilePattern_FiltersResults(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	for _, name := range []string{"notes.md", "data.txt"} {
+		if err := store.Write(t.Context(), name, "Important data"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := callMemoryTool(t, tools, GrepToolName, `{"regexPattern":"Important","globPattern":"*.md"}`).([]searchResult)
+	if len(got) != 1 || got[0].FileName != "notes.md" {
+		t.Fatalf("search=%+v", got)
+	}
+}
+
+func TestFileMemory_CustomStateInitializer_SetsWorkingFolder(t *testing.T) {
+	p, _, session, _ := newMemoryFixture(t, Config{StateInitializer: func(*agent.Session) State { return State{WorkingFolder: "user42"} }})
+	var state State
+	if found, err := session.Get(p.StateKeys()[0], &state); err != nil || !found || state.WorkingFolder != "user42" {
+		t.Fatalf("state=%+v, found=%v, err=%v", state, found, err)
+	}
+}
+
+func TestFileMemory_DefaultStateInitializer_UsesEmptyWorkingFolder(t *testing.T) {
+	p, _, session, _ := newMemoryFixture(t, Config{})
+	var state State
+	if found, err := session.Get(p.StateKeys()[0], &state); err != nil || !found || state.WorkingFolder != "" {
+		t.Fatalf("state=%+v, found=%v, err=%v", state, found, err)
+	}
+}
+
+func TestFileMemory_State_PersistsAcrossInvocations(t *testing.T) {
+	p, _, session, _ := newMemoryFixture(t, Config{StateInitializer: func(*agent.Session) State { return State{WorkingFolder: "persistent"} }})
+	var first, second State
+	if found, err := session.Get(p.StateKeys()[0], &first); err != nil || !found {
+		t.Fatalf("first state found=%v, err=%v", found, err)
+	}
+	_ = providerTools(t, p, session)
+	if found, err := session.Get(p.StateKeys()[0], &second); err != nil || !found || first.WorkingFolder != second.WorkingFolder {
+		t.Fatalf("states=%+v/%+v, found=%v, err=%v", first, second, found, err)
+	}
+}
+
+func TestFileMemory_SaveFile_PathTraversal_Throws(t *testing.T) {
+	_, _, _, tools := newMemoryFixture(t, Config{})
+	if _, err := tools[WriteToolName].Call(t.Context(), `{"fileName":"../escape.md","content":"Content","description":""}`); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("traversal error=%v", err)
+	}
+}
+
+func TestFileMemory_SaveFile_AbsolutePath_Throws(t *testing.T) {
+	_, _, _, tools := newMemoryFixture(t, Config{})
+	if _, err := tools[WriteToolName].Call(t.Context(), `{"fileName":"/etc/passwd","content":"Content","description":""}`); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("absolute path error=%v", err)
+	}
+}
+
+func TestFileMemory_SaveFile_DriveRootedPath_Throws(t *testing.T) {
+	_, _, _, tools := newMemoryFixture(t, Config{})
+	if _, err := tools[WriteToolName].Call(t.Context(), `{"fileName":"C:\\temp\\file.md","content":"Content"}`); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("drive-rooted path error=%v", err)
+	}
+}
+
+func TestFileMemory_SaveFile_DoubleDotsInFileName_Allowed(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	callMemoryTool(t, tools, WriteToolName, `{"fileName":"notes..md","content":"Content"}`)
+	if got := readStore(t, store, "notes..md"); got != "Content" {
+		t.Fatalf("content=%q", got)
+	}
+}
+
+func TestFileMemory_SaveFile_CreatesMemoryIndex(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	callMemoryTool(t, tools, WriteToolName, `{"fileName":"notes.md","content":"Test content"}`)
+	if got := readStore(t, store, "memories.md"); !strings.Contains(got, "**notes.md**") {
+		t.Fatalf("index=%q", got)
+	}
+}
+
+func TestFileMemory_SaveFile_WithDescription_IndexIncludesDescription(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	writeMemory(t, tools, "research.md", "Research data", "Key findings")
+	if got := readStore(t, store, "memories.md"); !strings.Contains(got, "**research.md**: Key findings") {
+		t.Fatalf("index=%q", got)
+	}
+}
+
+func TestFileMemory_DeleteFile_UpdatesMemoryIndex(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	writeMemory(t, tools, "notes.md", "Content", "")
+	writeMemory(t, tools, "other.md", "Other", "")
+	callMemoryTool(t, tools, DeleteFileToolName, `{"fileName":"notes.md"}`)
+	if got := readStore(t, store, "memories.md"); strings.Contains(got, "notes.md") || !strings.Contains(got, "**other.md**") {
+		t.Fatalf("index after delete=%q", got)
+	}
+}
+
+func TestFileMemory_MemoryIndex_CappedAt50Entries(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	for i := range 55 {
+		writeMemory(t, tools, fmt.Sprintf("file%03d.md", i), fmt.Sprintf("Content %d", i), "")
+	}
+	entries := 0
+	for line := range strings.SplitSeq(readStore(t, store, "memories.md"), "\n") {
+		if strings.HasPrefix(line, "- **") {
+			entries++
+		}
+	}
+	if entries != 50 {
+		t.Fatalf("index entries=%d, want 50", entries)
+	}
+}
+
+func TestFileMemory_ListFiles_HidesMemoryIndex(t *testing.T) {
+	_, _, _, tools := newMemoryFixture(t, Config{})
+	writeMemory(t, tools, "notes.md", "Content", "")
+	got := callMemoryTool(t, tools, LsToolName, "{}").([]ListEntry)
+	if len(got) != 1 || got[0].Name != "notes.md" {
+		t.Fatalf("listing=%+v", got)
+	}
+}
+
+func TestFileMemory_ProvideAIContextAsync_InjectsMemoryIndexMessage(t *testing.T) {
+	p, _, session, tools := newMemoryFixture(t, Config{})
+	writeMemory(t, tools, "research.md", "Data", "Research summary")
+	messages, _, err := p.Invoking(t.Context(), agent.InvokingContext{Options: []agent.Option{agent.WithSession(session)}})
+	if err != nil || len(messages) != 1 || messages[0].Role != message.RoleUser || !strings.Contains(strings.ToLower(messages[0].String()), "memory index") || !strings.Contains(messages[0].String(), "research.md") {
+		t.Fatalf("index injection=%v, %v", messages, err)
+	}
+}
+
+func TestFileMemory_ProvideAIContextAsync_NoFiles_NoMessageInjected(t *testing.T) {
+	p := newProvider(&memoryStore{files: make(map[string]string)}, Config{})
+	messages, _, err := p.Invoking(t.Context(), agent.InvokingContext{Options: []agent.Option{agent.WithSession(&agent.Session{})}})
+	if err != nil || len(messages) != 0 {
+		t.Fatalf("empty memory messages=%v, %v", messages, err)
+	}
+}
+
+func TestFileMemory_Replace_SingleOccurrence_ReplacesAndReturnsCount(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	writeMemory(t, tools, "notes.md", "Hello world", "")
+	got := callMemoryTool(t, tools, ReplaceToolName, `{"fileName":"notes.md","oldString":"world","newString":"there"}`)
+	if !strings.Contains(fmt.Sprint(got), "Replaced 1 occurrence(s)") || readStore(t, store, "notes.md") != "Hello there" {
+		t.Fatalf("replacement=%v, content=%q", got, readStore(t, store, "notes.md"))
+	}
+}
+
+func TestFileMemory_Replace_InternalFile_Throws(t *testing.T) {
+	_, _, _, tools := newMemoryFixture(t, Config{})
+	if _, err := tools[ReplaceToolName].Call(t.Context(), `{"fileName":"memories.md","oldString":"x","newString":"y"}`); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("internal replace error=%v", err)
+	}
+}
+
+func TestFileMemory_Replace_ReplaceAll_ReplacesEveryOccurrence(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	writeMemory(t, tools, "notes.md", "a a a", "")
+	got := callMemoryTool(t, tools, ReplaceToolName, `{"fileName":"notes.md","oldString":"a","newString":"b","replaceAll":true}`)
+	if !strings.Contains(fmt.Sprint(got), "Replaced 3 occurrence(s)") || readStore(t, store, "notes.md") != "b b b" {
+		t.Fatalf("replacement=%v, content=%q", got, readStore(t, store, "notes.md"))
+	}
+}
+
+func TestFileMemory_Replace_MultipleOccurrences_WithoutReplaceAll_Throws(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	writeMemory(t, tools, "notes.md", "a a a", "")
+	if _, err := tools[ReplaceToolName].Call(t.Context(), `{"fileName":"notes.md","oldString":"a","newString":"b"}`); err == nil {
+		t.Fatal("expected an ambiguous replacement error")
+	}
+	if got := readStore(t, store, "notes.md"); got != "a a a" {
+		t.Fatalf("failed replace changed content=%q", got)
+	}
+}
+
+func TestFileMemory_Replace_NonExistentFile_ReturnsNotFound(t *testing.T) {
+	_, _, _, tools := newMemoryFixture(t, Config{})
+	got := callMemoryTool(t, tools, ReplaceToolName, `{"fileName":"missing.md","oldString":"x","newString":"y"}`)
+	if !strings.Contains(fmt.Sprint(got), "not found") {
+		t.Fatalf("replacement result=%v", got)
+	}
+}
+
+func TestFileMemory_ReplaceLines_ReplacesSpecifiedLines(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	writeMemory(t, tools, "notes.md", "line1\nline2\nline3", "")
+	got := callMemoryTool(t, tools, ReplaceLinesToolName, `{"fileName":"notes.md","edits":[{"line_number":2,"new_line":"CHANGED\n"}]}`)
+	if !strings.Contains(fmt.Sprint(got), "Replaced 1 line(s)") || readStore(t, store, "notes.md") != "line1\nCHANGED\nline3" {
+		t.Fatalf("line replacement=%v, content=%q", got, readStore(t, store, "notes.md"))
+	}
+}
+
+func TestFileMemory_ReplaceLines_InternalFile_Throws(t *testing.T) {
+	_, _, _, tools := newMemoryFixture(t, Config{})
+	if _, err := tools[ReplaceLinesToolName].Call(t.Context(), `{"fileName":"memories.md","edits":[{"line_number":1,"new_line":"X"}]}`); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("internal line replacement error=%v", err)
+	}
+}
+
+func TestFileMemory_ReplaceLines_OutOfRange_Throws(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	writeMemory(t, tools, "notes.md", "line1\nline2", "")
+	if _, err := tools[ReplaceLinesToolName].Call(t.Context(), `{"fileName":"notes.md","edits":[{"line_number":5,"new_line":"X"}]}`); err == nil {
+		t.Fatal("expected an out-of-range error")
+	}
+	if got := readStore(t, store, "notes.md"); got != "line1\nline2" {
+		t.Fatalf("failed replace changed content=%q", got)
+	}
+}
+
+func TestFileMemory_Write_ReservedInternalFileName_Throws(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	if _, err := tools[WriteToolName].Call(t.Context(), `{"fileName":"memories.md","content":"Content"}`); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("reserved write error=%v", err)
+	}
+	assertMemoryMissing(t, store, "memories.md")
+}
+
+func TestFileMemory_Write_NestedPath_Throws(t *testing.T) {
+	_, _, _, tools := newMemoryFixture(t, Config{})
+	if _, err := tools[WriteToolName].Call(t.Context(), `{"fileName":"sub/notes.md","content":"Content"}`); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("nested write error=%v", err)
+	}
+}
+
+func TestFileMemory_Write_WithDescription_ReturnsWrittenWithDescription(t *testing.T) {
+	_, _, _, tools := newMemoryFixture(t, Config{})
+	if got := writeMemory(t, tools, "notes.md", "Content", "A summary"); !strings.Contains(fmt.Sprint(got), "written with description") {
+		t.Fatalf("write confirmation=%v", got)
+	}
+}
+
+func TestFileMemory_Options_CustomInstructions_OverridesDefault(t *testing.T) {
+	p := newProvider(&memoryStore{files: make(map[string]string)}, Config{Instructions: new("Custom file memory instructions.")})
+	_, opts, err := p.Invoking(t.Context(), agent.InvokingContext{Options: []agent.Option{agent.WithSession(&agent.Session{})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := slices.Collect(agent.AllOptions(opts, agent.WithInstructions)); !slices.Equal(got, []string{"Custom file memory instructions."}) {
+		t.Fatalf("instructions=%q", got)
+	}
+}
+
+func TestFileMemory_Options_Null_UsesDefaultInstructions(t *testing.T) {
+	p := newProvider(&memoryStore{files: make(map[string]string)}, Config{})
+	_, opts, err := p.Invoking(t.Context(), agent.InvokingContext{Options: []agent.Option{agent.WithSession(&agent.Session{})}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(slices.Collect(agent.AllOptions(opts, agent.WithInstructions)), "\n"); !strings.Contains(got, "file-based memory") {
+		t.Fatalf("instructions=%q", got)
+	}
+}
+
+func TestFileMemory_ConcurrentSaves_ProduceConsistentIndex(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	start, done := make(chan struct{}), make(chan error, 20)
+	for i := range 20 {
+		go func() {
+			<-start
+			args, err := json.Marshal(map[string]string{"fileName": fmt.Sprintf("file%d.md", i), "content": fmt.Sprintf("Content %d", i), "description": fmt.Sprintf("Description %d", i)})
+			if err == nil {
+				_, err = tools[WriteToolName].Call(t.Context(), string(args))
+			}
+			done <- err
+		}()
+	}
+	close(start)
+	for range 20 {
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}
+	index := readStore(t, store, "memories.md")
+	for i := range 20 {
+		if !strings.Contains(index, fmt.Sprintf("**file%d.md**", i)) {
+			t.Errorf("index missing file%d.md: %q", i, index)
+		}
+	}
+}
+
+func TestFileMemory_ConcurrentSaveAndDelete_ProduceConsistentIndex(t *testing.T) {
+	_, store, _, tools := newMemoryFixture(t, Config{})
+	for i := range 5 {
+		writeMemory(t, tools, fmt.Sprintf("delete%d.md", i), fmt.Sprintf("To be deleted %d", i), "")
+	}
+	start, done := make(chan struct{}), make(chan error, 10)
+	for i := range 5 {
+		for _, action := range []struct{ name, args string }{
+			{WriteToolName, fmt.Sprintf(`{"fileName":"keep%d.md","content":"Kept %d"}`, i, i)},
+			{DeleteFileToolName, fmt.Sprintf(`{"fileName":"delete%d.md"}`, i)},
+		} {
+			go func() {
+				<-start
+				_, err := tools[action.name].Call(t.Context(), action.args)
+				done <- err
+			}()
+		}
+	}
+	close(start)
+	for range 10 {
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}
+	index := readStore(t, store, "memories.md")
+	for i := range 5 {
+		if !strings.Contains(index, fmt.Sprintf("**keep%d.md**", i)) || strings.Contains(index, fmt.Sprintf("**delete%d.md**", i)) {
+			t.Errorf("inconsistent index for item%d: %q", i, index)
+		}
+	}
+}
+
+func TestFileMemory_Dispose_ReleasesResources(t *testing.T) {
+	p, err := New(t.TempDir(), Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := p.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestFileMemory_SaveFile_AfterDispose_Throws(t *testing.T) {
+	p, err := New(t.TempDir(), Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = p.Close() })
+	tools := providerTools(t, p, &agent.Session{})
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tools[WriteToolName].Call(t.Context(), `{"fileName":"notes.md","content":"Should fail"}`); !errors.Is(err, fs.ErrClosed) {
+		t.Fatalf("write after close error=%v", err)
+	}
+}
+
 func TestNew_InvalidRoot(t *testing.T) {
 	for _, root := range []string{"", " \t\n"} {
 		p, err := New(root, Config{})

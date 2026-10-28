@@ -349,7 +349,7 @@ func TestRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
 	}
 	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
 
-	remaining := p.RemainingTodos(mustSession(t, opts))
+	remaining := todoToolItems(t, outOpts, "todos_get_remaining")
 	if len(remaining) != 1 {
 		t.Fatalf("expected 1 remaining, got %d", len(remaining))
 	}
@@ -372,7 +372,7 @@ func TestAllTodos_ReturnsAllItems(t *testing.T) {
 	items := p.AllTodos(mustSession(t, opts))
 	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
 
-	all := p.AllTodos(mustSession(t, opts))
+	all := todoToolItems(t, outOpts, "todos_get_all")
 	if len(all) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(all))
 	}
@@ -388,21 +388,19 @@ func TestState_PersistsAcrossInvocations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Persist me"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Persisted"}]}`)
 
 	// Second invocation: items should still be there.
 	_, outOpts2, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = outOpts2
-
-	items := p.AllTodos(mustSession(t, opts))
+	items := todoToolItems(t, outOpts2, "todos_get_all")
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item to persist, got %d", len(items))
 	}
-	if items[0].Title != "Persist me" {
-		t.Errorf("expected 'Persist me', got %q", items[0].Title)
+	if items[0].Title != "Persisted" {
+		t.Errorf("expected 'Persisted', got %q", items[0].Title)
 	}
 }
 
@@ -629,25 +627,161 @@ func TestProvide_SuppressTodoListMessage(t *testing.T) {
 func TestProvide_CustomTodoListMessageBuilder(t *testing.T) {
 	p := todo.New(&todo.Options{
 		TodoListMessageBuilder: func(items []todo.Item) string {
-			return "CUSTOM: empty"
+			return fmt.Sprintf("Custom: %d items", len(items))
 		},
 	})
 	opts := sessionOpts()
-
-	outMessages, _, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, t.Context(), nil, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Task A"}]}`)
+	outMessages, _, err := invokeProvider(p, t.Context(), nil, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outMessages) != 1 || outMessages[0].String() != "Custom: 1 items" {
+		t.Fatalf("custom summary = %v, want Custom: 1 items", outMessages)
+	}
+}
 
-	found := false
-	for _, msg := range outMessages {
-		if strings.Contains(msg.Contents.Text(), "CUSTOM:") {
-			found = true
-			break
+func todoTool(t *testing.T, opts []agent.Option, name string) tool.FuncTool {
+	t.Helper()
+	for _, candidate := range collectTools(opts) {
+		if candidate.Name() == name {
+			if ft, ok := candidate.(tool.FuncTool); ok {
+				return ft
+			}
 		}
 	}
-	if !found {
-		t.Error("expected custom builder output in messages")
+	t.Fatalf("invocable tool %q not found", name)
+	return nil
+}
+
+func todoToolItems(t *testing.T, opts []agent.Option, name string) []todo.Item {
+	t.Helper()
+	result, err := todoTool(t, opts, name).Call(t.Context(), "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, ok := result.([]todo.Item)
+	if !ok {
+		t.Fatalf("%s result = %T, want []todo.Item", name, result)
+	}
+	return items
+}
+
+func TestProvide_BuilderSnapshotMutationDoesNotAffectState(t *testing.T) {
+	var snapshot []todo.Item
+	p := todo.New(&todo.Options{TodoListMessageBuilder: func(items []todo.Item) string {
+		snapshot = items
+		return "snapshot test"
+	}})
+	opts := sessionOpts()
+	_, tools, err := invokeProvider(p, t.Context(), nil, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callTool(t, tools, "todos_add", `{"Arg0":[{"title":"Original"}]}`)
+	if _, _, err := invokeProvider(p, t.Context(), nil, opts...); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot) != 1 {
+		t.Fatalf("snapshot = %v, want one item", snapshot)
+	}
+	clear(snapshot)
+	snapshot = snapshot[:0]
+	if all := p.AllTodos(mustSession(t, opts)); len(all) != 1 || all[0].Title != "Original" {
+		t.Fatalf("state after snapshot mutation = %v", all)
+	}
+}
+
+func TestConcurrentAdds_ProduceUniqueSequentialIDs(t *testing.T) {
+	p := todo.New(nil)
+	_, opts, err := invokeProvider(p, t.Context(), nil, sessionOpts()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	add := todoTool(t, opts, "todos_add")
+	start := make(chan struct{})
+	done := make(chan error, 10)
+	for i := range 10 {
+		go func() {
+			<-start
+			_, err := add.Call(t.Context(), fmt.Sprintf(`{"Arg0":[{"title":"Item %d"}]}`, i))
+			done <- err
+		}()
+	}
+	close(start)
+	for range 10 {
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}
+	all := todoToolItems(t, opts, "todos_get_all")
+	if len(all) != 10 {
+		t.Fatalf("todo count = %d, want 10", len(all))
+	}
+	ids := make([]int, len(all))
+	for i, item := range all {
+		ids[i] = item.ID
+	}
+	slices.Sort(ids)
+	if !slices.Equal(ids, []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}) {
+		t.Fatalf("ids = %v", ids)
+	}
+}
+
+func TestConcurrentAddAndComplete_SerializesCorrectly(t *testing.T) {
+	p := todo.New(nil)
+	_, opts, err := invokeProvider(p, t.Context(), nil, sessionOpts()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callTool(t, opts, "todos_add", `{"Arg0":[{"title":"Existing 1"},{"title":"Existing 2"},{"title":"Existing 3"}]}`)
+	start := make(chan struct{})
+	done := make(chan error, 3)
+	for _, call := range []struct{ name, args string }{
+		{"todos_add", `{"Arg0":[{"title":"New A"},{"title":"New B"}]}`},
+		{"todos_add", `{"Arg0":[{"title":"New C"}]}`},
+		{"todos_complete", `{"Arg0":[{"id":1,"reason":"Done"},{"id":2,"reason":"Done"},{"id":3,"reason":"Done"}]}`},
+	} {
+		ft := todoTool(t, opts, call.name)
+		go func() {
+			<-start
+			_, err := ft.Call(t.Context(), call.args)
+			done <- err
+		}()
+	}
+	close(start)
+	for range 3 {
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}
+	all := todoToolItems(t, opts, "todos_get_all")
+	if len(all) != 6 {
+		t.Fatalf("todos = %v, want six", all)
+	}
+	ids := make([]int, len(all))
+	completed := make(map[int]bool)
+	for i, item := range all {
+		ids[i] = item.ID
+		if item.IsComplete {
+			completed[item.ID] = true
+		}
+	}
+	slices.Sort(ids)
+	if !slices.Equal(ids, []int{1, 2, 3, 4, 5, 6}) {
+		t.Fatalf("ids = %v", ids)
+	}
+	for _, id := range []int{1, 2, 3} {
+		if !completed[id] {
+			t.Errorf("todo %d was not completed", id)
+		}
+	}
+	if len(completed) != 3 {
+		t.Errorf("completed IDs = %v, want only 1, 2, 3", completed)
 	}
 }
 

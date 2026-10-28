@@ -760,7 +760,7 @@ func buildAvailableResourcesBlock(resources []skills.Resource) string {
 	var sb strings.Builder
 	sb.WriteString("\n<available_resources>\n")
 	for _, resource := range resources {
-		if resource.Description != "" {
+		if strings.TrimSpace(resource.Description) != "" {
 			fmt.Fprintf(&sb, "  <resource name=\"%s\" description=\"%s\"/>\n",
 				xmlEscapeAttr(resource.Name), xmlEscapeAttr(resource.Description))
 		} else {
@@ -779,7 +779,7 @@ func buildAvailableScriptsBlock(scripts []skills.Script) string {
 	sb.WriteString("\n<available_scripts>\n")
 	for _, script := range scripts {
 		namePart := fmt.Sprintf("  <script name=\"%s\"", xmlEscapeAttr(script.Name))
-		if script.Description != "" {
+		if strings.TrimSpace(script.Description) != "" {
 			namePart += fmt.Sprintf(" description=\"%s\"", xmlEscapeAttr(script.Description))
 		}
 		if script.ParametersSchema == "" {

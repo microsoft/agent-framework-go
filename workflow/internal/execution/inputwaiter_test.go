@@ -102,6 +102,27 @@ func TestInputWaiter_WaitForInput_RespectsCancellation(t *testing.T) {
 	})
 }
 
+func TestInputWaiter_UnsignaledWaitRemainsPendingUntilCanceled(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		waiter := newInputWaiter()
+		defer waiter.close()
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan error, 1)
+		go func() { done <- waiter.waitForInput(ctx) }()
+		synctest.Wait()
+		select {
+		case err := <-done:
+			t.Fatalf("unsignaled wait completed: %v", err)
+		default:
+		}
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled wait = %v, want context.Canceled", err)
+		}
+	})
+}
+
 func TestInputWaiter_WaitForInput_DoesNotCompleteWhenNotSignaled(t *testing.T) {
 	w := newInputWaiter()
 	defer w.close()

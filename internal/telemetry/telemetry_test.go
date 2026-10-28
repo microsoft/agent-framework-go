@@ -408,6 +408,13 @@ func TestHelperProcess(t *testing.T) {
 		}
 		os.Exit(0)
 	}
+	if name, ok := strings.CutPrefix(helperName, "policy:"); ok {
+		runUserAgentPolicyPort(t, name)
+		if t.Failed() {
+			t.FailNow()
+		}
+		os.Exit(0)
+	}
 	switch helperName {
 	case "user-agent":
 		headers := telemetry.PrependAgentFrameworkToUserAgent(nil)

@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
@@ -22,6 +23,236 @@ import (
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
+
+type abstractionPortSpecies string
+
+type abstractionPortAnimal struct {
+	ID       int                    `json:"id"`
+	FullName string                 `json:"fullName"`
+	Species  abstractionPortSpecies `json:"species"`
+}
+
+func TestAgentResponseGeneric_Result_DeserializesObjectWithoutUnwrapping(t *testing.T) {
+	expected := abstractionPortAnimal{ID: 1, FullName: "Tigger", Species: "Tiger"}
+	data, err := json.Marshal(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := &agent.Response{Messages: []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: string(data)}}}}}
+	format, err := jsonformat.FromResponseFormat(jsonformat.MustFor[abstractionPortAnimal]())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result abstractionPortAnimal
+	if err := format.UnmarshalStructuredOutput([]byte(response.String()), &result); err != nil {
+		t.Fatal(err)
+	}
+
+	if result.ID != expected.ID || result.FullName != expected.FullName || result.Species != expected.Species {
+		t.Fatalf("result = %+v, want %+v", result, expected)
+	}
+}
+
+func TestAgentResponseGeneric_Result_UnwrapsPrimitiveFromDataProperty(t *testing.T) {
+	response := &agent.Response{Messages: []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: `{"data":42}`}}}}}
+	wrapped, err := jsonformat.WrapNonObjectSchema(jsonformat.MustFor[int]())
+	if err != nil {
+		t.Fatal(err)
+	}
+	format, err := jsonformat.FromResponseFormat(wrapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result int
+	if err := format.UnmarshalStructuredOutput([]byte(response.String()), &result); err != nil {
+		t.Fatal(err)
+	}
+
+	if result != 42 {
+		t.Fatalf("result = %d, want 42", result)
+	}
+}
+
+func TestAgentResponseGeneric_Result_UnwrapsArrayFromDataProperty(t *testing.T) {
+	response := &agent.Response{Messages: []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: `{"data":["apple","banana","cherry"]}`}}}}}
+	wrapped, err := jsonformat.WrapNonObjectSchema(jsonformat.MustFor[[]string]())
+	if err != nil {
+		t.Fatal(err)
+	}
+	format, err := jsonformat.FromResponseFormat(wrapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result []string
+	if err := format.UnmarshalStructuredOutput([]byte(response.String()), &result); err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(result, []string{"apple", "banana", "cherry"}) {
+		t.Fatalf("result = %v, want apple, banana, cherry", result)
+	}
+}
+
+func TestAgentResponseGeneric_Result_UnwrapsEnumFromDataProperty(t *testing.T) {
+	response := &agent.Response{Messages: []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: `{"data":"Walrus"}`}}}}}
+	wrapped, err := jsonformat.WrapNonObjectSchema(jsonformat.MustFor[abstractionPortSpecies]())
+	if err != nil {
+		t.Fatal(err)
+	}
+	format, err := jsonformat.FromResponseFormat(wrapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result abstractionPortSpecies
+	if err := format.UnmarshalStructuredOutput([]byte(response.String()), &result); err != nil {
+		t.Fatal(err)
+	}
+
+	if result != abstractionPortSpecies("Walrus") {
+		t.Fatalf("result = %q, want Walrus", result)
+	}
+}
+
+func TestAgentResponseGeneric_Result_FallsBackWhenDataPropertyMissing(t *testing.T) {
+	response := &agent.Response{Messages: []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "42"}}}}}
+	wrapped, err := jsonformat.WrapNonObjectSchema(jsonformat.MustFor[int]())
+	if err != nil {
+		t.Fatal(err)
+	}
+	format, err := jsonformat.FromResponseFormat(wrapped)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result int
+	if err := format.UnmarshalStructuredOutput([]byte(response.String()), &result); err != nil {
+		t.Fatal(err)
+	}
+
+	if result != 42 {
+		t.Fatalf("result = %d, want 42", result)
+	}
+}
+
+func TestAgentResponseGeneric_Result_ThrowsWhenTextIsEmpty(t *testing.T) {
+	response := &agent.Response{Messages: []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: ""}}}}}
+	format, err := jsonformat.FromResponseFormat(jsonformat.MustFor[int]())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result int
+	if err := format.UnmarshalStructuredOutput([]byte(response.String()), &result); err == nil {
+		t.Fatal("empty response unexpectedly decoded")
+	}
+}
+
+func TestAgentResponseGeneric_Result_ThrowsWhenDeserializedValueIsNull(t *testing.T) {
+	response := &agent.Response{Messages: []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "null"}}}}}
+	format, err := jsonformat.FromResponseFormat(jsonformat.MustFor[abstractionPortAnimal]())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result *abstractionPortAnimal
+	if err := format.UnmarshalStructuredOutput([]byte(response.String()), &result); err == nil {
+		t.Fatal("null response unexpectedly decoded")
+	}
+}
+
+func TestAgent_RunGeneric_WithObjectType_DoesNotWrapSchema(t *testing.T) {
+	expected := abstractionPortAnimal{ID: 1, FullName: "Test", Species: "Tiger"}
+	data, err := json.Marshal(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, schema := newAbstractionStructuredOutputAgent(t, string(data))
+
+	var result abstractionPortAnimal
+	if _, err := a.RunText(t.Context(), "Get me an animal", agent.WithStructuredOutput(&result)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+
+	if *schema == nil || (*schema).Type != "object" || (*schema).Properties["data"] != nil {
+		t.Fatalf("schema = %+v, want an unwrapped object", *schema)
+	}
+}
+
+func TestAgent_RunGeneric_WithPrimitiveType_WrapsSchema(t *testing.T) {
+	a, schema := newAbstractionStructuredOutputAgent(t, `{"data":42}`)
+
+	var result int
+	if _, err := a.RunText(t.Context(), "Give me a number", agent.WithStructuredOutput(&result)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+
+	if *schema == nil || (*schema).Type != "object" || (*schema).Properties["data"] == nil {
+		t.Fatalf("schema = %+v, want a wrapped primitive", *schema)
+	}
+}
+
+func TestAgent_RunGeneric_WithArrayType_WrapsSchema(t *testing.T) {
+	a, schema := newAbstractionStructuredOutputAgent(t, `{"data":["a","b","c"]}`)
+
+	var result []string
+	if _, err := a.RunText(t.Context(), "Give me an array of strings", agent.WithStructuredOutput(&result)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+
+	if *schema == nil || (*schema).Type != "object" || (*schema).Properties["data"] == nil {
+		t.Fatalf("schema = %+v, want a wrapped array", *schema)
+	}
+}
+
+func TestAgent_RunGeneric_WithEnumType_WrapsSchema(t *testing.T) {
+	a, schema := newAbstractionStructuredOutputAgent(t, `{"data":"Tiger"}`)
+
+	var result abstractionPortSpecies
+	if _, err := a.RunText(t.Context(), "Give me a species", agent.WithStructuredOutput(&result)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+
+	if *schema == nil || (*schema).Type != "object" || (*schema).Properties["data"] == nil {
+		t.Fatalf("schema = %+v, want a wrapped enum", *schema)
+	}
+}
+
+func newAbstractionStructuredOutputAgent(t *testing.T, responseJSON string) (*agent.Agent, **jsonschema.Schema) {
+	t.Helper()
+	var capturedSchema *jsonschema.Schema
+	a := newStructuredOutputTestAgent(
+		func(value any) (agent.ResponseFormat, error) {
+			format, err := jsonformat.ForType(reflect.TypeOf(value))
+			if err != nil {
+				return agent.ResponseFormat{}, err
+			}
+			return jsonformat.WrapNonObjectSchema(format)
+		},
+		func(responseFormat agent.ResponseFormat, data []byte, value any) error {
+			format, err := jsonformat.FromResponseFormat(responseFormat)
+			if err != nil {
+				return err
+			}
+			return format.UnmarshalStructuredOutput(data, value)
+		},
+		func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			format, ok := agent.GetOption(options, agent.WithResponseFormat)
+			if !ok {
+				t.Fatal("provider received no response format")
+			}
+			capturedSchema, ok = format.Schema.(*jsonschema.Schema)
+			if !ok {
+				t.Fatalf("schema = %T, want *jsonschema.Schema", format.Schema)
+			}
+			return singleStructuredOutputTestUpdate(responseJSON)
+		},
+	)
+	return a, &capturedSchema
+}
 
 func TestAgent_StructuredOutput_NoStructuredOutputOption(t *testing.T) {
 	baseCalled := false

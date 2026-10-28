@@ -3,7 +3,6 @@
 package aguiprovider
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 
@@ -143,10 +142,6 @@ func (t declarationTool) Name() string        { return t.name }
 func (t declarationTool) Description() string { return t.description }
 func (t declarationTool) Schema() any         { return t.schema }
 func (t declarationTool) ReturnSchema() any   { return nil }
-
-func (t declarationTool) Call(ctx context.Context, args string) (any, error) {
-	return nil, fmt.Errorf("client tool %q cannot be invoked on server", t.name)
-}
 
 func contentAsString(content any) string {
 	switch value := content.(type) {

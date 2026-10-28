@@ -395,6 +395,7 @@ func (s *persistentSession) buildScript(command string, sentinel string) string 
 		encoded := base64.StdEncoding.EncodeToString([]byte(effective))
 		return "& {" +
 			" $__af_rc = 0;" +
+			" $global:LASTEXITCODE = $null;" +
 			" try {" +
 			"   $__af_cmd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" + encoded + "'));" +
 			"   Invoke-Expression $__af_cmd 2>&1 | ForEach-Object {" +
@@ -404,9 +405,10 @@ func (s *persistentSession) buildScript(command string, sentinel string) string 
 			"       [Console]::WriteLine(($_ | Out-String).TrimEnd());" +
 			"     }" +
 			"   };" +
+			"   $__af_ok = $?;" +
 			"   [Console]::Out.Flush();" +
 			"   if ($LASTEXITCODE -ne $null) { $__af_rc = $LASTEXITCODE }" +
-			"   elseif (-not $?) { $__af_rc = 1 }" +
+			"   elseif (-not $__af_ok) { $__af_rc = 1 }" +
 			" } catch {" +
 			"   [Console]::Error.WriteLine($_.ToString());" +
 			"   $__af_rc = 1" +

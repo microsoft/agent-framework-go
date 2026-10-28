@@ -135,6 +135,31 @@ func TestExecutor_Handles_ListOfMessages(t *testing.T) {
 	}
 }
 
+func TestExecutor_Handles_ArrayOfMessages(t *testing.T) {
+	te := &TestExecutor{}
+	executor, ctx := createExecutor(&messageworkflow.Options{
+		StateKey: "test-state", TakeTurnHandler: te.takeTurn,
+	})
+	messages := []*message.Message{
+		{Role: message.RoleSystem, Contents: message.Contents{&message.TextContent{Text: "System message"}}},
+		{Role: message.RoleUser, Contents: message.Contents{&message.TextContent{Text: "User query"}}},
+		{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "Agent reply"}}},
+	}
+	if _, err := executor.Execute(ctx, messages); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.Execute(ctx, workflow.TurnToken{EmitEvents: new(false)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(te.receivedMessages) != 3 || te.turnCount != 1 {
+		t.Fatalf("received = %v, turns = %d, want three messages and one turn", te.receivedMessages, te.turnCount)
+	}
+	for i, want := range messages {
+		if te.receivedMessages[i].Role != want.Role || te.receivedMessages[i].Contents.Text() != want.Contents.Text() {
+			t.Errorf("message[%d] = %#v, want %#v", i, te.receivedMessages[i], want)
+		}
+	}
+}
 func TestExecutor_Handles_SingleMessage(t *testing.T) {
 	for _, test := range []struct {
 		name       string

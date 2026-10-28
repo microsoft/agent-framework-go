@@ -13,6 +13,21 @@ import (
 // A caller-supplied fan-out Assigner (WithEdgeAssigner) may yield an index that
 // is out of range for the edge's SinkIDs. Target selection must ignore such
 // indices rather than panic the workflow runtime with an out-of-range access.
+func TestPrepareDeliveryForFanInEdge_MaintainsBufferedState(t *testing.T) {
+	edge := workflow.Edge{Connection: workflow.EdgeConnection{SourceIDs: []string{"executor1", "executor2"}, SinkIDs: []string{"executor3"}}}
+	runner, builtEdges := newTestEdgeRunner(t, edge)
+	first, err := runner.PrepareDeliveryForEdge(t.Context(), builtEdges[0], mustEnvelope(t, "part1", "executor1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireNilMapping(t, first)
+	second, err := runner.PrepareDeliveryForEdge(t.Context(), builtEdges[0], mustEnvelope(t, "part2", "executor2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireMapping(t, second, []string{"executor3"}, []string{"part1", "part2"})
+}
+
 func TestPrepareDeliveryForFanOutEdge_AssignerOutOfRangeIndexIgnored(t *testing.T) {
 	edge := workflow.Edge{
 		Connection: workflow.EdgeConnection{SourceIDs: []string{"executor1"}, SinkIDs: []string{"executor2", "executor3"}},

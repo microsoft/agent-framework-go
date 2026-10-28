@@ -15,6 +15,95 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
+func TestResponseUpdate_ConstructorPropsDefaulted(t *testing.T) {
+	var update agent.ResponseUpdate
+
+	if update.AuthorName != "" || update.Role != "" || update.String() != "" ||
+		len(update.Contents) != 0 || update.RawRepresentation != nil || update.AdditionalProperties != nil ||
+		update.ResponseID != "" || update.MessageID != "" || !update.CreatedAt.IsZero() ||
+		update.ContinuationToken != "" || update.FinishReason != "" {
+		t.Fatalf("default update = %+v, want zero properties and empty text", update)
+	}
+}
+
+func TestResponse_TextGetReturnsEmptyStringWithNoMessages(t *testing.T) {
+	var response agent.Response
+	if got := response.String(); got != "" {
+		t.Fatalf("String() = %q, want empty", got)
+	}
+}
+
+func TestResponse_ParseAsStructuredOutputWithJSOSuccess(t *testing.T) {
+	expected := abstractionPortAnimal{ID: 1, FullName: "Tigger", Species: "Tiger"}
+	data, err := json.Marshal(expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := agent.Response{Messages: []*message.Message{{
+		Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: string(data)}},
+	}}}
+
+	var animal *abstractionPortAnimal
+	if err := json.Unmarshal([]byte(response.String()), &animal); err != nil {
+		t.Fatal(err)
+	}
+
+	if animal == nil || animal.ID != expected.ID || animal.FullName != expected.FullName || animal.Species != expected.Species {
+		t.Fatalf("animal = %+v, want %+v", animal, expected)
+	}
+}
+
+func TestResponse_JsonSerializationRoundtrips(t *testing.T) {
+	createdAt := time.Date(2022, 1, 1, 0, 0, 0, 0, time.UTC)
+	original := agent.Response{
+		Messages: []*message.Message{{
+			Role: message.RoleAssistant,
+			Contents: message.Contents{
+				&message.TextContent{Text: "the message"},
+				&message.UsageContent{Details: message.UsageDetails{}},
+			},
+		}},
+		AgentID: "agentId", ID: "id", CreatedAt: createdAt,
+		RawRepresentation: new(int), AdditionalProperties: map[string]any{"key": "value"},
+		ContinuationToken: "AQID",
+	}
+
+	data, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result *agent.Response
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+
+	if result == nil || len(result.Messages) != 1 {
+		t.Fatalf("response = %+v, want one message", result)
+	}
+	msg := result.Messages[0]
+	if msg.Role != message.RoleAssistant || msg.String() != "the message" {
+		t.Fatalf("message = %+v, want assistant text the message", msg)
+	}
+	if result.AgentID != "agentId" || result.ID != "id" || !result.CreatedAt.Equal(createdAt) {
+		t.Fatalf("response metadata = %+v", result)
+	}
+	if len(msg.Contents) != 2 {
+		t.Fatalf("contents = %v, want text and usage", msg.Contents)
+	}
+	if _, ok := msg.Contents[1].(*message.UsageContent); !ok {
+		t.Fatalf("usage = %T, want *message.UsageContent", msg.Contents[1])
+	}
+	if result.AdditionalProperties == nil || len(result.AdditionalProperties) != 1 {
+		t.Fatalf("additional properties = %v, want one entry", result.AdditionalProperties)
+	}
+	if value, ok := result.AdditionalProperties["key"]; !ok || value != "value" {
+		t.Fatalf("key = (%v, %v), want value", value, ok)
+	}
+	if result.ContinuationToken != "AQID" {
+		t.Fatalf("continuation token = %q, want AQID", result.ContinuationToken)
+	}
+}
+
 func TestResponseUpdate_TextGetUsesAllTextContent(t *testing.T) {
 	first := &message.TextContent{Text: "text-1"}
 	update := &agent.ResponseUpdate{

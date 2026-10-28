@@ -55,6 +55,48 @@ func TestFoundryFeatureUsageRejectedOrigins(t *testing.T) {
 	}
 }
 
+func TestAzureOpenAIUserAgentApprovedOrigins(t *testing.T) {
+	for _, value := range []string{
+		"https://openai.azure.com/",
+		"https://resource.openai.azure.com/",
+		"https://cognitiveservices.azure.com/",
+		"https://resource.cognitiveservices.azure.com/",
+		"https://services.ai.azure.com/",
+		"https://project.services.ai.azure.com/",
+		"https://RESOURCE.OPENAI.AZURE.COM./",
+	} {
+		t.Run(value, func(t *testing.T) {
+			destination, err := url.Parse(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !approvedFeatureOrigin(destination, openAIHostSuffixes[:]) {
+				t.Fatalf("Azure OpenAI origin %q was rejected", value)
+			}
+		})
+	}
+}
+
+func TestAzureOpenAIUserAgentRejectedOrigins(t *testing.T) {
+	for _, value := range []string{
+		"http://resource.openai.azure.com/",
+		"https://resource.openai.azure.com.example.test/",
+		"https://inference.ai.azure.com/",
+		"https://api.openai.com/",
+		"https://example.com/",
+	} {
+		t.Run(value, func(t *testing.T) {
+			destination, err := url.Parse(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if approvedFeatureOrigin(destination, openAIHostSuffixes[:]) {
+				t.Fatalf("ineligible Azure OpenAI origin %q was accepted", value)
+			}
+		})
+	}
+}
+
 func TestFoundryFeatureUsagePolicyLiveToken(t *testing.T) {
 	if runInternalFeatureUsageSubprocess(t) {
 		return

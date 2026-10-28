@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
@@ -45,6 +47,141 @@ func captureExecutor(id string, sink *[]string, mu *sync.Mutex) workflow.Executo
 		}, nil
 	}
 	return binding
+}
+
+type outputPortPoco struct{ Value string }
+
+func responseOutputPortBinding() workflow.ExecutorBinding {
+	return workflow.NewExecutor("yielder", func(input string) *agent.Response {
+		return &agent.Response{Messages: []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: input}}}}}
+	}).Bind()
+}
+
+func pocoOutputPortBinding() workflow.ExecutorBinding {
+	return workflow.NewExecutor("yielder", func(input string) outputPortPoco { return outputPortPoco{Value: input} }).Bind()
+}
+
+func runOutputPort(t *testing.T, binding workflow.ExecutorBinding, configure func(*workflow.Builder, workflow.ExecutorBinding)) []workflow.OutputEvent {
+	t.Helper()
+	builder := workflow.NewBuilder(binding)
+	if configure != nil {
+		configure(builder, binding)
+	}
+	wf, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := inproc.Default.RunStreaming(t.Context(), wf, "go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = run.Close(t.Context()) }()
+	var outputs []workflow.OutputEvent
+	for event, err := range run.WatchStream(t.Context()) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if output, ok := event.(workflow.OutputEvent); ok {
+			outputs = append(outputs, output)
+		}
+	}
+	return outputs
+}
+
+func requireOutputPortTags(t *testing.T, outputs []workflow.OutputEvent, intermediate bool) workflow.OutputEvent {
+	t.Helper()
+	if len(outputs) != 1 {
+		t.Fatalf("outputs = %v, want one", outputs)
+	}
+	output := outputs[0]
+	if output.IsIntermediate() != intermediate {
+		t.Fatalf("intermediate = %t, want %t", output.IsIntermediate(), intermediate)
+	}
+	if intermediate {
+		if !slices.Equal(output.Tags, []workflow.OutputTag{workflow.OutputTagIntermediate}) {
+			t.Fatalf("tags = %v, want intermediate", output.Tags)
+		}
+	} else if len(output.Tags) != 0 {
+		t.Fatalf("tags = %v, want empty", output.Tags)
+	}
+	return output
+}
+
+func TestRunner_UndesignatedPocoIsFiltered(t *testing.T) {
+	if outputs := runOutputPort(t, pocoOutputPortBinding(), nil); len(outputs) != 0 {
+		t.Fatalf("outputs = %v, want none", outputs)
+	}
+}
+
+func TestRunner_UndesignatedAgentResponseIsFiltered(t *testing.T) {
+	if outputs := runOutputPort(t, responseOutputPortBinding(), nil); len(outputs) != 0 {
+		t.Fatalf("outputs = %v, want none", outputs)
+	}
+}
+
+func TestRunner_TerminalAgentResponseHasEmptyTags(t *testing.T) {
+	outputs := runOutputPort(t, responseOutputPortBinding(), func(b *workflow.Builder, e workflow.ExecutorBinding) { b.WithOutputFrom(e) })
+	output := requireOutputPortTags(t, outputs, false)
+	if _, ok := output.Output.(*agent.Response); !ok {
+		t.Fatalf("payload = %T, want agent response", output.Output)
+	}
+}
+
+func TestRunner_IntermediateAgentResponseHasIntermediateTag(t *testing.T) {
+	outputs := runOutputPort(t, responseOutputPortBinding(), func(b *workflow.Builder, e workflow.ExecutorBinding) { b.WithIntermediateOutputFrom(e) })
+	output := requireOutputPortTags(t, outputs, true)
+	if _, ok := output.Output.(*agent.Response); !ok {
+		t.Fatalf("payload = %T, want agent response", output.Output)
+	}
+}
+
+func TestRunner_IntermediateAgentResponseUpdateHasIntermediateTag(t *testing.T) {
+	binding := workflow.NewExecutor("yielder", func(input string) *agent.ResponseUpdate {
+		return &agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: input}}}
+	}).Bind()
+	outputs := runOutputPort(t, binding, func(b *workflow.Builder, e workflow.ExecutorBinding) { b.WithIntermediateOutputFrom(e) })
+	output := requireOutputPortTags(t, outputs, true)
+	if _, ok := output.Output.(*agent.ResponseUpdate); !ok {
+		t.Fatalf("payload = %T, want agent response update", output.Output)
+	}
+}
+
+func TestRunner_OutputThenIntermediateAccumulatesTags(t *testing.T) {
+	outputs := runOutputPort(t, responseOutputPortBinding(), func(b *workflow.Builder, e workflow.ExecutorBinding) {
+		b.WithOutputFrom(e).WithIntermediateOutputFrom(e)
+	})
+	output := requireOutputPortTags(t, outputs, true)
+	if _, ok := output.Output.(*agent.Response); !ok {
+		t.Fatalf("payload = %T, want agent response", output.Output)
+	}
+}
+
+func TestRunner_IntermediateThenOutputAccumulatesTags(t *testing.T) {
+	outputs := runOutputPort(t, responseOutputPortBinding(), func(b *workflow.Builder, e workflow.ExecutorBinding) {
+		b.WithIntermediateOutputFrom(e).WithOutputFrom(e)
+	})
+	output := requireOutputPortTags(t, outputs, true)
+	if _, ok := output.Output.(*agent.Response); !ok {
+		t.Fatalf("payload = %T, want agent response", output.Output)
+	}
+}
+
+func TestRunner_IntermediatePocoHasIntermediateTag(t *testing.T) {
+	outputs := runOutputPort(t, pocoOutputPortBinding(), func(b *workflow.Builder, e workflow.ExecutorBinding) { b.WithIntermediateOutputFrom(e) })
+	requireOutputPortTags(t, outputs, true)
+}
+
+func TestRunner_TerminalPocoHasEmptyTags(t *testing.T) {
+	outputs := runOutputPort(t, pocoOutputPortBinding(), func(b *workflow.Builder, e workflow.ExecutorBinding) { b.WithOutputFrom(e) })
+	requireOutputPortTags(t, outputs, false)
+}
+
+func TestRunner_RepeatedTerminalDesignationDedupes(t *testing.T) {
+	outputs := runOutputPort(t, responseOutputPortBinding(), func(b *workflow.Builder, e workflow.ExecutorBinding) { b.WithOutputFrom(e).WithOutputFrom(e) })
+	output := requireOutputPortTags(t, outputs, false)
+	if _, ok := output.Output.(*agent.Response); !ok {
+		t.Fatalf("payload = %T, want agent response", output.Output)
+	}
 }
 
 func TestDirectEdgeRouting_NoCondition_DeliversAlways(t *testing.T) {

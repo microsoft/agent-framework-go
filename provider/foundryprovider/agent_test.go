@@ -167,6 +167,120 @@ func TestNewAgentRunsAgainstFoundryAgentEndpoint(t *testing.T) {
 	}
 }
 
+func TestNewAgentWithEmptyModelRejectsConfiguration(t *testing.T) {
+	assertPanics(t, func() {
+		foundryprovider.NewAgent(validEndpoint, validCredential, foundryprovider.ModelDeployment(""),
+			foundryprovider.AgentConfig{Instructions: "Test instructions"})
+	}, "model is required")
+}
+
+func TestNewAgentWithValidParametersCreatesAgent(t *testing.T) {
+	a := foundryprovider.NewAgent(validEndpoint, validCredential, foundryprovider.ModelDeployment("gpt-4o-mini"),
+		foundryprovider.AgentConfig{
+			Instructions: "You are a helpful assistant.",
+			Config:       agent.Config{Name: "test-agent", Description: "A test agent"},
+		})
+	if a == nil || a.Name() != "test-agent" || a.Description() != "A test agent" {
+		t.Fatalf("agent = %#v, want configured name and description", a)
+	}
+}
+
+func TestNewAgentNameReturnsConfiguredName(t *testing.T) {
+	a := foundryprovider.NewAgent(validEndpoint, validCredential, foundryprovider.ModelDeployment("gpt-4o-mini"),
+		foundryprovider.AgentConfig{Instructions: "Test", Config: agent.Config{Name: "my-agent"}})
+	if a.Name() != "my-agent" {
+		t.Fatalf("Name = %q, want my-agent", a.Name())
+	}
+}
+
+func TestNewAgentDescriptionReturnsConfiguredDescription(t *testing.T) {
+	a := foundryprovider.NewAgent(validEndpoint, validCredential, foundryprovider.ModelDeployment("gpt-4o-mini"),
+		foundryprovider.AgentConfig{Instructions: "Test", Config: agent.Config{Description: "Agent description"}})
+	if a.Description() != "Agent description" {
+		t.Fatalf("Description = %q, want Agent description", a.Description())
+	}
+}
+
+func TestNewAgentCreateSessionWithConversationID(t *testing.T) {
+	a := foundryprovider.NewAgent(validEndpoint, validCredential, foundryprovider.ModelDeployment("gpt-4o-mini"),
+		foundryprovider.AgentConfig{Instructions: "Test"})
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("test-conversation-id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session == nil || session.ServiceID() != "test-conversation-id" {
+		t.Fatalf("session = %#v, want test-conversation-id", session)
+	}
+}
+
+func TestNewAgentCreateSessionWithoutConversationID(t *testing.T) {
+	a := foundryprovider.NewAgent(validEndpoint, validCredential, foundryprovider.ModelDeployment("gpt-4o-mini"),
+		foundryprovider.AgentConfig{Instructions: "Test"})
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session == nil || session.ServiceID() != "" {
+		t.Fatalf("session = %#v, want no conversation ID", session)
+	}
+}
+
+func TestServerAgentStreamingRoutesThroughPerAgentResponsesURL(t *testing.T) {
+	responseJSON, err := json.Marshal(json.RawMessage(minimalResponsesJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var requests int
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if r.URL.Path != "/projects/proj/agents/it-happy-path/endpoint/protocols/openai/responses" ||
+			r.URL.Query().Get("api-version") != "v1" {
+			t.Errorf("request URL = %s, want versioned per-agent Responses route", r.URL)
+		}
+		if body := jsonMap(t, mustReadBody(t, r)); body["stream"] != true {
+			t.Errorf("stream = %#v, want true", body["stream"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hello\",\"item_id\":\"msg_test\",\"output_index\":0,\"content_index\":0}\n\n")
+		_, _ = fmt.Fprintf(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":%s}\n\n", responseJSON)
+	}))
+	defer server.Close()
+	a := newFoundryAgent(t, server, foundryprovider.ServerAgent("it-happy-path"), foundryprovider.AgentConfig{})
+	response, err := a.RunText(t.Context(), "Hello", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 || response.String() != "hello" {
+		t.Fatalf("requests = %d, response = %q", requests, response.String())
+	}
+}
+
+func TestServerAgentPassesThroughCallerRequestPolicy(t *testing.T) {
+	var requests int
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if got := r.Header.Get("X-Test-Tag"); got != "tag-1" {
+			t.Errorf("X-Test-Tag = %q, want tag-1", got)
+		}
+		writeResponsesOK(w)
+	}))
+	defer server.Close()
+	a := newFoundryAgent(t, server, foundryprovider.ServerAgent("it-happy-path"), foundryprovider.AgentConfig{
+		OpenAIOptions: []option.RequestOption{
+			option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+				req.Header.Set("X-Test-Tag", "tag-1")
+				return next(req)
+			}),
+		},
+	})
+	if _, err := a.RunText(t.Context(), "Hello").Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+}
+
 func TestNewAgentOwnedRoutingOverridesOpenAIOptions(t *testing.T) {
 	attackerCalls := 0
 	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

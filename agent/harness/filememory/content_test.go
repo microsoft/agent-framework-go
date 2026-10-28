@@ -22,6 +22,339 @@ import (
 	"github.com/microsoft/agent-framework-go/internal/storepaths"
 )
 
+func TestMatchesGlob_WithMatcher(t *testing.T) {
+	for _, tc := range []struct {
+		pattern, name string
+		want          bool
+	}{
+		{"*.md", "notes.md", true},
+		{"*.md", "notes.txt", false},
+		{"research*", "research_results.md", true},
+		{"research*", "notes.md", false},
+		{"*.md", "NOTES.MD", true},
+	} {
+		t.Run(tc.pattern+"/"+tc.name, func(t *testing.T) {
+			got, err := matchesGlob(tc.name, tc.pattern)
+			if err != nil || got != tc.want {
+				t.Fatalf("matchesGlob(%q, %q) = %v, %v, want %v", tc.name, tc.pattern, got, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestMatchesGlob_NullMatcher(t *testing.T) {
+	matcher, err := compileGlob("")
+	if err != nil || matcher != nil {
+		t.Fatalf("compileGlob empty = %v, %v", matcher, err)
+	}
+	if got, err := matchesGlob("anything.txt", ""); err != nil || !got {
+		t.Fatalf("unfiltered match = %v, %v", got, err)
+	}
+}
+
+func TestApplyReplace_SingleOccurrence(t *testing.T) {
+	got, count, err := replaceContent("Hello world", "world", "there", false)
+	if err != nil || got != "Hello there" || count != 1 {
+		t.Fatalf("replacement = %q, %d, %v", got, count, err)
+	}
+}
+
+func TestApplyReplace_AllOccurrences(t *testing.T) {
+	got, count, err := replaceContent("a a a", "a", "b", true)
+	if err != nil || got != "b b b" || count != 3 {
+		t.Fatalf("replacement = %q, %d, %v", got, count, err)
+	}
+}
+
+func TestApplyReplace_EmptyOldString(t *testing.T) {
+	if _, _, err := replaceContent("content", "", "x", false); err == nil {
+		t.Fatal("expected an empty-search error")
+	}
+}
+
+func TestApplyReplace_NotFound(t *testing.T) {
+	if _, _, err := replaceContent("content", "missing", "x", false); err == nil {
+		t.Fatal("expected a missing-search error")
+	}
+}
+
+func TestApplyReplace_Ambiguous(t *testing.T) {
+	if _, _, err := replaceContent("a a a", "a", "b", false); err == nil {
+		t.Fatal("expected an ambiguous-search error")
+	}
+}
+
+func assertLineReplacement(t *testing.T, content, want string, edits ...lineEdit) {
+	t.Helper()
+	got, err := replaceLines(content, edits)
+	if err != nil || got != want {
+		t.Fatalf("replaceLines = %q, %v, want %q", got, err, want)
+	}
+}
+
+func TestApplyReplaceLines_SpecifiedLine(t *testing.T) {
+	assertLineReplacement(t, "line1\nline2\nline3", "line1\nCHANGED\nline3", lineEdit{LineNumber: 2, NewLine: "CHANGED\n"})
+}
+
+func TestApplyReplaceLines_EmptyEdits(t *testing.T) {
+	if _, err := replaceLines("line1", nil); err == nil {
+		t.Fatal("expected an empty-edits error")
+	}
+}
+
+func TestApplyReplaceLines_OutOfRange(t *testing.T) {
+	if _, err := replaceLines("line1\nline2", []lineEdit{{LineNumber: 5, NewLine: "X"}}); err == nil {
+		t.Fatal("expected an out-of-range error")
+	}
+}
+
+func TestApplyReplaceLines_DuplicateLine(t *testing.T) {
+	if _, err := replaceLines("line1\nline2", []lineEdit{{LineNumber: 1, NewLine: "A"}, {LineNumber: 1, NewLine: "B"}}); err == nil {
+		t.Fatal("expected a duplicate-line error")
+	}
+}
+
+func TestApplyReplaceLines_LiteralTrailingNewline(t *testing.T) {
+	assertLineReplacement(t, "line1\nline2\n", "CHANGED\nline2\n", lineEdit{LineNumber: 1, NewLine: "CHANGED\n"})
+}
+
+func TestApplyReplaceLines_PreservesCRLF(t *testing.T) {
+	assertLineReplacement(t, "line1\r\nline2\r\nline3", "line1\r\nCHANGED\r\nline3", lineEdit{LineNumber: 2, NewLine: "CHANGED\r\n"})
+}
+
+func TestApplyReplaceLines_DeletesMiddleLine(t *testing.T) {
+	assertLineReplacement(t, "line1\nline2\nline3\n", "line1\nline3\n", lineEdit{LineNumber: 2})
+}
+
+func TestApplyReplaceLines_DeletesLastUnterminatedLine(t *testing.T) {
+	assertLineReplacement(t, "line1\nline2", "line1\n", lineEdit{LineNumber: 2})
+}
+
+func TestApplyReplaceLines_DeleteAndReplace(t *testing.T) {
+	assertLineReplacement(t, "a\nb\nc\n", "b\nC\n", lineEdit{LineNumber: 1}, lineEdit{LineNumber: 3, NewLine: "C\n"})
+}
+
+func TestApplyReplaceLines_EmbeddedNewline(t *testing.T) {
+	assertLineReplacement(t, "a\nb\nc\n", "a\nb1\nb2\nc\n", lineEdit{LineNumber: 2, NewLine: "b1\nb2\n"})
+}
+
+func TestSplitLinesKeepEnds_KeepsTerminators(t *testing.T) {
+	for _, tc := range []struct {
+		content string
+		want    []string
+	}{
+		{"a\nb\nc", []string{"a\n", "b\n", "c"}},
+		{"a\nb\n", []string{"a\n", "b\n"}},
+		{"a\r\nb\r\n", []string{"a\r\n", "b\r\n"}},
+		{"a\rb\rc", []string{"a\r", "b\r", "c"}},
+		{"a\r\nb\nc\r", []string{"a\r\n", "b\n", "c\r"}},
+		{"single", []string{"single"}},
+		{"", []string{}},
+	} {
+		t.Run(fmt.Sprintf("%q", tc.content), func(t *testing.T) {
+			if got := splitLines(tc.content); !slices.Equal(got, tc.want) {
+				t.Fatalf("lines = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSplitLinesKeepEnds_ConcatenationRoundTrip(t *testing.T) {
+	const content = "alpha\r\nbeta\ngamma\rdelta"
+	if got := strings.Join(splitLines(content), ""); got != content {
+		t.Fatalf("round trip = %q, want %q", got, content)
+	}
+}
+
+func TestLineContentLength_ExcludesOnlyTrailingTerminator(t *testing.T) {
+	for _, tc := range [][2]string{{"match\r\n", "match"}, {"match\n", "match"}, {"match\r", "match"}, {"match", "match"}, {"", ""}, {"a\rb\n", "a\rb"}} {
+		t.Run(fmt.Sprintf("%q", tc[0]), func(t *testing.T) {
+			got := trimLineTerminator(tc[0])
+			if len(got) != len(tc[1]) || got != tc[1] {
+				t.Fatalf("line content = %q (length %d), want %q", got, len(got), tc[1])
+			}
+		})
+	}
+}
+
+func TestLineContentLength_BoundsEndAnchoredMatch(t *testing.T) {
+	re := regexp.MustCompile("(?i)match$")
+	for _, line := range []string{"beta match\r\n", "beta match\n", "beta match\r", "beta match"} {
+		t.Run(fmt.Sprintf("%q", line), func(t *testing.T) {
+			match := re.FindStringIndex(trimLineTerminator(line))
+			if len(match) != 2 || match[0] != 5 {
+				t.Fatalf("end-anchored match = %v, want start 5", match)
+			}
+		})
+	}
+}
+func TestFileStoreContract_ApplyReplaceLines_ExpectedLineMatching_AppliesTheEdit(t *testing.T) {
+	assertLineReplacement(t, "one\ntwo\nthree\n", "one\nTWO\nthree\n", lineEdit{LineNumber: 2, NewLine: "TWO\n", ExpectedLine: new("two")})
+}
+
+func TestFileStoreContract_ApplyReplaceLines_ExpectedLineDiffering_Throws(t *testing.T) {
+	_, err := replaceLines("one\ntwo\nthree\n", []lineEdit{{LineNumber: 3, NewLine: "X\n", ExpectedLine: new("two")}})
+	if err == nil || !strings.Contains(err.Error(), "does not match expected_line") {
+		t.Fatalf("stale edit error=%v", err)
+	}
+}
+
+func TestFileStoreContract_ApplyReplaceLines_ExpectedLineIgnoresTheTerminator(t *testing.T) {
+	assertLineReplacement(t, "alpha\r\nbeta\r\n", "alpha\r\nBETA\r\n", lineEdit{LineNumber: 2, NewLine: "BETA\r\n", ExpectedLine: new("beta\r\n")})
+}
+
+func TestFileStoreContract_ApplyReplaceLines_WithoutExpectedLine_IsUnchanged(t *testing.T) {
+	assertLineReplacement(t, "one\ntwo\n", "ONE\ntwo\n", lineEdit{LineNumber: 1, NewLine: "ONE\n"})
+}
+
+func TestFileStoreContract_ScanContent_NumbersBySplitLines(t *testing.T) {
+	const content = "alpha\r\nbeta match\r\ngamma\r\n"
+	got, found, err := scanContent(t.Context(), "f.txt", content, regexp.MustCompile("(?i)match"))
+	if err != nil || !found || len(got.MatchingLines) == 0 {
+		t.Fatalf("scan=%+v, found=%v, err=%v", got, found, err)
+	}
+	match := got.MatchingLines[0]
+	if match.LineNumber < 1 || match.LineNumber > len(splitLines(content)) || splitLines(content)[match.LineNumber-1] != match.Line || match.Line != "beta match\r\n" {
+		t.Fatalf("scan line=%+v", match)
+	}
+}
+
+func diskSearchStore(t *testing.T, files map[string]string) (*filestore.FileSystemStore, string) {
+	t.Helper()
+	root := t.TempDir()
+	store, err := filestore.NewFileSystemStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	for name, content := range files {
+		if err := store.Write(t.Context(), name, content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return store, root
+}
+
+func TestFileStore_SearchFilesAsync_FindsMatch(t *testing.T) {
+	store, _ := diskSearchStore(t, map[string]string{"doc.md": "This has an error on line one.\nLine two is fine."})
+	got, err := searchFiles(t.Context(), store, "", "error", "")
+	if err != nil || len(got) != 1 || got[0].FileName != "doc.md" || len(got[0].MatchingLines) != 1 || got[0].MatchingLines[0].LineNumber != 1 || !strings.Contains(got[0].Snippet, "error") {
+		t.Fatalf("search=%+v, %v", got, err)
+	}
+}
+
+func TestFileStore_SearchFilesAsync_ReportsLinesVerbatim(t *testing.T) {
+	store, _ := diskSearchStore(t, map[string]string{"notes.md": "Line one\nLine two with match\nLine three\nLine four with match"})
+	got, err := searchFiles(t.Context(), store, "", "match", "")
+	if err != nil || len(got) != 1 || !slices.Equal(got[0].MatchingLines, []searchMatch{{LineNumber: 2, Line: "Line two with match\n"}, {LineNumber: 4, Line: "Line four with match"}}) {
+		t.Fatalf("search=%+v, %v", got, err)
+	}
+}
+
+func TestFileStore_SearchFilesAsync_ReportsCrlfLinesVerbatim(t *testing.T) {
+	store, _ := diskSearchStore(t, map[string]string{"notes.md": "alpha\r\nbeta match\r\ngamma\r\n"})
+	got, err := searchFiles(t.Context(), store, "", "match", "")
+	if err != nil || len(got) != 1 || !slices.Equal(got[0].MatchingLines, []searchMatch{{LineNumber: 2, Line: "beta match\r\n"}}) {
+		t.Fatalf("search=%+v, %v", got, err)
+	}
+}
+
+func TestFileStore_SearchFilesAsync_TrailingNewline_DoesNotReportAnExtraLine(t *testing.T) {
+	store, _ := diskSearchStore(t, map[string]string{"notes.md": "a\nb\n"})
+	got, err := searchFiles(t.Context(), store, "", "^.*$", "")
+	if err != nil || len(got) != 1 || len(got[0].MatchingLines) != 2 || got[0].MatchingLines[0].Line != "a\n" || got[0].MatchingLines[1].Line != "b\n" {
+		t.Fatalf("search=%+v, %v", got, err)
+	}
+}
+
+func TestFileStore_SearchFilesAsync_LoneCarriageReturn_SplitsLikeTheLineEditor(t *testing.T) {
+	store, _ := diskSearchStore(t, map[string]string{"notes.md": "alpha\rbeta match\rgamma"})
+	got, err := searchFiles(t.Context(), store, "", "match", "")
+	if err != nil || len(got) != 1 || !slices.Equal(got[0].MatchingLines, []searchMatch{{LineNumber: 2, Line: "beta match\r"}}) {
+		t.Fatalf("search=%+v, %v", got, err)
+	}
+}
+
+func TestFileStore_SearchFilesAsync_EndAnchoredPatternMatchesRegardlessOfTerminator(t *testing.T) {
+	for _, content := range []string{"alpha\r\nbeta match\r\ngamma\r\n", "alpha\rbeta match\rgamma", "alpha\nbeta match\ngamma\n"} {
+		t.Run(fmt.Sprintf("%q", content), func(t *testing.T) {
+			store, _ := diskSearchStore(t, map[string]string{"notes.md": content})
+			got, err := searchFiles(t.Context(), store, "", "match$", "")
+			if err != nil || len(got) != 1 || len(got[0].MatchingLines) != 1 || got[0].MatchingLines[0].LineNumber != 2 {
+				t.Fatalf("search=%+v, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestFileStore_SearchFilesAsync_SnippetIsAnchoredAtTheMatch(t *testing.T) {
+	store, _ := diskSearchStore(t, map[string]string{"notes.md": strings.Repeat("x", 60) + "\nneedle\n"})
+	got, err := searchFiles(t.Context(), store, "", "needle", "")
+	if err != nil || len(got) != 1 || got[0].Snippet != strings.Repeat("x", 49)+"\nneedle\n" {
+		t.Fatalf("search=%+v, %v", got, err)
+	}
+}
+
+func TestFileStore_SearchFilesAsync_GlobFilter_ExcludesNonMatching(t *testing.T) {
+	store, _ := diskSearchStore(t, map[string]string{"notes.md": "important info", "data.txt": "important info"})
+	got, err := searchFiles(t.Context(), store, "", "important", "*.md")
+	if err != nil || len(got) != 1 || got[0].FileName != "notes.md" {
+		t.Fatalf("search=%+v, %v", got, err)
+	}
+}
+
+func TestFileStore_SearchFilesAsync_NoMatch_ReturnsEmpty(t *testing.T) {
+	store, _ := diskSearchStore(t, map[string]string{"doc.md": "nothing here"})
+	if got, err := searchFiles(t.Context(), store, "", "missing-pattern", ""); err != nil || len(got) != 0 {
+		t.Fatalf("search=%+v, %v", got, err)
+	}
+}
+
+func TestFileStore_SearchFilesAsync_NonExistentDirectory_ReturnsEmpty(t *testing.T) {
+	store, _ := diskSearchStore(t, nil)
+	if got, err := searchFiles(t.Context(), store, "no-dir", "anything", ""); err != nil || len(got) != 0 {
+		t.Fatalf("search=%+v, %v", got, err)
+	}
+}
+
+func TestFileStore_SearchFilesAsync_SymlinkedDirectory_Throws(t *testing.T) {
+	store, root := diskSearchStore(t, nil)
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "data.txt"), []byte("SENSITIVE_DATA"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "search-link")); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symbolic links unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	if _, err := searchFiles(t.Context(), store, "search-link", "SENSITIVE", ""); err == nil {
+		t.Fatal("searching through an escaping directory symlink succeeded")
+	}
+}
+
+func TestFileStore_SearchFilesAsync_RootWithSymlinkedFile_DoesNotLeakContent(t *testing.T) {
+	store, root := diskSearchStore(t, map[string]string{"normal.txt": "NORMAL_CONTENT"})
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("ROOT_LEVEL_SECRET_CONTENT"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "env-link.txt")); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symbolic links unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	if got, err := searchFiles(t.Context(), store, "", "SECRET_CONTENT", ""); err != nil || len(got) != 0 {
+		t.Fatalf("search leaked outside content=%+v, %v", got, err)
+	}
+}
+
 func TestReplaceContent(t *testing.T) {
 	cases := []struct {
 		name       string

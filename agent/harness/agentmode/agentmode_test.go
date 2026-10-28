@@ -320,38 +320,20 @@ func TestDuplicateModeNames_Panics(t *testing.T) {
 func TestExternalModeChange_InjectsNotification(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
-	session, ok := agent.GetOption(opts, agent.WithSession)
-	if !ok || session == nil {
-		t.Fatal("expected session option from sessionOpts()")
+	if err := p.SetMode(mustSession(t, opts), "execute", false); err != nil {
+		t.Fatal(err)
 	}
-	msgs := newMessages("hi")
-
-	// Initialize state.
-	_, _, err := invokeProvider(p, context.Background(), msgs, opts...)
+	outMessages, _, err := invokeProvider(p, t.Context(), nil, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	// Change mode externally.
-	if err := p.SetMode(session, "execute", false); err != nil {
-		t.Fatal(err)
+	if len(outMessages) != 1 || outMessages[0].Role != message.RoleUser {
+		t.Fatalf("notification messages = %v, want one user message", outMessages)
 	}
-
-	// Next provide should inject notification.
-	outMessages, _, err := invokeProvider(p, context.Background(), msgs, opts...)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	found := false
-	for _, msg := range outMessages {
-		if strings.Contains(msg.Contents.Text(), "Mode changed") {
-			found = true
-			break
+	for _, mode := range []string{"plan", "execute"} {
+		if !strings.Contains(outMessages[0].String(), mode) {
+			t.Errorf("notification = %q, want %q", outMessages[0].String(), mode)
 		}
-	}
-	if !found {
-		t.Error("expected mode-change notification message")
 	}
 }
 
@@ -574,6 +556,9 @@ func TestPublicSetMode_ReflectedInInstructions(t *testing.T) {
 	if !strings.Contains(instructions, "execute") {
 		t.Error("expected 'execute' in instructions after SetMode")
 	}
+	if got, err := modeTool(t, outOpts, "mode_get").Call(t.Context(), "{}"); err != nil || got != "execute" {
+		t.Fatalf("mode_get = %v, %v, want execute", got, err)
+	}
 }
 
 // 24. State_PersistsAcrossInvocations
@@ -581,10 +566,11 @@ func TestState_PersistsAcrossInvocations(t *testing.T) {
 	p := agentmode.New(agentmode.Config{})
 	opts := sessionOpts()
 
-	if _, _, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...); err != nil {
+	_, first, err := invokeProvider(p, t.Context(), nil, opts...)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := p.SetMode(mustSession(t, opts), "execute", false); err != nil {
+	if _, err := modeTool(t, first, "mode_set").Call(t.Context(), `{"mode":"execute"}`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -601,6 +587,9 @@ func TestState_PersistsAcrossInvocations(t *testing.T) {
 
 	if mode := p.Mode(mustSession(t, opts)); mode != "execute" {
 		t.Errorf("expected 'execute', got %q", mode)
+	}
+	if got, err := modeTool(t, outOpts, "mode_get").Call(t.Context(), "{}"); err != nil || got != "execute" {
+		t.Fatalf("mode_get = %v, %v, want execute", got, err)
 	}
 }
 
@@ -719,11 +708,12 @@ func TestCustomInstructions_OverridesDefault(t *testing.T) {
 }
 
 func TestCustomInstructions_AreNotRewrittenWhenModeToolsDisabled(t *testing.T) {
-	customInstructions := "Custom mode instructions mention mode_set and mode_get for mode {current_mode}."
+	customInstructions := "Use custom mode_set and mode_get behavior in {current_mode}.\n{available_modes}"
 	p := agentmode.New(agentmode.Config{
 		Instructions:       &customInstructions,
 		DisableModeSetTool: true,
 		DisableModeGetTool: true,
+		Modes:              []agentmode.Mode{{Name: "draft", Instructions: "Custom mode_set and mode_get guidance."}},
 	})
 	opts := sessionOpts()
 
@@ -733,8 +723,116 @@ func TestCustomInstructions_AreNotRewrittenWhenModeToolsDisabled(t *testing.T) {
 	}
 
 	instructions := collectInstructions(outOpts)
-	if !strings.Contains(instructions, "mode_set and mode_get") {
-		t.Fatal("expected custom instructions to remain unchanged")
+	if len(collectTools(outOpts)) != 0 {
+		t.Fatal("disabled tools were returned")
+	}
+	for _, want := range []string{"Use custom mode_set and mode_get behavior in draft.", "Custom mode_set and mode_get guidance."} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("instructions = %q, want %q", instructions, want)
+		}
+	}
+}
+
+func modeTool(t *testing.T, opts []agent.Option, name string) tool.FuncTool {
+	t.Helper()
+	for _, candidate := range collectTools(opts) {
+		if candidate.Name() == name {
+			if ft, ok := candidate.(tool.FuncTool); ok {
+				return ft
+			}
+		}
+	}
+	t.Fatalf("invocable tool %q not found", name)
+	return nil
+}
+
+func TestModeGetTool_ReturnsDefaultMode(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	_, opts, err := invokeProvider(p, t.Context(), nil, sessionOpts()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := modeTool(t, opts, "mode_get").Call(t.Context(), "{}"); err != nil || got != "plan" {
+		t.Fatalf("mode_get = %v, %v, want plan", got, err)
+	}
+}
+
+func TestModeGetTool_ReturnsUpdatedModeAfterSet(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	_, opts, err := invokeProvider(p, t.Context(), nil, sessionOpts()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := modeTool(t, opts, "mode_set").Call(t.Context(), `{"mode":"execute"}`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := modeTool(t, opts, "mode_get").Call(t.Context(), "{}"); err != nil || got != "execute" {
+		t.Fatalf("mode_get = %v, %v, want execute", got, err)
+	}
+}
+
+func TestModeSetTool_ReturnsConfirmation(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	_, opts, err := invokeProvider(p, t.Context(), nil, sessionOpts()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := modeTool(t, opts, "mode_set").Call(t.Context(), `{"mode":"execute"}`); err != nil || got != `Mode changed to "execute".` {
+		t.Fatalf("mode_set = %v, %v", got, err)
+	}
+}
+
+func TestModeSetTool_InvalidModePreservesState(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	_, opts, err := invokeProvider(p, t.Context(), nil, sessionOpts()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := modeTool(t, opts, "mode_set").Call(t.Context(), `{"mode":"foo"}`); err == nil {
+		t.Fatal("expected an invalid-mode error")
+	}
+	if got, err := modeTool(t, opts, "mode_get").Call(t.Context(), "{}"); err != nil || got != "plan" {
+		t.Fatalf("mode_get after invalid mode = %v, %v, want plan", got, err)
+	}
+}
+
+func TestToolModeChange_DoesNotInjectNotification(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	opts := sessionOpts()
+	_, first, err := invokeProvider(p, t.Context(), nil, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := modeTool(t, first, "mode_set").Call(t.Context(), `{"mode":"execute"}`); err != nil {
+		t.Fatal(err)
+	}
+	messages, _, err := invokeProvider(p, t.Context(), nil, opts...)
+	if err != nil || len(messages) != 0 {
+		t.Fatalf("messages after tool mode change = %v, %v", messages, err)
+	}
+}
+
+func TestDisabledTools_PreserveStateInstructionsAndNotifications(t *testing.T) {
+	p := agentmode.New(agentmode.Config{DisableModeSetTool: true, DisableModeGetTool: true})
+	opts := sessionOpts()
+	if _, _, err := invokeProvider(p, t.Context(), nil, opts...); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.SetMode(mustSession(t, opts), "execute", false); err != nil {
+		t.Fatal(err)
+	}
+	messages, outOpts, err := invokeProvider(p, t.Context(), nil, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(collectTools(outOpts)) != 0 || p.Mode(mustSession(t, opts)) != "execute" {
+		t.Fatal("disabled tools changed mode state or returned tools")
+	}
+	if got := collectInstructions(outOpts); !strings.Contains(got, "You are currently operating in the execute mode.") {
+		t.Fatalf("instructions = %q", got)
+	}
+	if len(messages) != 1 || !strings.Contains(messages[0].String(), "plan") || !strings.Contains(messages[0].String(), "execute") {
+		t.Fatalf("notification = %v", messages)
 	}
 }
 

@@ -9,17 +9,21 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
+	"github.com/openai/openai-go/v3"
 )
 
 type stubTool struct {
@@ -489,6 +493,1052 @@ func TestNew_IgnoresNilMiddleware(t *testing.T) {
 	}
 	if providerCalls != 1 || agentMiddlewareCalls != 1 || providerMiddlewareCalls != 1 {
 		t.Fatalf("calls = provider:%d agent middleware:%d provider middleware:%d, want all 1", providerCalls, agentMiddlewareCalls, providerMiddlewareCalls)
+	}
+}
+
+func TestAgentSession_DefaultServiceIDIsEmpty(t *testing.T) {
+	session := &agent.Session{}
+	if got := session.ServiceID(); got != "" {
+		t.Fatalf("ServiceID() = %q, want empty", got)
+	}
+}
+
+func TestAgentSession_ServiceIDRoundtrips(t *testing.T) {
+	session := &agent.Session{}
+	session.SetServiceID("test-session-id")
+	if got := session.ServiceID(); got != "test-session-id" {
+		t.Fatalf("ServiceID() = %q, want test-session-id", got)
+	}
+}
+
+func TestAgentSession_DeserializeRejectsArray(t *testing.T) {
+	var session agent.Session
+	if err := json.Unmarshal([]byte(`[42]`), &session); err == nil {
+		t.Fatal("expected an error decoding an array as a session")
+	}
+}
+
+func TestAgentSession_DeserializeRestoresHistory(t *testing.T) {
+	var session agent.Session
+	data := []byte(`{"State":{"in-memory":{"messages":[{"AuthorName":"testAuthor"}]}}}`)
+	if err := json.Unmarshal(data, &session); err != nil {
+		t.Fatal(err)
+	}
+	if session.ServiceID() != "" {
+		t.Fatalf("ServiceID() = %q, want empty", session.ServiceID())
+	}
+	messages, err := session.InMemoryHistory("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].AuthorName != "testAuthor" {
+		t.Fatalf("messages = %#v, want one message authored by testAuthor", messages)
+	}
+}
+
+func TestAgentSession_SerializePreservesServiceID(t *testing.T) {
+	session := &agent.Session{}
+	session.SetServiceID("TestConvId")
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	if string(document["ServiceID"]) != `"TestConvId"` {
+		t.Fatalf("service ID = %s, want TestConvId", document["ServiceID"])
+	}
+	if _, ok := document["chatHistoryProviderState"]; ok {
+		t.Fatal("unexpected legacy history property")
+	}
+}
+
+func TestAgentSession_SerializePreservesHistory(t *testing.T) {
+	session := &agent.Session{}
+	input := message.NewText("TestContent")
+	input.AuthorName = "TestAuthor"
+	if err := session.SetInMemoryHistory("", []*message.Message{input}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		ServiceID string
+		State     map[string]struct {
+			Messages []*message.Message `json:"messages"`
+		}
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	if document.ServiceID != "" {
+		t.Fatalf("service ID = %q, want empty", document.ServiceID)
+	}
+	messages := document.State["in-memory"].Messages
+	if len(messages) != 1 || messages[0].AuthorName != "TestAuthor" {
+		t.Fatalf("messages = %#v, want one message authored by TestAuthor", messages)
+	}
+	if len(messages[0].Contents) != 1 {
+		t.Fatalf("contents = %#v, want one text content", messages[0].Contents)
+	}
+	text, ok := messages[0].Contents[0].(*message.TextContent)
+	if !ok || text.Text != "TestContent" {
+		t.Fatalf("content = %#v, want TestContent", messages[0].Contents[0])
+	}
+}
+
+func TestAgentSession_SerializePreservesState(t *testing.T) {
+	session := &agent.Session{}
+	session.Set("dog", struct {
+		Name string `json:"name"`
+	}{Name: "Fido"})
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		State map[string]struct {
+			Name string `json:"name"`
+		}
+	}
+	if err := json.Unmarshal(data, &document); err != nil {
+		t.Fatal(err)
+	}
+	if dog, ok := document.State["dog"]; !ok || dog.Name != "Fido" {
+		t.Fatalf("dog = (%#v, %v), want Fido", dog, ok)
+	}
+}
+
+func TestAgentSession_StateRoundtrips(t *testing.T) {
+	type animal struct {
+		Name string
+	}
+	session := &agent.Session{}
+	session.Set("dog", &animal{Name: "Fido"})
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored agent.Session
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
+	var dog *animal
+	if ok, err := restored.Get("dog", &dog); err != nil || !ok {
+		t.Fatalf("Get(dog) = (%v, %v)", ok, err)
+	}
+	if dog == nil || dog.Name != "Fido" {
+		t.Fatalf("dog = %#v, want Fido", dog)
+	}
+}
+
+type structuredPortAnimal struct {
+	ID       int    `json:"id"`
+	FullName string `json:"fullName"`
+	Species  string `json:"species"`
+}
+
+func TestAgent_ResponseFormatFromConfigReachesProvider(t *testing.T) {
+	format := jsonformat.MustFor[structuredPortAnimal]()
+	var captured agent.ResponseFormat
+	responses := agenttest.NewResponseBuilder(func(_ context.Context, _ []*message.Message, options ...agent.Option) {
+		captured, _ = agent.GetOption(options, agent.WithResponseFormat)
+	}).AddText("test")
+	runner := &agenttest.Runner{Responses: responses.Build()}
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{
+		RunOptions: []agent.Option{agent.WithResponseFormat(format)},
+	})
+	if _, err := a.RunMessage(t.Context(), message.NewText("Hello")).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if captured.Schema != format.Schema || !reflect.DeepEqual(captured, format) {
+		t.Fatalf("response format = %#v, want configured format %#v", captured, format)
+	}
+}
+
+func TestAgent_ResponseFormatFromRunReachesProvider(t *testing.T) {
+	format := jsonformat.MustFor[structuredPortAnimal]()
+	var captured agent.ResponseFormat
+	responses := agenttest.NewResponseBuilder(func(_ context.Context, _ []*message.Message, options ...agent.Option) {
+		captured, _ = agent.GetOption(options, agent.WithResponseFormat)
+	}).AddText("test")
+	runner := &agenttest.Runner{Responses: responses.Build()}
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{})
+	if _, err := a.RunMessage(t.Context(), message.NewText("Hello"), agent.WithResponseFormat(format)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if captured.Schema != format.Schema || !reflect.DeepEqual(captured, format) {
+		t.Fatalf("response format = %#v, want per-run format %#v", captured, format)
+	}
+}
+
+func TestAgent_ResponseFormatFromRunOverridesConfig(t *testing.T) {
+	initial := jsonformat.MustFor[structuredPortAnimal]()
+	invocation := jsonformat.MustFor[structuredPortAnimal]()
+	var captured agent.ResponseFormat
+	responses := agenttest.NewResponseBuilder(func(_ context.Context, _ []*message.Message, options ...agent.Option) {
+		captured, _ = agent.GetOption(options, agent.WithResponseFormat)
+	}).AddText("test")
+	runner := &agenttest.Runner{Responses: responses.Build()}
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{
+		RunOptions: []agent.Option{agent.WithResponseFormat(initial)},
+	})
+	if _, err := a.RunMessage(t.Context(), message.NewText("Hello"), agent.WithResponseFormat(invocation)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if captured.Schema != invocation.Schema || captured.Schema == initial.Schema || !reflect.DeepEqual(captured, invocation) {
+		t.Fatalf("response format = %#v, want invocation format %#v", captured, invocation)
+	}
+}
+
+func TestAgent_StructuredResponseRemainsAvailableAsText(t *testing.T) {
+	want := structuredPortAnimal{ID: 1, FullName: "Wally the Walrus", Species: "Walrus"}
+	data, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().AddText(string(data)).Build()}
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{
+		RunOptions: []agent.Option{agent.WithResponseFormat(jsonformat.MustFor[structuredPortAnimal]())},
+	})
+	response, err := a.RunMessage(t.Context(), message.NewText("Hello")).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got *structuredPortAnimal
+	if err := json.Unmarshal([]byte(response.String()), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || *got != want {
+		t.Fatalf("structured text = %#v, want %#v", got, want)
+	}
+}
+
+func TestAgent_StructuredOutputSetsSchemaAndDecodesResult(t *testing.T) {
+	want := structuredPortAnimal{ID: 1, FullName: "Tigger", Species: "Tiger"}
+	expectedFormat := jsonformat.MustFor[structuredPortAnimal]()
+	data, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var captured agent.ResponseFormat
+	responses := agenttest.NewResponseBuilder(func(_ context.Context, _ []*message.Message, options ...agent.Option) {
+		captured, _ = agent.GetOption(options, agent.WithResponseFormat)
+	}).AddText(string(data))
+	runner := &agenttest.Runner{Responses: responses.Build()}
+	a := agent.New(agent.ProviderConfig{
+		Run: runner.Run,
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return jsonformat.ForType(reflect.TypeOf(v))
+		},
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
+			f, err := jsonformat.FromResponseFormat(format)
+			if err != nil {
+				return err
+			}
+			return f.UnmarshalStructuredOutput(data, v)
+		},
+	}, agent.Config{})
+	var result structuredPortAnimal
+	if _, err := a.RunMessage(t.Context(), message.NewText("Hello"), agent.WithStructuredOutput(&result)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(captured.Schema, expectedFormat.Schema) {
+		t.Fatalf("schema = %#v, want %#v", captured.Schema, expectedFormat.Schema)
+	}
+	if result != want {
+		t.Fatalf("structured output = %#v, want %#v", result, want)
+	}
+}
+
+func testAgentRunWithCustomOptions(t *testing.T, inputKind string, streaming, structured bool) {
+	t.Helper()
+	session := agenttest.CreateSession()
+	input := message.NewText("Test message")
+	calls := 0
+	run := func(_ context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		calls++
+		if got, ok := agent.GetOption(options, agent.WithSession); !ok || got != session {
+			t.Errorf("session = (%p, %v), want %p", got, ok, session)
+		}
+		switch inputKind {
+		case "text":
+			if !slices.ContainsFunc(messages, func(m *message.Message) bool { return m.String() == "Test message" }) {
+				t.Error("provider did not receive Test message")
+			}
+		case "message":
+			if !slices.Contains(messages, input) {
+				t.Error("provider did not receive the supplied message")
+			}
+		}
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if streaming {
+				if yield(&agent.ResponseUpdate{Contents: message.Contents{&message.TextContent{Text: "Hello"}}}, nil) {
+					yield(&agent.ResponseUpdate{Contents: message.Contents{&message.TextContent{Text: " World"}}}, nil)
+				}
+				return
+			}
+			text := "Response"
+			if structured {
+				text = `{"id":2,"fullName":"Tigger","species":"Tiger"}`
+			}
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: text}}}, nil)
+		}
+	}
+	a := agent.New(agent.ProviderConfig{
+		Run: run,
+		Format: func(v any) (agent.ResponseFormat, error) {
+			return jsonformat.ForType(reflect.TypeOf(v))
+		},
+		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
+			f, err := jsonformat.FromResponseFormat(format)
+			if err != nil {
+				return err
+			}
+			return f.UnmarshalStructuredOutput(data, v)
+		},
+	}, agent.Config{})
+	options := []agent.Option{agent.WithSession(session), agent.Stream(streaming)}
+	var result structuredPortAnimal
+	if structured {
+		options = append(options, agent.WithStructuredOutput(&result))
+	}
+	var response agent.ResponseStream
+	switch inputKind {
+	case "none":
+		response = a.Run(t.Context(), nil, options...)
+	case "text":
+		response = a.RunText(t.Context(), "Test message", options...)
+	case "message":
+		response = a.RunMessage(t.Context(), input, options...)
+	case "messages":
+		response = a.Run(t.Context(), []*message.Message{message.NewText("Message 1"), message.NewText("Message 2")}, options...)
+	default:
+		t.Fatalf("unknown input kind %q", inputKind)
+	}
+	if streaming {
+		updates := 0
+		for _, err := range response {
+			if err != nil {
+				t.Fatal(err)
+			}
+			updates++
+		}
+		if updates == 0 {
+			t.Fatal("expected streaming updates")
+		}
+	} else {
+		collected, err := response.Collect()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if collected == nil || len(collected.Messages) != 1 {
+			t.Fatalf("response = %#v, want one message", collected)
+		}
+		if structured && result.FullName != "Tigger" {
+			t.Fatalf("structured name = %q, want Tigger", result.FullName)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", calls)
+	}
+}
+
+func TestAgent_RunWithOptionsAndSession(t *testing.T) {
+	testAgentRunWithCustomOptions(t, "none", false, false)
+}
+
+func TestAgent_RunTextWithOptionsAndSession(t *testing.T) {
+	testAgentRunWithCustomOptions(t, "text", false, false)
+}
+
+func TestAgent_RunMessageWithOptionsAndSession(t *testing.T) {
+	testAgentRunWithCustomOptions(t, "message", false, false)
+}
+
+func TestAgent_RunMessagesWithOptionsAndSession(t *testing.T) {
+	testAgentRunWithCustomOptions(t, "messages", false, false)
+}
+
+func TestAgent_StreamWithOptionsAndSession(t *testing.T) {
+	testAgentRunWithCustomOptions(t, "none", true, false)
+}
+
+func TestAgent_StreamTextWithOptionsAndSession(t *testing.T) {
+	testAgentRunWithCustomOptions(t, "text", true, false)
+}
+
+func TestAgent_StreamMessageWithOptionsAndSession(t *testing.T) {
+	testAgentRunWithCustomOptions(t, "message", true, false)
+}
+
+func TestAgent_StreamMessagesWithOptionsAndSession(t *testing.T) {
+	testAgentRunWithCustomOptions(t, "messages", true, false)
+}
+
+func TestAgent_RunStructuredWithOptionsAndSession(t *testing.T) {
+	testAgentRunWithCustomOptions(t, "none", false, true)
+}
+
+func TestAgent_RunStructuredTextWithOptionsAndSession(t *testing.T) {
+	testAgentRunWithCustomOptions(t, "text", false, true)
+}
+
+func TestAgent_RunStructuredMessageWithOptionsAndSession(t *testing.T) {
+	testAgentRunWithCustomOptions(t, "message", false, true)
+}
+
+func TestAgent_RunStructuredMessagesWithOptionsAndSession(t *testing.T) {
+	testAgentRunWithCustomOptions(t, "messages", false, true)
+}
+
+func testAgentChatOptionPassthrough(t *testing.T, initial, invocation []agent.Option, want *openai.ChatCompletionNewParams, instructions string) {
+	t.Helper()
+	calls := 0
+	responses := agenttest.NewResponseBuilder(func(_ context.Context, _ []*message.Message, options ...agent.Option) {
+		calls++
+		got, ok := agent.GetOption(options, openaiprovider.ChatCompletionNewParams)
+		if want == nil {
+			if ok {
+				t.Errorf("unexpected model parameters: %#v", got)
+			}
+		} else if !ok || !reflect.DeepEqual(got, *want) {
+			t.Errorf("model parameters = (%#v, %v), want %#v", got, ok, *want)
+		}
+		if got := strings.Join(slices.Collect(agent.AllOptions(options, agent.WithInstructions)), "\n"); got != instructions {
+			t.Errorf("instructions = %q, want %q", got, instructions)
+		}
+	}).AddText("response")
+	runner := &agenttest.Runner{Responses: responses.Build()}
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{RunOptions: initial})
+	if _, err := a.RunMessage(t.Context(), message.NewText("test"), invocation...).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", calls)
+	}
+}
+
+func TestAgent_RunWithModelParametersUsesTemperature(t *testing.T) {
+	params := openai.ChatCompletionNewParams{Temperature: openai.Float(0.5)}
+	testAgentChatOptionPassthrough(t, nil, []agent.Option{openaiprovider.ChatCompletionNewParams(params)}, &params, "")
+}
+
+func TestAgent_OptionsUseConfiguredParametersWithoutOverrides(t *testing.T) {
+	params := openai.ChatCompletionNewParams{MaxCompletionTokens: openai.Int(100), Temperature: openai.Float(0.7)}
+	testAgentChatOptionPassthrough(t,
+		[]agent.Option{openaiprovider.ChatCompletionNewParams(params), agent.WithInstructions("test instructions")},
+		nil, &params, "test instructions")
+}
+
+func TestAgent_OptionsUseConfiguredInstructionsWithoutOverrides(t *testing.T) {
+	testAgentChatOptionPassthrough(t, []agent.Option{agent.WithInstructions("test instructions")}, nil, nil, "test instructions")
+}
+
+func TestAgent_OptionsUseRunParametersWithoutDefaults(t *testing.T) {
+	params := openai.ChatCompletionNewParams{MaxCompletionTokens: openai.Int(200), Temperature: openai.Float(0.3)}
+	testAgentChatOptionPassthrough(t, nil,
+		[]agent.Option{openaiprovider.ChatCompletionNewParams(params), agent.WithInstructions("test instructions")},
+		&params, "test instructions")
+}
+
+func TestAgent_OptionsLeaveModelParametersUnset(t *testing.T) {
+	testAgentChatOptionPassthrough(t, nil, nil, nil, "")
+}
+
+func TestAgent_OptionsCombineConfiguredAndRunTools(t *testing.T) {
+	agentTool := functool.MustNew(functool.Config{Name: "agent_tool"}, func(context.Context, struct{}) (string, error) {
+		return "agent tool", nil
+	})
+	requestTool := functool.MustNew(functool.Config{Name: "request_tool"}, func(context.Context, struct{}) (string, error) {
+		return "request tool", nil
+	})
+	var captured []tool.Tool
+	responses := agenttest.NewResponseBuilder(func(_ context.Context, _ []*message.Message, options ...agent.Option) {
+		captured = slices.Collect(agent.AllOptions(options, agent.WithTool))
+	}).AddText("response")
+	runner := &agenttest.Runner{Responses: responses.Build()}
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{
+		Tools: []tool.Tool{agentTool}, RunOptions: []agent.Option{agent.WithInstructions("test instructions")},
+	})
+	if _, err := a.RunMessage(t.Context(), message.NewText("test"), agent.WithTool(requestTool)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 2 || !slices.Contains(captured, tool.Tool(agentTool)) || !slices.Contains(captured, tool.Tool(requestTool)) {
+		t.Fatalf("tools = %#v, want configured and request tools", captured)
+	}
+}
+
+func TestAgent_OptionsRetainConfiguredToolsWhenRunHasNone(t *testing.T) {
+	agentTool := functool.MustNew(functool.Config{Name: "agent_tool"}, func(context.Context, struct{}) (string, error) {
+		return "agent tool", nil
+	})
+	var captured []tool.Tool
+	responses := agenttest.NewResponseBuilder(func(_ context.Context, _ []*message.Message, options ...agent.Option) {
+		captured = slices.Collect(agent.AllOptions(options, agent.WithTool))
+	}).AddText("response")
+	runner := &agenttest.Runner{Responses: responses.Build()}
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{
+		Tools: []tool.Tool{agentTool}, RunOptions: []agent.Option{agent.WithInstructions("test instructions")},
+	})
+	options := openaiprovider.ChatCompletionNewParams(openai.ChatCompletionNewParams{MaxCompletionTokens: openai.Int(100)})
+	if _, err := a.RunMessage(t.Context(), message.NewText("test"), options).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 1 || captured[0] != agentTool {
+		t.Fatalf("tools = %#v, want configured tool", captured)
+	}
+}
+
+func newAnonymousMiddlewarePortAgent(middlewares ...agent.Middleware) *agent.Agent {
+	return agent.New(agent.ProviderConfig{
+		Run: func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				texts := []string{"Test response"}
+				if stream, _ := agent.GetOption(options, agent.Stream); stream {
+					texts = []string{"Response 1", "Response 2"}
+				}
+				for _, text := range texts {
+					if !yield(&agent.ResponseUpdate{
+						Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: text}},
+					}, nil) {
+						return
+					}
+				}
+			}
+		},
+	}, agent.Config{Middlewares: middlewares})
+}
+
+func anonymousMiddlewareTrace(trace *[]string, name string) agent.Middleware {
+	return agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			*trace = append(*trace, name+"-Pre")
+			for update, err := range next(ctx, messages, options...) {
+				if !yield(update, err) || err != nil {
+					return
+				}
+			}
+			*trace = append(*trace, name+"-Post")
+		}
+	})
+}
+
+func TestAnonymousMiddleware_SharedFunctionRunsInBothModes(t *testing.T) {
+	calls := 0
+	a := newAnonymousMiddlewarePortAgent(agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		calls++
+		return next(ctx, messages, options...)
+	}))
+	messages := []*message.Message{message.NewText("Test message")}
+	session := agenttest.CreateSession()
+	if _, err := a.Run(t.Context(), messages, agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	updates := 0
+	for _, err := range a.Run(t.Context(), messages, agent.WithSession(session), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		updates++
+	}
+	if calls != 2 || updates != 2 {
+		t.Fatalf("middleware calls/updates = %d/%d, want 2/2", calls, updates)
+	}
+}
+
+func testAnonymousMiddlewareForcedMode(t *testing.T, innerStream, outerStream bool) {
+	t.Helper()
+	called := false
+	a := newAnonymousMiddlewarePortAgent(agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		called = true
+		return next(ctx, messages, append(slices.Clone(options), agent.Stream(innerStream))...)
+	}))
+	response := a.Run(t.Context(), []*message.Message{message.NewText("Test message")},
+		agent.WithSession(agenttest.CreateSession()), agent.Stream(outerStream))
+	if outerStream {
+		updates := 0
+		for _, err := range response {
+			if err != nil {
+				t.Fatal(err)
+			}
+			updates++
+		}
+		if updates == 0 || innerStream && updates != 2 {
+			t.Fatalf("updates = %d, want provider updates for the selected mode", updates)
+		}
+	} else if result, err := response.Collect(); err != nil || result == nil {
+		t.Fatalf("response = (%#v, %v), want a collected response", result, err)
+	}
+	if !called {
+		t.Fatal("configured middleware was not called")
+	}
+}
+
+func TestAnonymousMiddleware_StreamingCallbackSupportsCollectedRuns(t *testing.T) {
+	testAnonymousMiddlewareForcedMode(t, true, false)
+}
+
+func TestAnonymousMiddleware_StreamingCallbackSupportsStreamingRuns(t *testing.T) {
+	testAnonymousMiddlewareForcedMode(t, true, true)
+}
+
+func TestAnonymousMiddleware_NonStreamingCallbackSupportsStreamingRuns(t *testing.T) {
+	testAnonymousMiddlewareForcedMode(t, false, true)
+}
+
+func TestAnonymousMiddleware_UsesModeSpecificLogic(t *testing.T) {
+	var runCalled, streamingCalled bool
+	a := newAnonymousMiddlewarePortAgent(agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		if stream, _ := agent.GetOption(options, agent.Stream); stream {
+			streamingCalled = true
+		} else {
+			runCalled = true
+		}
+		return next(ctx, messages, options...)
+	}))
+	messages := []*message.Message{message.NewText("Test message")}
+	session := agenttest.CreateSession()
+	if _, err := a.Run(t.Context(), messages, agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range a.Run(t.Context(), messages, agent.WithSession(session), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !runCalled || !streamingCalled {
+		t.Fatalf("run/streaming callbacks = %v/%v, want both", runCalled, streamingCalled)
+	}
+}
+
+func TestAnonymousMiddleware_SharedFunctionPreservesError(t *testing.T) {
+	want := errors.New("Test exception")
+	a := newAnonymousMiddlewarePortAgent(agent.MiddlewareFunc(func(_ agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return failRunFunc(want)(ctx, messages, options...)
+	}))
+	if _, err := a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, agent.WithSession(agenttest.CreateSession())).Collect(); err != want {
+		t.Fatalf("error = %v, want original error %v", err, want)
+	}
+}
+
+func TestAnonymousMiddleware_StreamingFunctionPreservesError(t *testing.T) {
+	want := errors.New("Test exception")
+	a := newAnonymousMiddlewarePortAgent(agent.MiddlewareFunc(func(_ agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return failRunFunc(want)(ctx, messages, options...)
+	}))
+	var got error
+	for _, err := range a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, agent.WithSession(agenttest.CreateSession()), agent.Stream(true)) {
+		if err != nil {
+			got = err
+			break
+		}
+	}
+	if got != want {
+		t.Fatalf("error = %v, want original error %v", got, want)
+	}
+}
+
+func TestAnonymousMiddleware_ContextValueRemainsScopedToRun(t *testing.T) {
+	type key struct{}
+	ctx := context.WithValue(t.Context(), key{}, 0)
+	captured := 0
+	middleware := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			ctx = context.WithValue(ctx, key{}, 42)
+			for update, err := range next(ctx, messages, options...) {
+				if !yield(update, err) {
+					return
+				}
+			}
+			captured = ctx.Value(key{}).(int)
+		}
+	})
+	responses := agenttest.NewResponseBuilder(func(ctx context.Context, _ []*message.Message, _ ...agent.Option) {
+		if got := ctx.Value(key{}); got != 42 {
+			t.Errorf("provider context value = %v, want 42", got)
+		}
+	}).AddText("Test response")
+	runner := &agenttest.Runner{Responses: responses.Build()}
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{Middlewares: []agent.Middleware{middleware}})
+	if ctx.Value(key{}) != 0 {
+		t.Fatal("caller context did not start at zero")
+	}
+	if _, err := a.Run(ctx, []*message.Message{message.NewText("Test message")}, agent.WithSession(agenttest.CreateSession())).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if ctx.Value(key{}) != 0 || captured != 42 {
+		t.Fatalf("caller/middleware context values = %v/%d, want 0/42", ctx.Value(key{}), captured)
+	}
+}
+
+func TestAnonymousMiddleware_NestedOrder(t *testing.T) {
+	var trace []string
+	a := newAnonymousMiddlewarePortAgent(
+		anonymousMiddlewareTrace(&trace, "Inner"),
+		anonymousMiddlewareTrace(&trace, "Middle"),
+		anonymousMiddlewareTrace(&trace, "Outer"),
+	)
+	if _, err := a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, agent.WithSession(agenttest.CreateSession())).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"Inner-Pre", "Middle-Pre", "Outer-Pre", "Outer-Post", "Middle-Post", "Inner-Post"}
+	if !slices.Equal(trace, want) {
+		t.Fatalf("trace = %v, want %v", trace, want)
+	}
+}
+
+func TestAnonymousMiddleware_MiddleErrorStopsOuterMiddleware(t *testing.T) {
+	want := errors.New("Middle middleware error")
+	outerExecuted, innerExecuted := false, false
+	outer := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		outerExecuted = true
+		return next(ctx, messages, options...)
+	})
+	middle := agent.MiddlewareFunc(func(_ agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return failRunFunc(want)(ctx, messages, options...)
+	})
+	inner := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		innerExecuted = true
+		return next(ctx, messages, options...)
+	})
+	a := newAnonymousMiddlewarePortAgent(inner, middle, outer)
+	_, err := a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, agent.WithSession(agenttest.CreateSession())).Collect()
+	if err != want || !innerExecuted || outerExecuted {
+		t.Fatalf("error/inner/outer = %v/%v/%v, want original error/true/false", err, innerExecuted, outerExecuted)
+	}
+}
+
+func TestAnonymousMiddleware_NestedStreamingErrorIsPreserved(t *testing.T) {
+	want := errors.New("Streaming middleware error")
+	outer := agent.MiddlewareFunc(func(_ agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return failRunFunc(want)(ctx, messages, options...)
+	})
+	inner := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return next(ctx, messages, options...)
+	})
+	a := newAnonymousMiddlewarePortAgent(inner, outer)
+	var got error
+	for _, err := range a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, agent.WithSession(agenttest.CreateSession()), agent.Stream(true)) {
+		if err != nil {
+			got = err
+			break
+		}
+	}
+	if got != want {
+		t.Fatalf("error = %v, want original error %v", got, want)
+	}
+}
+
+func TestAnonymousMiddleware_RegistrationOrder(t *testing.T) {
+	var trace []string
+	a := newAnonymousMiddlewarePortAgent(anonymousMiddlewareTrace(&trace, "First"), anonymousMiddlewareTrace(&trace, "Second"))
+	if _, err := a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, agent.WithSession(agenttest.CreateSession())).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"First-Pre", "Second-Pre", "Second-Post", "First-Post"}
+	if !slices.Equal(trace, want) {
+		t.Fatalf("trace = %v, want %v", trace, want)
+	}
+}
+
+func TestAnonymousMiddleware_ModifiedMessagesReachFollowingMiddleware(t *testing.T) {
+	var capturedMessages []*message.Message
+	var capturedOptions []agent.Option
+	modify := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		added := message.NewText("Added by first middleware")
+		added.Role = message.RoleSystem
+		return next(ctx, append(slices.Clone(messages), added), slices.Clone(options)...)
+	})
+	capture := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		capturedMessages, capturedOptions = messages, options
+		return next(ctx, messages, options...)
+	})
+	a := newAnonymousMiddlewarePortAgent(modify, capture)
+	if _, err := a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, agent.WithSession(agenttest.CreateSession())).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if capturedMessages == nil || capturedOptions == nil || len(capturedMessages) != 2 {
+		t.Fatalf("captured messages/options = %#v/%#v, want two messages and non-nil options", capturedMessages, capturedOptions)
+	}
+	if !slices.ContainsFunc(capturedMessages, func(m *message.Message) bool { return m.String() == "Added by first middleware" }) {
+		t.Fatal("following middleware did not receive the added message")
+	}
+}
+
+func TestAnonymousMiddleware_OuterMiddlewareObservesInnerError(t *testing.T) {
+	want := errors.New("Test exception from middleware")
+	var trace []string
+	first := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			trace = append(trace, "First-Pre")
+			for update, err := range next(ctx, messages, options...) {
+				if err != nil {
+					trace = append(trace, "First-Post-Exception")
+					yield(update, err)
+					return
+				}
+				if !yield(update, nil) {
+					return
+				}
+			}
+			trace = append(trace, "First-Post-Success")
+		}
+	})
+	second := agent.MiddlewareFunc(func(_ agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		trace = append(trace, "Second-Pre")
+		return failRunFunc(want)(ctx, messages, options...)
+	})
+	a := newAnonymousMiddlewarePortAgent(first, second)
+	_, err := a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, agent.WithSession(agenttest.CreateSession())).Collect()
+	expectedTrace := []string{"First-Pre", "Second-Pre", "First-Post-Exception"}
+	if err != want || !slices.Equal(trace, expectedTrace) {
+		t.Fatalf("error/trace = %v/%v, want original error/%v", err, trace, expectedTrace)
+	}
+}
+
+func TestAnonymousMiddleware_CancellationReachesEveryLayer(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	var captured []context.Context
+	capture := agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		captured = append(captured, ctx)
+		return next(ctx, messages, options...)
+	})
+	run := func(ctx context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		if ctx.Err() != context.Canceled {
+			t.Error("provider did not receive canceled context")
+		}
+		return func(yield func(*agent.ResponseUpdate, error) bool) { yield(nil, context.Canceled) }
+	}
+	a := agent.New(agent.ProviderConfig{Run: run}, agent.Config{Middlewares: []agent.Middleware{capture, capture}})
+	if _, err := a.Run(ctx, []*message.Message{message.NewText("Test message")}, agent.WithSession(agenttest.CreateSession())).Collect(); err != context.Canceled {
+		t.Fatalf("error = %v, want context.Canceled", err)
+	}
+	if len(captured) != 2 {
+		t.Fatalf("captured contexts = %d, want 2", len(captured))
+	}
+	for _, got := range captured {
+		if got.Done() != ctx.Done() {
+			t.Error("middleware received a different cancellation signal")
+		}
+	}
+}
+
+func TestAgent_ConfiguredMiddlewareHasCurrentAgentAndSessionInBothModes(t *testing.T) {
+	session := agenttest.CreateSession()
+	seen := map[bool]bool{}
+	var a *agent.Agent
+	middleware := agent.MiddlewareFunc(func(_ agent.RunFunc, ctx context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		if current, ok := agent.AgentFromContext(ctx); !ok || current != a {
+			t.Errorf("current agent = (%p, %v), want %p", current, ok, a)
+		}
+		if current, ok := agent.GetOption(options, agent.WithSession); !ok || current != session {
+			t.Errorf("current session = (%p, %v), want %p", current, ok, session)
+		}
+		stream, _ := agent.GetOption(options, agent.Stream)
+		seen[stream] = true
+		return func(func(*agent.ResponseUpdate, error) bool) {}
+	})
+	a = newAnonymousMiddlewarePortAgent(middleware)
+	if _, err := a.RunText(t.Context(), "Input message", agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range a.RunText(t.Context(), "Input message", agent.WithSession(session), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !seen[false] || !seen[true] {
+		t.Fatalf("executed modes = %v, want non-streaming and streaming", seen)
+	}
+}
+
+func TestAnonymousMiddleware_SeparateLogicPreservesLayerOrder(t *testing.T) {
+	var trace []string
+	layer := func(name string) agent.Middleware {
+		return agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			mode := "Run"
+			if stream, _ := agent.GetOption(options, agent.Stream); stream {
+				mode = "Streaming"
+			}
+			trace = append(trace, name+"-"+mode)
+			return next(ctx, messages, options...)
+		})
+	}
+	a := newAnonymousMiddlewarePortAgent(layer("Middle"), layer("Outer"))
+	messages := []*message.Message{message.NewText("Test message")}
+	session := agenttest.CreateSession()
+	if _, err := a.Run(t.Context(), messages, agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range a.Run(t.Context(), messages, agent.WithSession(session), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, event := range []string{"Middle-Run", "Outer-Run", "Middle-Streaming", "Outer-Streaming"} {
+		if !slices.Contains(trace, event) {
+			t.Errorf("missing %s in %v", event, trace)
+		}
+	}
+	if slices.Index(trace, "Middle-Run") >= slices.Index(trace, "Outer-Run") ||
+		slices.Index(trace, "Middle-Streaming") >= slices.Index(trace, "Outer-Streaming") {
+		t.Fatalf("middle middleware did not precede outer middleware: %v", trace)
+	}
+}
+
+func TestAnonymousMiddleware_SeparateLogicPreservesEntryAndExitOrder(t *testing.T) {
+	var runTrace, streamingTrace []string
+	layer := func(name string) agent.Middleware {
+		return agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			mode, trace := "Run", &runTrace
+			if stream, _ := agent.GetOption(options, agent.Stream); stream {
+				mode, trace = "Streaming", &streamingTrace
+			}
+			return anonymousMiddlewareTrace(trace, name+"-"+mode).Run(next, ctx, messages, options...)
+		})
+	}
+	a := newAnonymousMiddlewarePortAgent(layer("First"), layer("Second"))
+	messages := []*message.Message{message.NewText("Test message")}
+	session := agenttest.CreateSession()
+	if _, err := a.Run(t.Context(), messages, agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range a.Run(t.Context(), messages, agent.WithSession(session), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantRun := []string{"First-Run-Pre", "Second-Run-Pre", "Second-Run-Post", "First-Run-Post"}
+	wantStreaming := []string{"First-Streaming-Pre", "Second-Streaming-Pre", "Second-Streaming-Post", "First-Streaming-Post"}
+	if !slices.Equal(runTrace, wantRun) || !slices.Equal(streamingTrace, wantStreaming) {
+		t.Fatalf("run/streaming traces = %v/%v, want %v/%v", runTrace, streamingTrace, wantRun, wantStreaming)
+	}
+}
+
+func testAgentUsesOriginalProvider(t *testing.T, stream bool) {
+	t.Helper()
+	calls := 0
+	a := agent.New(agent.ProviderConfig{
+		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			calls++
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				if stream {
+					for _, text := range []string{"Original ", "streaming"} {
+						if !yield(&agent.ResponseUpdate{Contents: message.Contents{&message.TextContent{Text: text}}}, nil) {
+							return
+						}
+					}
+				} else {
+					yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "Original response"}}}, nil)
+				}
+			}
+		},
+	}, agent.Config{})
+	response := a.Run(t.Context(), []*message.Message{message.NewText("Test message")}, agent.Stream(stream))
+	if stream {
+		count := 0
+		for _, err := range response {
+			if err != nil {
+				t.Fatal(err)
+			}
+			count++
+		}
+		if count == 0 {
+			t.Fatal("expected streaming responses")
+		}
+	} else if result, err := response.Collect(); err != nil || result == nil {
+		t.Fatalf("response = (%#v, %v), want a response from the original provider", result, err)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", calls)
+	}
+}
+
+func TestAgent_DefaultRunOptionsUseOriginalProvider(t *testing.T) {
+	testAgentUsesOriginalProvider(t, false)
+}
+
+func TestAgent_DefaultStreamingRunOptionsUseOriginalProvider(t *testing.T) {
+	testAgentUsesOriginalProvider(t, true)
+}
+
+func testAgentConstructionSettings(t *testing.T, cfg agent.Config, name, description, instructions string, tools []tool.Tool) {
+	t.Helper()
+	var capturedInstructions []string
+	var capturedTools []tool.Tool
+	responses := agenttest.NewResponseBuilder(func(_ context.Context, _ []*message.Message, options ...agent.Option) {
+		capturedInstructions = slices.Collect(agent.AllOptions(options, agent.WithInstructions))
+		capturedTools = slices.Collect(agent.AllOptions(options, agent.WithTool))
+	}).AddText("response")
+	runner := &agenttest.Runner{Responses: responses.Build()}
+	provider := agent.ProviderConfig{Run: runner.Run}
+	a := agent.New(provider, cfg)
+	if a == nil || a.Name() != name || a.Description() != description {
+		t.Fatalf("constructed agent = %#v, want name %q and description %q", a, name, description)
+	}
+	if _, err := a.RunMessage(t.Context(), message.NewText("inspect configuration")).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(capturedInstructions, "\n"); got != instructions {
+		t.Fatalf("configured instructions = %q, want %q", got, instructions)
+	}
+	if !slices.Equal(capturedTools, tools) {
+		t.Fatalf("configured tools = %#v, want %#v", capturedTools, tools)
+	}
+}
+
+func TestAgentConstruction_PreservesBasicSettings(t *testing.T) {
+	cfg := agent.Config{
+		Name: "TestAgent", Description: "Test description",
+		RunOptions: []agent.Option{agent.WithInstructions("Test instructions")},
+	}
+	testAgentConstructionSettings(t, cfg, "TestAgent", "Test description", "Test instructions", nil)
+}
+
+func TestAgentConstruction_PreservesConfiguredTools(t *testing.T) {
+	configuredTool := &stubTool{name: "configured-tool"}
+	tools := []tool.Tool{configuredTool}
+	testAgentConstructionSettings(t, agent.Config{Tools: tools}, "", "", "", tools)
+}
+
+func TestAgentConstruction_PreservesSettingsFromOptions(t *testing.T) {
+	options := agent.Config{
+		Name: "AgentWithOptions", Description: "Desc",
+		RunOptions: []agent.Option{agent.WithInstructions("Instr")},
+	}
+	testAgentConstructionSettings(t, options, "AgentWithOptions", "Desc", "Instr", nil)
+}
+
+func TestAgentConstruction_EmptySettingsCreateMinimalAgent(t *testing.T) {
+	testAgentConstructionSettings(t, agent.Config{}, "", "", "", nil)
+}
+
+func TestAgentConstruction_RequiresProvider(t *testing.T) {
+	defer func() {
+		if got := recover(); got == nil {
+			t.Fatal("expected a panic for a missing provider")
+		}
+	}()
+	agent.New(agent.ProviderConfig{}, agent.Config{
+		RunOptions: []agent.Option{agent.WithInstructions("instructions")},
+	})
+}
+
+func TestAgent_CreateSession_UsesConfiguredServiceID(t *testing.T) {
+	var runner agenttest.Runner
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{})
+	session, err := a.CreateSession(t.Context(), agent.WithServiceID("test_conversation_id"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := session.ServiceID(); got != "test_conversation_id" {
+		t.Fatalf("ServiceID() = %q, want test_conversation_id", got)
 	}
 }
 

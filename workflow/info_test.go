@@ -91,6 +91,35 @@ func runEdgeInfoMatch(t *testing.T, name string, edge, comparator workflow.Edge,
 	}
 }
 
+func TestEdgeInfos_AllConnectionCases(t *testing.T) {
+	condition := func(any) bool { return true }
+	assigner := func(int, any) iter.Seq[int] { return func(func(int) bool) {} }
+	d1, d2, d3, dc := directEdge(source(1), sink(2), nil), directEdge(source(1), sink(2), nil), directEdge(source(3), sink(4), nil), directEdge(source(3), sink(4), condition)
+	f1 := fanOutEdge(source(1), []string{sink(2), sink(3), sink(4)}, nil)
+	f2 := fanOutEdge(source(1), []string{sink(2), sink(3), sink(4)}, nil)
+	f3 := fanOutEdge(source(1), []string{sink(3), sink(4), sink(2)}, nil)
+	f4 := fanOutEdge(source(1), []string{sink(2), sink(3), sink(5)}, nil)
+	f5 := fanOutEdge(source(2), []string{sink(2), sink(3), sink(4)}, nil)
+	fa := fanOutEdge(source(1), []string{sink(2), sink(3), sink(4)}, assigner)
+	i1 := fanInEdge([]string{source(1), source(2), source(3)}, sink(1))
+	i2 := fanInEdge([]string{source(1), source(2), source(3)}, sink(1))
+	i3 := fanInEdge([]string{source(2), source(3), source(1)}, sink(1))
+	i4 := fanInEdge([]string{source(1), source(2), source(4)}, sink(1))
+	i5 := fanInEdge([]string{source(1), source(2), source(3)}, sink(2))
+	for index, test := range []struct {
+		edge, other workflow.Edge
+		want        bool
+	}{
+		{d1, d1, true}, {d1, d2, true}, {d1, d3, false}, {dc, dc, true}, {d2, dc, false}, {d3, dc, false},
+		{f1, f1, true}, {f1, f2, true}, {f1, f3, false}, {f1, f4, false}, {f1, f5, false}, {fa, fa, true},
+		{i1, i1, true}, {i1, i2, true}, {i1, i3, false}, {i1, i4, false}, {i1, i5, false},
+	} {
+		test.edge.Index = index * 2
+		test.other.Index = index*2 + 1
+		runEdgeInfoMatch(t, itoa(index), test.edge, test.other, test.want)
+	}
+}
+
 func TestEdgeInfo_DirectEdges(t *testing.T) {
 	always := func(any) bool { return true }
 

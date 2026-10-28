@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"maps"
 	"reflect"
 	"testing"
 	"time"
@@ -758,6 +759,211 @@ func TestToolApprovalRequestContent_AlwaysApproveSnapshotsAdditionalProperties(t
 			t.Fatalf("expected response additional properties to be snapshotted, got %v", response.AdditionalProperties["request"])
 		}
 	})
+}
+
+func newAlwaysApprovalTestRequest() *message.ToolApprovalRequestContent {
+	return &message.ToolApprovalRequestContent{
+		RequestID: "req1",
+		ToolCall:  &message.FunctionCallContent{CallID: "call1", Name: "MyTool"},
+	}
+}
+
+func TestAlwaysApproveToolResponse_DisablesArgumentSpecificApproval(t *testing.T) {
+	result := newAlwaysApprovalTestRequest().AlwaysApproveToolResponse()
+	if result.AlwaysApproveToolWithArguments {
+		t.Fatal("tool-level approval must not enable argument-specific approval")
+	}
+}
+
+func TestAlwaysApproveToolResponse_ApprovesInnerResponse(t *testing.T) {
+	result := newAlwaysApprovalTestRequest().AlwaysApproveToolResponse()
+	if !result.InnerResponse.Approved {
+		t.Fatal("inner response must approve the request")
+	}
+}
+
+func TestAlwaysApproveToolResponse_PreservesRequestID(t *testing.T) {
+	request := newAlwaysApprovalTestRequest()
+	request.RequestID = "custom-request-id"
+	result := request.AlwaysApproveToolResponse()
+	if result.InnerResponse.RequestID != "custom-request-id" {
+		t.Fatalf("request ID = %q, want custom-request-id", result.InnerResponse.RequestID)
+	}
+}
+
+func TestAlwaysApproveToolResponse_PreservesToolCall(t *testing.T) {
+	result := newAlwaysApprovalTestRequest().AlwaysApproveToolResponse()
+	call, ok := result.InnerResponse.ToolCall.(*message.FunctionCallContent)
+	if !ok || call.Name != "MyTool" {
+		t.Fatalf("tool call = %#v, want function MyTool", result.InnerResponse.ToolCall)
+	}
+}
+
+func TestAlwaysApproveToolResponse_DefaultReasonIsEmpty(t *testing.T) {
+	result := newAlwaysApprovalTestRequest().AlwaysApproveToolResponse()
+	if result.InnerResponse.Reason != "" {
+		t.Fatalf("reason = %q, want empty", result.InnerResponse.Reason)
+	}
+}
+
+func TestAlwaysApproveToolWithArgumentsResponse_EnablesArgumentSpecificApproval(t *testing.T) {
+	result := newAlwaysApprovalTestRequest().AlwaysApproveToolWithArgumentsResponse()
+	if !result.AlwaysApproveToolWithArguments {
+		t.Fatal("argument-specific approval must be enabled")
+	}
+}
+
+func TestAlwaysApproveToolWithArgumentsResponse_DisablesToolLevelApproval(t *testing.T) {
+	result := newAlwaysApprovalTestRequest().AlwaysApproveToolWithArgumentsResponse()
+	if result.AlwaysApproveTool {
+		t.Fatal("argument-specific approval must not enable tool-level approval")
+	}
+}
+
+func TestAlwaysApproveToolWithArgumentsResponse_ApprovesInnerResponse(t *testing.T) {
+	result := newAlwaysApprovalTestRequest().AlwaysApproveToolWithArgumentsResponse()
+	if !result.InnerResponse.Approved {
+		t.Fatal("inner response must approve the request")
+	}
+}
+
+func TestAlwaysApproveToolResponse_ImplementsContent(t *testing.T) {
+	result := any(newAlwaysApprovalTestRequest().AlwaysApproveToolResponse())
+	if _, ok := result.(message.Content); !ok {
+		t.Fatalf("response %T does not implement message.Content", result)
+	}
+}
+
+func TestAlwaysApproveToolWithArgumentsResponse_PreservesArguments(t *testing.T) {
+	request := &message.ToolApprovalRequestContent{
+		RequestID: "req1",
+		ToolCall: &message.FunctionCallContent{
+			CallID: "call1", Name: "ReadFile", Arguments: `{"path":"test.txt","count":5}`,
+		},
+	}
+	result := request.AlwaysApproveToolWithArgumentsResponse()
+	call, ok := result.InnerResponse.ToolCall.(*message.FunctionCallContent)
+	if !ok {
+		t.Fatalf("tool call = %T, want *message.FunctionCallContent", result.InnerResponse.ToolCall)
+	}
+	var arguments map[string]any
+	if err := json.Unmarshal([]byte(call.Arguments), &arguments); err != nil {
+		t.Fatal(err)
+	}
+	if len(arguments) != 2 || arguments["path"] != "test.txt" {
+		t.Fatalf("arguments = %#v, want path=test.txt and count", arguments)
+	}
+}
+
+func TestAlwaysApproveToolResponse_FactoriesProduceDistinctInstances(t *testing.T) {
+	request := newAlwaysApprovalTestRequest()
+	toolLevel := request.AlwaysApproveToolResponse()
+	argumentsLevel := request.AlwaysApproveToolWithArgumentsResponse()
+	if toolLevel == argumentsLevel || toolLevel.InnerResponse == argumentsLevel.InnerResponse {
+		t.Fatal("factory calls must create distinct response and inner-response instances")
+	}
+}
+
+func TestUsageDetails_AggregatesAdditionalCountsWithoutAliasing(t *testing.T) {
+	current := message.UsageDetails{AdditionalCounts: map[string]int64{"cached": 2, "reasoning": 3}}
+	incoming := message.UsageDetails{AdditionalCounts: map[string]int64{"cached": 11, "audio": 29}}
+	var result message.UsageDetails
+	result.Add(current)
+	result.Add(incoming)
+	if !maps.Equal(result.AdditionalCounts, map[string]int64{"cached": 13, "reasoning": 3, "audio": 29}) {
+		t.Fatalf("additional counts = %#v", result.AdditionalCounts)
+	}
+	result.AdditionalCounts["cached"]++
+	if current.AdditionalCounts["cached"] != 2 || incoming.AdditionalCounts["cached"] != 11 {
+		t.Fatal("aggregate aliases an input additional-count dictionary")
+	}
+}
+
+func TestUsageDetails_AggregatesUnreportedAdditionalCounts(t *testing.T) {
+	withCounts := message.UsageDetails{AdditionalCounts: map[string]int64{"cached": 7}}
+	withoutCounts := message.UsageDetails{InputTokenCount: 1, OutputTokenCount: 2, TotalTokenCount: 3}
+	var oneSide message.UsageDetails
+	oneSide.Add(withoutCounts)
+	oneSide.Add(withCounts)
+	var bothSides message.UsageDetails
+	bothSides.Add(withoutCounts)
+	bothSides.Add(message.UsageDetails{})
+	if oneSide.AdditionalCounts["cached"] != 7 {
+		t.Fatalf("one-sided additional counts = %#v, want cached=7", oneSide.AdditionalCounts)
+	}
+	if bothSides.AdditionalCounts != nil {
+		t.Fatalf("unreported additional counts = %#v, want nil", bothSides.AdditionalCounts)
+	}
+}
+
+func TestUsageDetails_AggregationPreservesInputs(t *testing.T) {
+	current := message.UsageDetails{
+		InputTokenCount: 2, OutputTokenCount: 3, TotalTokenCount: 5,
+		AdditionalCounts: map[string]int64{"cached": 7, "reasoning": 11},
+	}
+	incoming := message.UsageDetails{
+		InputTokenCount: 13, TotalTokenCount: 17,
+		AdditionalCounts: map[string]int64{"cached": 19, "audio": 23},
+	}
+	snapshot := func(usage message.UsageDetails) string {
+		data, err := json.Marshal(usage)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	currentBefore, incomingBefore := snapshot(current), snapshot(incoming)
+	var result message.UsageDetails
+	result.Add(current)
+	result.Add(incoming)
+	if snapshot(current) != currentBefore || snapshot(incoming) != incomingBefore {
+		t.Fatal("aggregation mutated an input usage value or additional-count dictionary")
+	}
+}
+
+func TestUsageDetails_AggregatesExtraCountersReportedByOneInput(t *testing.T) {
+	current := message.UsageDetails{InputTokenCount: 5}
+	incoming := message.UsageDetails{InputTokenCount: 6, CachedInputTokenCount: 3, ReasoningTokenCount: 4}
+	var result message.UsageDetails
+	result.Add(current)
+	result.Add(incoming)
+	if result.InputTokenCount != 11 || result.CachedInputTokenCount != 3 || result.ReasoningTokenCount != 4 {
+		t.Fatalf("aggregate = %#v, want input=11 cached=3 reasoning=4", result)
+	}
+}
+
+func TestUsageDetails_AggregatesEveryCounter(t *testing.T) {
+	fullyPopulated := func(seed int64) message.UsageDetails {
+		usage := message.UsageDetails{AdditionalCounts: map[string]int64{"provider_specific": seed}}
+		value := reflect.ValueOf(&usage).Elem()
+		var offset int64
+		for i := 0; i < value.NumField(); i++ {
+			if field := value.Field(i); field.Kind() == reflect.Int64 {
+				field.SetInt(seed + offset)
+				offset++
+			}
+		}
+		return usage
+	}
+	current, incoming := fullyPopulated(1), fullyPopulated(100)
+	var merged message.UsageDetails
+	merged.Add(current)
+	merged.Add(incoming)
+	left, right, result := reflect.ValueOf(current), reflect.ValueOf(incoming), reflect.ValueOf(merged)
+	counters := 0
+	for i := 0; i < result.NumField(); i++ {
+		field := result.Field(i)
+		if field.Kind() != reflect.Int64 {
+			continue
+		}
+		counters++
+		if want := left.Field(i).Int() + right.Field(i).Int(); field.Int() != want {
+			t.Errorf("%s = %d, want %d", result.Type().Field(i).Name, field.Int(), want)
+		}
+	}
+	if counters == 0 {
+		t.Fatal("usage exposes no token counters")
+	}
 }
 
 func TestContentsCoalesce(t *testing.T) {

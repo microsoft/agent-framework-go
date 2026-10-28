@@ -480,6 +480,145 @@ func TestConfigInstructions(t *testing.T) {
 	}
 }
 
+func TestAgentConfigWithToolsAssignsTools(t *testing.T) {
+	fn := functool.MustNew(functool.Config{Name: "TestFunction", Description: "A test function"},
+		func(context.Context, struct{}) (string, error) { return "test result", nil })
+	a, request := captureAgentConfigRequest(t, anthropicprovider.AgentConfig{
+		Model:  "test-model",
+		Config: agent.Config{Name: "Test Agent", Tools: []tool.Tool{fn}},
+	})
+	if a.Name() != "Test Agent" {
+		t.Fatalf("Name = %q, want Test Agent", a.Name())
+	}
+	if _, ok := request["system"]; ok {
+		t.Fatalf("unexpected instructions: %#v", request["system"])
+	}
+	tools, ok := request["tools"].([]any)
+	if !ok || len(tools) != 1 || tools[0].(map[string]any)["name"] != "TestFunction" {
+		t.Fatalf("tools = %#v, want TestFunction", request["tools"])
+	}
+}
+
+func TestAgentConfigWithToolsAndInstructionsAssignsBoth(t *testing.T) {
+	fn := functool.MustNew(functool.Config{Name: "TestFunction", Description: "A test function"},
+		func(context.Context, struct{}) (string, error) { return "test result", nil })
+	a, request := captureAgentConfigRequest(t, anthropicprovider.AgentConfig{
+		Model:        "test-model",
+		Instructions: "Test instructions",
+		Config:       agent.Config{Name: "Test Agent", Tools: []tool.Tool{fn}},
+	})
+	if a.Name() != "Test Agent" {
+		t.Fatalf("Name = %q, want Test Agent", a.Name())
+	}
+	system, ok := request["system"].([]any)
+	if !ok || len(system) != 1 || system[0].(map[string]any)["text"] != "Test instructions" {
+		t.Fatalf("system = %#v, want Test instructions", request["system"])
+	}
+	tools, ok := request["tools"].([]any)
+	if !ok || len(tools) != 1 || tools[0].(map[string]any)["name"] != "TestFunction" {
+		t.Fatalf("tools = %#v, want TestFunction", request["tools"])
+	}
+}
+
+func TestAgentConfigWithoutInstructionsDoesNotSetSystem(t *testing.T) {
+	a, request := captureAgentConfigRequest(t, anthropicprovider.AgentConfig{
+		Model:  "test-model",
+		Config: agent.Config{Name: "Test Agent"},
+	})
+	if a.Name() != "Test Agent" {
+		t.Fatalf("Name = %q, want Test Agent", a.Name())
+	}
+	if _, ok := request["system"]; ok {
+		t.Fatalf("unexpected instructions: %#v", request["system"])
+	}
+}
+
+func TestAgentConfigWithWhitespaceInstructionsDoesNotSetSystem(t *testing.T) {
+	a, request := captureAgentConfigRequest(t, anthropicprovider.AgentConfig{
+		Model:        "test-model",
+		Instructions: "   ",
+		Config:       agent.Config{Name: "Test Agent"},
+	})
+	if a.Name() != "Test Agent" {
+		t.Fatalf("Name = %q, want Test Agent", a.Name())
+	}
+	if _, ok := request["system"]; ok {
+		t.Fatalf("unexpected instructions: %#v", request["system"])
+	}
+}
+
+func TestAgentConfigExplicitMaxTokensUsesProvidedValue(t *testing.T) {
+	requests := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		requests <- request
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"test"}}`)
+	}))
+	defer server.Close()
+	a := anthropicprovider.NewAgent(anthropic.NewClient(
+		option.WithBaseURL(server.URL), option.WithAPIKey("test-key"), option.WithMaxRetries(0),
+	), anthropicprovider.AgentConfig{
+		Model: "claude-haiku-4-5",
+		Config: agent.Config{Name: "Test Agent", RunOptions: []agent.Option{
+			anthropicprovider.MessageNewParams(anthropic.MessageNewParams{MaxTokens: 8192}),
+		}},
+	})
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = a.RunText(t.Context(), "Test message", agent.WithSession(session)).Collect()
+	var apiError *anthropic.Error
+	if !errors.As(err, &apiError) || apiError.StatusCode != http.StatusBadRequest {
+		t.Fatalf("error = %v, want HTTP 400", err)
+	}
+	select {
+	case request := <-requests:
+		if request["max_tokens"] != float64(8192) {
+			t.Fatalf("max_tokens = %#v, want 8192", request["max_tokens"])
+		}
+	default:
+		t.Fatal("no request captured")
+	}
+}
+
+func captureAgentConfigRequest(t *testing.T, config anthropicprovider.AgentConfig) (*agent.Agent, map[string]any) {
+	t.Helper()
+	requests := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		requests <- request
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("test result"))
+	}))
+	defer server.Close()
+	a := anthropicprovider.NewAgent(anthropic.NewClient(
+		option.WithBaseURL(server.URL), option.WithAPIKey("test"), option.WithMaxRetries(0),
+	), config)
+	if _, err := a.RunText(t.Context(), "Test message").Collect(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case request := <-requests:
+		return a, request
+	default:
+		t.Fatal("no request captured")
+		return nil, nil
+	}
+}
+
 func TestTextCitationsBecomeAnnotations(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

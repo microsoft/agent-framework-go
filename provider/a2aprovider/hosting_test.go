@@ -1258,6 +1258,97 @@ func TestExecutor_StreamRequestMetadata(t *testing.T) {
 	}
 }
 
+func TestExecutor_NilRequestMetadataPassesEmptyOptions(t *testing.T) {
+	var captured []agent.Option
+	a := newHostedTestAgent(func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		captured = options
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(hostedUpdate("", "Test response"), nil)
+		}
+	})
+	e := a2aprovider.NewExecutor(a, a2aprovider.ExecutorConfig{})
+	collectStreamingEvents(t, e.Execute(t.Context(), hostedExecutorContext("", "ctx")))
+	if captured == nil {
+		t.Fatal("expected captured options")
+	}
+	if _, ok := agent.GetOption(captured, agent.AllowBackgroundResponses); ok {
+		t.Fatal("background responses option must remain unset")
+	}
+	if metadata, ok := agent.GetOption(captured, a2aprovider.WithMetadata); ok || metadata != nil {
+		t.Fatalf("metadata = %#v, present = %t, want unset", metadata, ok)
+	}
+	if configuration, ok := agent.GetOption(captured, a2aprovider.WithConfiguration); ok || configuration != nil {
+		t.Fatalf("configuration = %#v, present = %t, want unset", configuration, ok)
+	}
+}
+
+func TestExecutor_RequestMetadataPassesAdditionalOptions(t *testing.T) {
+	var captured []agent.Option
+	a := newHostedTestAgent(func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		captured = options
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(hostedUpdate("", "Test response"), nil)
+		}
+	})
+	e := a2aprovider.NewExecutor(a, a2aprovider.ExecutorConfig{})
+	request := hostedExecutorContext("", "ctx")
+	request.Metadata = map[string]any{"key1": "value1", "key2": 42}
+	collectStreamingEvents(t, e.Execute(t.Context(), request))
+	if captured == nil {
+		t.Fatal("expected captured options")
+	}
+	if _, ok := agent.GetOption(captured, agent.AllowBackgroundResponses); ok {
+		t.Fatal("background responses option must remain unset")
+	}
+	metadata, ok := agent.GetOption(captured, a2aprovider.WithMetadata)
+	if !ok || metadata == nil || len(metadata) != 2 || metadata["key1"] != "value1" {
+		t.Fatalf("metadata = %#v, want two properties with key1=value1", metadata)
+	}
+}
+
+func TestExecutor_StreamNilMetadataPassesEmptyOptions(t *testing.T) {
+	var captured []agent.Option
+	optionsCaptured := false
+	a := newHostedTestAgent(func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		captured, optionsCaptured = options, true
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(hostedUpdate("", "Reply"), nil)
+		}
+	})
+	e := a2aprovider.NewExecutor(a, a2aprovider.ExecutorConfig{})
+	collectStreamingEvents(t, directExecutorStream(t.Context(), e, hostedExecutorContext("", "ctx")))
+	if !optionsCaptured || captured == nil {
+		t.Fatal("expected captured options")
+	}
+	if _, ok := agent.GetOption(captured, agent.AllowBackgroundResponses); ok {
+		t.Fatal("background responses option must remain unset")
+	}
+	if metadata, ok := agent.GetOption(captured, a2aprovider.WithMetadata); ok || metadata != nil {
+		t.Fatalf("metadata = %#v, present = %t, want unset", metadata, ok)
+	}
+	if configuration, ok := agent.GetOption(captured, a2aprovider.WithConfiguration); ok || configuration != nil {
+		t.Fatalf("configuration = %#v, present = %t, want unset", configuration, ok)
+	}
+}
+
+func TestExecutor_StreamNilMessageUsesEmptyInput(t *testing.T) {
+	a := newHostedTestAgent(func(_ context.Context, messages []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		if len(messages) != 0 {
+			t.Errorf("messages = %#v, want empty", messages)
+		}
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(hostedUpdate("", "Reply"), nil)
+		}
+	})
+	e := a2aprovider.NewExecutor(a, a2aprovider.ExecutorConfig{})
+	request := hostedExecutorContext("", "ctx")
+	request.Message = nil
+	result := singleHostedMessage(t, collectStreamingEvents(t, directExecutorStream(t.Context(), e, request)))
+	if result.ContextID != "ctx" {
+		t.Fatalf("context ID = %q, want ctx", result.ContextID)
+	}
+}
+
 func TestExecutor_StreamReferenceTasksRejected(t *testing.T) {
 	e := hostedStreamingExecutor(nil, nil)
 	execCtx := hostedExecutorContext("", "ctx")

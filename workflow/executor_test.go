@@ -4,9 +4,12 @@ package workflow_test
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/workflow"
@@ -1056,6 +1059,200 @@ func nullableAggregatorBinding(id string, results *[]string) workflow.ExecutorBi
 	return binding
 }
 
+type functionPortText struct{ Text string }
+type functionPortData struct{ Base64Bytes string }
+
+func functionPortDataFor(input functionPortText) functionPortData {
+	return functionPortData{Base64Bytes: base64.StdEncoding.EncodeToString([]byte(input.Text))}
+}
+
+func TestFunctionExecutor_ResultDelegateInvocation(t *testing.T) {
+	for _, withError := range []bool{false, true} {
+		t.Run(strconv.FormatBool(withError), func(t *testing.T) {
+			var handler any = func(_ *workflow.Context, input *functionPortText) *functionPortData {
+				return new(functionPortDataFor(*input))
+			}
+			if withError {
+				handler = func(_ *workflow.Context, input *functionPortText) (*functionPortData, error) {
+					return new(functionPortDataFor(*input)), nil
+				}
+			}
+			executor := workflow.NewExecutor("FunctionExecutor", handler)
+			input := &functionPortText{Text: "TestMessage"}
+			var events []workflow.Event
+			ctx := aggregationContext(t)
+			ctx.AddEvent = func(event workflow.Event) error { events = append(events, event); return nil }
+			result, err := executor.Execute(ctx, input)
+			if err != nil || !reflect.DeepEqual(result, new(functionPortDataFor(*input))) {
+				t.Fatalf("Execute = %#v, %v", result, err)
+			}
+			assertFunctionInvocationEvents(t, events, input, result)
+		})
+	}
+}
+
+func TestFunctionExecutor_ActionOptionsAreNoOp(t *testing.T) {
+	for _, withError := range []bool{false, true} {
+		for _, autoSend := range []bool{false, true} {
+			for _, autoYield := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%t/%t/%t", withError, autoSend, autoYield), func(t *testing.T) {
+					var handler any = func(ctx *workflow.Context, input *functionPortText) { _ = ctx.SendMessage("", input) }
+					if withError {
+						handler = func(ctx *workflow.Context, input *functionPortText) error { return ctx.SendMessage("", input) }
+					}
+					executor := workflow.NewExecutor("FunctionExecutor", handler)
+					executor.AutoSendMessageHandlerResultObject = new(autoSend)
+					executor.AutoYieldOutputHandlerResultObject = new(autoYield)
+					protocol := executor.DescribeProtocol()
+					if len(protocol.Sends) != 0 || len(protocol.Yields) != 0 {
+						t.Fatalf("void handler protocol = %#v, want no send/yield types", protocol)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestFunctionExecutor_ResultOptionsRegisterAndEmit(t *testing.T) {
+	for _, withError := range []bool{false, true} {
+		for _, autoSend := range []bool{false, true} {
+			for _, autoYield := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%t/%t/%t", withError, autoSend, autoYield), func(t *testing.T) {
+					var handler any = func(_ *workflow.Context, input *functionPortText) *functionPortData {
+						return new(functionPortDataFor(*input))
+					}
+					if withError {
+						handler = func(_ *workflow.Context, input *functionPortText) (*functionPortData, error) {
+							return new(functionPortDataFor(*input)), nil
+						}
+					}
+					executor := workflow.NewExecutor("FunctionExecutor", handler)
+					executor.AutoSendMessageHandlerResultObject = new(autoSend)
+					executor.AutoYieldOutputHandlerResultObject = new(autoYield)
+					var events []workflow.Event
+					var sent, yielded []any
+					ctx := aggregationContext(t)
+					ctx.AddEvent = func(event workflow.Event) error { events = append(events, event); return nil }
+					ctx.SendMessage = func(_ string, value any) error { sent = append(sent, value); return nil }
+					ctx.YieldOutput = func(value any) error { yielded = append(yielded, value); return nil }
+					input := &functionPortText{Text: "TestMessage"}
+					result, err := executor.Execute(ctx, input)
+					want := new(functionPortDataFor(*input))
+					if err != nil || !reflect.DeepEqual(result, want) {
+						t.Fatalf("Execute = %#v, %v, want %#v", result, err, want)
+					}
+					assertFunctionInvocationEvents(t, events, input, result)
+					protocol := executor.DescribeProtocol()
+					for _, output := range []struct {
+						enabled bool
+						types   []reflect.Type
+						values  []any
+					}{{autoSend, protocol.Sends, sent}, {autoYield, protocol.Yields, yielded}} {
+						if output.enabled {
+							if !reflect.DeepEqual(output.types, []reflect.Type{reflect.TypeFor[*functionPortData]()}) ||
+								len(output.values) != 1 || !reflect.DeepEqual(output.values[0], want) {
+								t.Fatalf("enabled output = %v/%v, want data message type and value", output.types, output.values)
+							}
+						} else if len(output.types) != 0 || len(output.values) != 0 {
+							t.Fatalf("disabled output = %v/%v, want empty", output.types, output.values)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func assertFunctionInvocationEvents(t *testing.T, events []workflow.Event, input, result any) {
+	t.Helper()
+	if !slices.ContainsFunc(events, func(event workflow.Event) bool {
+		e, ok := event.(workflow.ExecutorInvokedEvent)
+		return ok && e.Data() == input
+	}) || !slices.ContainsFunc(events, func(event workflow.Event) bool {
+		e, ok := event.(workflow.ExecutorCompletedEvent)
+		return ok && e.Data() == result
+	}) {
+		t.Fatalf("events = %#v, want invoked input and identical completed result", events)
+	}
+}
+
+func aggregationContext(t *testing.T) *workflow.Context {
+	t.Helper()
+	return &workflow.Context{
+		Context: t.Context(), AddEvent: func(workflow.Event) error { return nil },
+		SendMessage: func(string, any) error { return nil }, YieldOutput: func(any) error { return nil },
+	}
+}
+
+func TestAggregatingExecutor_AggregatesIncrementally(t *testing.T) {
+	executor := workflow.NewAggregatingExecutor("sum", func(aggregate *string, input string) *string {
+		if aggregate == nil {
+			return new(input)
+		}
+		return new(*aggregate + "+" + input)
+	})
+	ctx := aggregationContext(t)
+	for i, input := range []string{"a", "b", "c"} {
+		got, err := executor.Execute(ctx, input)
+		if want := []string{"a", "a+b", "a+b+c"}[i]; err != nil || got != want {
+			t.Fatalf("Execute(%q) = %v, %v, want %q", input, got, err, want)
+		}
+	}
+}
+
+func TestAggregatingExecutor_FirstCallReceivesNilAggregate(t *testing.T) {
+	received := new("sentinel")
+	executor := workflow.NewAggregatingExecutor("first-call", func(aggregate *string, input string) *string {
+		received = aggregate
+		return new(input)
+	})
+	if _, err := executor.Execute(aggregationContext(t), "hello"); err != nil {
+		t.Fatal(err)
+	}
+	if received != nil {
+		t.Fatalf("first aggregate = %q, want nil", *received)
+	}
+}
+
+func TestAggregatingExecutor_NilClearsState(t *testing.T) {
+	executor := workflow.NewAggregatingExecutor("nullable", func(aggregate *string, input string) *string {
+		if input == "clear" {
+			return nil
+		}
+		if aggregate == nil {
+			return new(input)
+		}
+		return new(*aggregate + input)
+	})
+	ctx := aggregationContext(t)
+	for i, input := range []string{"a", "clear", "b"} {
+		got, err := executor.Execute(ctx, input)
+		if want := []any{"a", nil, "b"}[i]; err != nil || got != want {
+			t.Fatalf("Execute(%q) = %v, %v, want %v", input, got, err, want)
+		}
+	}
+}
+
+func TestAggregatingExecutor_PersistsStateBetweenCalls(t *testing.T) {
+	executor := workflow.NewAggregatingExecutor("counter", func(aggregate *string, _ string) *string {
+		n := 0
+		if aggregate != nil {
+			var err error
+			n, err = strconv.Atoi(*aggregate)
+			if err != nil {
+				t.Fatalf("aggregate = %q: %v", *aggregate, err)
+			}
+		}
+		return new(strconv.Itoa(n + 1))
+	})
+	ctx := aggregationContext(t)
+	for i := 1; i <= 5; i++ {
+		got, err := executor.Execute(ctx, "tick")
+		if want := strconv.Itoa(i); err != nil || got != want {
+			t.Fatalf("tick %d = %v, %v, want %q", i, got, err, want)
+		}
+	}
+}
 func TestNewAggregatingExecutor_AggregatesIncrementallyAndNilClearsState(t *testing.T) {
 	var received []string
 	executor := workflow.NewAggregatingExecutor("aggregate", func(aggregate *string, input string) *string {

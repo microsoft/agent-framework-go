@@ -14,6 +14,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 	"github.com/a2aproject/a2a-go/v2/a2asrv/push"
+	"github.com/a2aproject/a2a-go/v2/a2asrv/taskstore"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
@@ -1011,6 +1012,62 @@ func TestResponseMode_NativeTaskReturnImmediately(t *testing.T) {
 	stored, err := h.GetTask(t.Context(), &a2a.GetTaskRequest{ID: task.ID})
 	if err != nil || stored.Status.State != a2a.TaskStateCompleted || len(stored.Artifacts) != 1 {
 		t.Fatalf("stored task = %#v, error = %v, want completed task", stored, err)
+	}
+}
+
+func TestResponseMode_ReturnMessageWithImmediateRequest(t *testing.T) {
+	a := responseModeAgent([]*agent.ResponseUpdate{hostedUpdate("m1", "chunk 1"), hostedUpdate("m1", "chunk 2")}, nil)
+	events := collectResponseModeMessageRequest(t, a, true)
+	assertResponseModeMessageOnly(t, events)
+}
+
+func TestResponseMode_ReturnMessageWithNonImmediateRequest(t *testing.T) {
+	a := responseModeAgent([]*agent.ResponseUpdate{hostedUpdate("m1", "chunk 1"), hostedUpdate("m1", "chunk 2")}, nil)
+	events := collectResponseModeMessageRequest(t, a, false)
+	assertResponseModeMessageOnly(t, events)
+}
+
+func collectResponseModeMessageRequest(t *testing.T, a *agent.Agent, immediate bool) []a2a.Event {
+	t.Helper()
+	var taskEvents atomic.Int32
+	store := isolationStoreStub{
+		create: func(context.Context, *a2a.Task) (taskstore.TaskVersion, error) {
+			taskEvents.Add(1)
+			return 1, nil
+		},
+		update: func(context.Context, *taskstore.UpdateRequest) (taskstore.TaskVersion, error) {
+			taskEvents.Add(1)
+			return 1, nil
+		},
+		get: func(context.Context, a2a.TaskID) (*taskstore.StoredTask, error) {
+			return nil, a2a.ErrTaskNotFound
+		},
+	}
+	h := a2aprovider.NewHandler(a, a2aprovider.ExecutorConfig{AgentRunMode: a2aprovider.ReturnMessage()},
+		a2asrv.WithTaskStore(store))
+	request := hostedExecutorContext("task-1", "ctx")
+	request.Message.ContextID = request.ContextID
+	result, err := h.SendMessage(t.Context(), &a2a.SendMessageRequest{
+		Message: request.Message, Config: &a2a.SendMessageConfig{ReturnImmediately: immediate},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := taskEvents.Load(); got != 0 {
+		t.Fatalf("task-store events = %d, want no tasks, status updates, or artifact updates", got)
+	}
+	return []a2a.Event{result}
+}
+
+func assertResponseModeMessageOnly(t *testing.T, events []a2a.Event) {
+	t.Helper()
+	if len(events) != 1 || len(responseModeTasks(events)) != 0 || len(collectStreamingStatuses(events)) != 0 ||
+		len(collectStreamingArtifacts(events)) != 0 {
+		t.Fatalf("events = %#v, want only one message", events)
+	}
+	result := singleHostedMessage(t, events)
+	if len(result.Parts) != 1 || result.Parts[0].Text() != "chunk 1chunk 2" {
+		t.Fatalf("parts = %#v, want one aggregated text part", result.Parts)
 	}
 }
 

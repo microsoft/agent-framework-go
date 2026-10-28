@@ -13,15 +13,513 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	aguiEvents "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/core/events"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/aguiprovider"
+	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
 func newTestAgent(runFn func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error]) *agent.Agent {
 	return agent.New(agent.ProviderConfig{Run: runFn}, agent.Config{Name: "test-agent", ID: "test-agent-id"})
+}
+
+func newStreamingPortAgent(multipleMessages bool) *agent.Agent {
+	return newTestAgent(func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			chunks := [][]string{{"Hello", " ", "from", " ", "fake", " ", "agent", "!"}}
+			if multipleMessages {
+				chunks = [][]string{{"First", " ", "message"}, {"Second", " ", "message"}, {"Third", " ", "message"}}
+			}
+			for _, messageChunks := range chunks {
+				id := aguiEvents.GenerateMessageID()
+				for _, chunk := range messageChunks {
+					if !yield(&agent.ResponseUpdate{
+						MessageID: id,
+						Role:      message.RoleAssistant,
+						Contents:  message.NewText(chunk).Contents,
+					}, nil) {
+						return
+					}
+				}
+			}
+		}
+	})
+}
+
+func newHostedPortClient(t *testing.T, hosted *agent.Agent, tools ...tool.Tool) (*agent.Agent, *agent.Session) {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.Handle("/agent", aguiprovider.NewJSONHTTPHandler(hosted, aguiprovider.HandlerConfig{}))
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+	a := aguiprovider.NewAgent(newTestClient(server.URL+"/agent"), aguiprovider.AgentConfig{
+		Config: agent.Config{Name: "assistant", Description: "Sample assistant", Tools: tools},
+	})
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return a, session
+}
+
+func collectPortUpdates(t *testing.T, stream agent.ResponseStream) ([]*agent.ResponseUpdate, *agent.Response) {
+	t.Helper()
+	var updates []*agent.ResponseUpdate
+	response := new(agent.Response)
+	for update, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		updates = append(updates, update)
+		response.Update(update)
+	}
+	if len(updates) == 0 {
+		t.Fatal("expected response updates")
+	}
+	return updates, response
+}
+
+func assertPortAssistantMessage(t *testing.T, response *agent.Response, text string) {
+	t.Helper()
+	if len(response.Messages) != 1 {
+		t.Fatalf("messages = %#v, want one assistant message", response.Messages)
+	}
+	if got := response.Messages[0]; got.Role != message.RoleAssistant || got.String() != text {
+		t.Fatalf("message = %#v, want assistant text %q", got, text)
+	}
+}
+
+func TestAGUIIntegrationClientReceivesStreamedAssistantMessage(t *testing.T) {
+	a, session := newHostedPortClient(t, newStreamingPortAgent(false))
+	updates, response := collectPortUpdates(t, a.Run(t.Context(), []*message.Message{message.NewText("hello")},
+		agent.WithSession(session), agent.Stream(true)))
+	if session == nil {
+		t.Fatal("expected session")
+	}
+	for _, update := range updates {
+		if update.Role != message.RoleAssistant {
+			t.Errorf("update role = %q, want assistant", update.Role)
+		}
+	}
+	assertPortAssistantMessage(t, response, "Hello from fake agent!")
+}
+
+func TestAGUIIntegrationClientReceivesRunLifecycleEvents(t *testing.T) {
+	a, session := newHostedPortClient(t, newStreamingPortAgent(false))
+	updates, _ := collectPortUpdates(t, a.Run(t.Context(), []*message.Message{message.NewText("test")},
+		agent.WithSession(session), agent.Stream(true)))
+	first := updates[0]
+	started, ok := first.RawRepresentation.(*aguiEvents.RunStartedEvent)
+	if !ok || started.ThreadID() == "" || first.ResponseID == "" || started.RunID() != first.ResponseID {
+		t.Fatalf("first update = %#v, want RUN_STARTED with thread and run IDs", first)
+	}
+	var textMessageID string
+	var finished *aguiEvents.RunFinishedEvent
+	for _, update := range updates {
+		if update.Contents.Text() != "" {
+			if update.MessageID == "" {
+				t.Fatal("text update has no message ID")
+			}
+			if textMessageID == "" {
+				textMessageID = update.MessageID
+			}
+			if update.MessageID != textMessageID {
+				t.Errorf("message ID = %q, want %q", update.MessageID, textMessageID)
+			}
+		}
+		if event, ok := update.RawRepresentation.(*aguiEvents.RunFinishedEvent); ok {
+			finished = event
+		}
+	}
+	last := updates[len(updates)-1]
+	if textMessageID == "" || last.ResponseID != first.ResponseID || last.ConversationID != nil {
+		t.Fatalf("text message ID = %q, last update = %#v", textMessageID, last)
+	}
+	if finished == nil || finished.ThreadID() != started.ThreadID() || finished.RunID() != first.ResponseID {
+		t.Fatalf("RUN_FINISHED = %#v, want matching thread and run IDs", finished)
+	}
+}
+
+func TestAGUIIntegrationRunAggregatesStreamingUpdates(t *testing.T) {
+	a, session := newHostedPortClient(t, newStreamingPortAgent(false))
+	response, err := a.Run(t.Context(), []*message.Message{message.NewText("hello")}, agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Messages) == 0 {
+		t.Fatal("expected response messages")
+	}
+	var hasAssistant, hasText bool
+	for _, msg := range response.Messages {
+		hasAssistant = hasAssistant || msg.Role == message.RoleAssistant
+		hasText = hasText || msg.String() == "Hello from fake agent!"
+	}
+	if !hasAssistant || !hasText {
+		t.Fatalf("messages = %#v, want assistant response text", response.Messages)
+	}
+}
+
+func TestAGUIIntegrationLocalHistoryAcrossTurns(t *testing.T) {
+	a, session := newHostedPortClient(t, newStreamingPortAgent(false))
+	for _, text := range []string{"First question", "Second question"} {
+		updates, response := collectPortUpdates(t, a.Run(t.Context(), []*message.Message{message.NewText(text)},
+			agent.WithSession(session), agent.Stream(true)))
+		var hasText bool
+		for _, update := range updates {
+			hasText = hasText || update.Contents.Text() != ""
+			if update.ConversationID != nil {
+				t.Errorf("conversation ID = %q, want unset", *update.ConversationID)
+			}
+		}
+		if !hasText || session.ServiceID() != "" {
+			t.Fatalf("has text = %t, service ID = %q", hasText, session.ServiceID())
+		}
+		assertPortAssistantMessage(t, response, "Hello from fake agent!")
+	}
+	history, err := session.InMemoryHistory("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 4 {
+		t.Fatalf("history length = %d, want 4", len(history))
+	}
+	for i, want := range []struct {
+		role message.Role
+		text string
+	}{
+		{message.RoleUser, "First question"},
+		{message.RoleAssistant, "Hello from fake agent!"},
+		{message.RoleUser, "Second question"},
+		{message.RoleAssistant, "Hello from fake agent!"},
+	} {
+		if history[i].Role != want.role || history[i].String() != want.text {
+			t.Errorf("history[%d] = %#v, want %q: %q", i, history[i], want.role, want.text)
+		}
+	}
+}
+
+func TestAGUIIntegrationAgentSendsMultipleMessages(t *testing.T) {
+	a, session := newHostedPortClient(t, newStreamingPortAgent(true))
+	updates, response := collectPortUpdates(t, a.Run(t.Context(), []*message.Message{message.NewText("Tell me a story")},
+		agent.WithSession(session), agent.Stream(true)))
+	ids := map[string]bool{}
+	for _, update := range updates {
+		if update.Contents.Text() != "" && update.MessageID != "" {
+			ids[update.MessageID] = true
+		}
+	}
+	if len(ids) <= 1 || len(response.Messages) <= 1 {
+		t.Fatalf("text message IDs = %v, response messages = %d, want multiple", ids, len(response.Messages))
+	}
+	for _, msg := range response.Messages {
+		if msg.Role != message.RoleAssistant {
+			t.Errorf("message role = %q, want assistant", msg.Role)
+		}
+	}
+}
+
+func TestAGUIIntegrationUserSendsMultipleMessages(t *testing.T) {
+	a, session := newHostedPortClient(t, newStreamingPortAgent(false))
+	input := []*message.Message{
+		message.NewText("First part of question"),
+		message.NewText("Second part of question"),
+		message.NewText("Third part of question"),
+	}
+	updates, response := collectPortUpdates(t, a.Run(t.Context(), input, agent.WithSession(session), agent.Stream(true)))
+	var hasText, hasAssistant bool
+	for _, update := range updates {
+		hasText = hasText || update.Contents.Text() != ""
+		hasAssistant = hasAssistant || update.Role == message.RoleAssistant
+	}
+	if !hasText || !hasAssistant {
+		t.Fatalf("has text = %t, has assistant = %t", hasText, hasAssistant)
+	}
+	assertPortAssistantMessage(t, response, "Hello from fake agent!")
+}
+
+func TestAGUIHandlerRejectsNilAgent(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for nil agent")
+		}
+	}()
+	aguiprovider.NewJSONHTTPHandler(nil, aguiprovider.HandlerConfig{})
+}
+
+func TestAGUIHandlerMapsSpecifiedPattern(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.Handle("/api/agent", aguiprovider.NewJSONHTTPHandler(newStreamingPortAgent(false), aguiprovider.HandlerConfig{}))
+	handler, pattern := mux.Handler(httptest.NewRequest(http.MethodPost, "/api/agent", nil))
+	if handler == nil || pattern != "/api/agent" {
+		t.Fatalf("handler = %v, pattern = %q", handler, pattern)
+	}
+}
+
+func newToolCallingPortAgent(tools ...tool.Tool) *agent.Agent {
+	return agent.New(agent.ProviderConfig{
+		Run: func(_ context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				id := aguiEvents.GenerateMessageID()
+				for _, msg := range messages {
+					for _, content := range msg.Contents {
+						if _, ok := content.(*message.FunctionResultContent); ok {
+							yield(&agent.ResponseUpdate{
+								MessageID: id, Role: message.RoleAssistant,
+								Contents: message.NewText("Function calls completed successfully").Contents,
+							}, nil)
+							return
+						}
+					}
+				}
+				hasTools := false
+				for tl := range agent.AllOptions(options, agent.WithTool) {
+					hasTools = true
+					arguments := "{}"
+					switch tl.Name() {
+					case "GetWeather":
+						arguments = `{"location":"Seattle"}`
+					case "Calculate":
+						arguments = `{"a":5,"b":3}`
+					case "FormatText":
+						arguments = `{"text":"hello"}`
+					case "GetServerForecast":
+						arguments = `{"request":{"Location":"Seattle","Days":5}}`
+					case "GetClientForecast":
+						arguments = `{"request":{"City":"Portland","IncludeHourly":true}}`
+					}
+					if !yield(&agent.ResponseUpdate{
+						MessageID: id, Role: message.RoleAssistant,
+						Contents: message.Contents{&message.FunctionCallContent{
+							CallID: "call_" + aguiEvents.GenerateMessageID(), Name: tl.Name(), Arguments: arguments,
+						}},
+					}, nil) {
+						return
+					}
+				}
+				if !hasTools {
+					yield(&agent.ResponseUpdate{
+						MessageID: id, Role: message.RoleAssistant, Contents: message.NewText("No tools available").Contents,
+					}, nil)
+				}
+			}
+		},
+	}, agent.Config{
+		Name: "base-agent", Description: "A base agent for tool testing", Tools: tools,
+		Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{})},
+	})
+}
+
+func portFunctionContents(updates []*agent.ResponseUpdate) (calls []*message.FunctionCallContent, results []*message.FunctionResultContent, callUpdates, resultUpdates int) {
+	for _, update := range updates {
+		var hasCall, hasResult bool
+		for _, content := range update.Contents {
+			switch content := content.(type) {
+			case *message.FunctionCallContent:
+				calls = append(calls, content)
+				hasCall = true
+			case *message.FunctionResultContent:
+				results = append(results, content)
+				hasResult = true
+			}
+		}
+		if hasCall {
+			callUpdates++
+		}
+		if hasResult {
+			resultUpdates++
+		}
+	}
+	return
+}
+
+func TestAGUIIntegrationServerTriggersSingleFunctionCall(t *testing.T) {
+	var count atomic.Int32
+	tl := functool.MustNew(functool.Config{Name: "ServerFunction", Description: "A function on the server"},
+		func(context.Context, struct{}) (string, error) {
+			count.Add(1)
+			return "Server function result", nil
+		})
+	a, session := newHostedPortClient(t, newToolCallingPortAgent(tl))
+	updates, _ := collectPortUpdates(t, a.RunText(t.Context(), "Call the server function", agent.WithSession(session), agent.Stream(true)))
+	_, results, callUpdates, resultUpdates := portFunctionContents(updates)
+	if count.Load() != 1 || callUpdates != 1 || resultUpdates != 1 || len(results) != 1 || results[0].Result == nil {
+		t.Fatalf("calls = %d, call updates = %d, result updates = %d, results = %#v", count.Load(), callUpdates, resultUpdates, results)
+	}
+}
+
+func TestAGUIIntegrationClientTriggersSingleFunctionCall(t *testing.T) {
+	var count atomic.Int32
+	tl := functool.MustNew(functool.Config{Name: "ClientFunction", Description: "A function on the client"},
+		func(context.Context, struct{}) (string, error) {
+			count.Add(1)
+			return "Client function result", nil
+		})
+	a, session := newHostedPortClient(t, newToolCallingPortAgent(), tl)
+	updates, _ := collectPortUpdates(t, a.RunText(t.Context(), "Call the client function", agent.WithSession(session), agent.Stream(true)))
+	_, results, callUpdates, resultUpdates := portFunctionContents(updates)
+	if count.Load() != 1 || callUpdates != 1 || resultUpdates != 1 || len(results) != 1 || results[0].Result == nil {
+		t.Fatalf("calls = %d, call updates = %d, result updates = %d, results = %#v", count.Load(), callUpdates, resultUpdates, results)
+	}
+}
+
+func TestAGUIIntegrationClientTriggersMultipleFunctionCalls(t *testing.T) {
+	var calculateCount, formatCount atomic.Int32
+	calculate := functool.MustNew(functool.Config{Name: "Calculate", Description: "Calculates sum of two numbers"},
+		func(_ context.Context, input struct {
+			A int `json:"a"`
+			B int `json:"b"`
+		}) (int, error) {
+			calculateCount.Add(1)
+			return input.A + input.B, nil
+		})
+	format := functool.MustNew(functool.Config{Name: "FormatText", Description: "Formats text to uppercase"},
+		func(_ context.Context, input struct {
+			Text string `json:"text"`
+		}) (string, error) {
+			formatCount.Add(1)
+			return strings.ToUpper(input.Text), nil
+		})
+	a, session := newHostedPortClient(t, newToolCallingPortAgent(), calculate, format)
+	updates, _ := collectPortUpdates(t, a.RunText(t.Context(), "Calculate 5 + 3 and format 'hello'", agent.WithSession(session), agent.Stream(true)))
+	calls, results, callUpdates, _ := portFunctionContents(updates)
+	assertPortToolNames(t, calls, "Calculate", "FormatText")
+	if calculateCount.Load() != 1 || formatCount.Load() != 1 || callUpdates == 0 || len(results) != 2 {
+		t.Fatalf("calculate = %d, format = %d, call updates = %d, results = %#v", calculateCount.Load(), formatCount.Load(), callUpdates, results)
+	}
+}
+
+func assertPortToolNames(t *testing.T, calls []*message.FunctionCallContent, names ...string) {
+	t.Helper()
+	if len(calls) != len(names) {
+		t.Fatalf("function calls = %#v, want %d", calls, len(names))
+	}
+	for _, name := range names {
+		found := false
+		for _, call := range calls {
+			found = found || call.Name == name
+		}
+		if !found {
+			t.Errorf("missing function call %q", name)
+		}
+	}
+}
+
+func TestAGUIIntegrationFunctionCallsPreserveCallIDAndName(t *testing.T) {
+	tl := functool.MustNew(functool.Config{Name: "TestFunction", Description: "A test function"},
+		func(context.Context, struct{}) (string, error) { return "Test result", nil })
+	a, session := newHostedPortClient(t, newToolCallingPortAgent(tl))
+	updates, _ := collectPortUpdates(t, a.RunText(t.Context(), "Call the test function", agent.WithSession(session), agent.Stream(true)))
+	calls, results, _, _ := portFunctionContents(updates)
+	if len(calls) == 0 || calls[0].CallID == "" || calls[0].Name != "TestFunction" {
+		t.Fatalf("function calls = %#v, want TestFunction with call ID", calls)
+	}
+	if len(results) == 0 || results[0].CallID != calls[0].CallID {
+		t.Fatalf("results = %#v, want matching call ID", results)
+	}
+}
+
+func TestAGUIIntegrationParallelServerFunctionCalls(t *testing.T) {
+	var firstCount, secondCount atomic.Int32
+	first := functool.MustNew(functool.Config{Name: "Function1", Description: "First function"},
+		func(context.Context, struct{}) (string, error) {
+			firstCount.Add(1)
+			return "Result 1", nil
+		})
+	second := functool.MustNew(functool.Config{Name: "Function2", Description: "Second function"},
+		func(context.Context, struct{}) (string, error) {
+			secondCount.Add(1)
+			return "Result 2", nil
+		})
+	a, session := newHostedPortClient(t, newToolCallingPortAgent(first, second))
+	updates, _ := collectPortUpdates(t, a.RunText(t.Context(), "Call both functions in parallel", agent.WithSession(session), agent.Stream(true)))
+	calls, results, _, _ := portFunctionContents(updates)
+	assertPortToolNames(t, calls, "Function1", "Function2")
+	if firstCount.Load() != 1 || secondCount.Load() != 1 || len(results) != 2 {
+		t.Fatalf("first = %d, second = %d, results = %#v", firstCount.Load(), secondCount.Load(), results)
+	}
+	for _, call := range calls {
+		matched := false
+		for _, result := range results {
+			matched = matched || result.CallID == call.CallID
+		}
+		if !matched {
+			t.Errorf("missing result for call %q", call.CallID)
+		}
+	}
+}
+
+type serverForecastRequest struct {
+	Location string
+	Days     int
+}
+
+type serverForecastResponse struct {
+	Temperature int
+	Condition   string
+	Humidity    int
+}
+
+type clientForecastRequest struct {
+	City          string
+	IncludeHourly bool
+}
+
+type clientForecastResponse struct {
+	MaxTemp int
+	MinTemp int
+	Outlook string
+}
+
+func TestAGUIIntegrationServerToolCustomArguments(t *testing.T) {
+	var count atomic.Int32
+	tl := functool.MustNew(functool.Config{Name: "GetServerForecast", Description: "Gets the weather forecast from server"},
+		func(_ context.Context, input struct {
+			Request serverForecastRequest `json:"request"`
+		}) (serverForecastResponse, error) {
+			count.Add(1)
+			condition := "Sunny"
+			if input.Request.Location == "Seattle" {
+				condition = "Rainy"
+			}
+			return serverForecastResponse{Temperature: 72, Condition: condition, Humidity: 65}, nil
+		})
+	a, session := newHostedPortClient(t, newToolCallingPortAgent(tl))
+	updates, _ := collectPortUpdates(t, a.RunText(t.Context(), "Get server forecast for Seattle for 5 days",
+		agent.WithSession(session), agent.Stream(true)))
+	calls, results, callUpdates, resultUpdates := portFunctionContents(updates)
+	if count.Load() != 1 || callUpdates == 0 || resultUpdates == 0 || len(calls) == 0 || calls[0].Name != "GetServerForecast" ||
+		len(results) == 0 || results[0].Result == nil {
+		t.Fatalf("count = %d, calls = %#v, results = %#v", count.Load(), calls, results)
+	}
+}
+
+func TestAGUIIntegrationClientToolCustomArguments(t *testing.T) {
+	var count atomic.Int32
+	tl := functool.MustNew(functool.Config{Name: "GetClientForecast", Description: "Gets the weather forecast from client"},
+		func(_ context.Context, input struct {
+			Request clientForecastRequest `json:"request"`
+		}) (clientForecastResponse, error) {
+			count.Add(1)
+			maxTemp := 75
+			if input.Request.City == "Portland" {
+				maxTemp = 68
+			}
+			return clientForecastResponse{MaxTemp: maxTemp, MinTemp: 55, Outlook: "Partly Cloudy"}, nil
+		})
+	a, session := newHostedPortClient(t, newToolCallingPortAgent(), tl)
+	updates, _ := collectPortUpdates(t, a.RunText(t.Context(), "Get client forecast for Portland with hourly data",
+		agent.WithSession(session), agent.Stream(true)))
+	calls, results, callUpdates, resultUpdates := portFunctionContents(updates)
+	if count.Load() != 1 || callUpdates == 0 || resultUpdates == 0 || len(calls) == 0 || calls[0].Name != "GetClientForecast" ||
+		len(results) == 0 || results[0].Result == nil {
+		t.Fatalf("count = %d, calls = %#v, results = %#v", count.Load(), calls, results)
+	}
 }
 
 type sseEvent struct {

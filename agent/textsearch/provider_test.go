@@ -80,6 +80,54 @@ func searchTool(t *testing.T, provider agent.ContextProvider, options ...agent.O
 	return search
 }
 
+func TestTextSearchProvider_MessageInvocationMergesAndStampsSearchResults(t *testing.T) {
+	provider := textsearch.NewContextProvider(func(context.Context, string) ([]textsearch.Result, error) {
+		return []textsearch.Result{{SourceName: "Doc1", Text: "Content of Doc1"}}, nil
+	}, textsearch.Config{SearchTime: textsearch.BeforeInvoke})
+	input := message.NewText("Question?")
+	messages, _, err := invokeProvider(provider, t.Context(), []*message.Message{input}, agent.WithSession(agenttest.CreateSession()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 2 || messages[0].String() != "Question?" || !strings.Contains(messages[1].String(), "Content of Doc1") {
+		t.Fatalf("messages = %#v, want question followed by search result", messages)
+	}
+	if source := messages[1].Source; source.Type != agent.SourceTypeContextProvider {
+		t.Fatalf("search result source = %#v, want context-provider attribution", source)
+	}
+}
+
+func TestTextSearchProvider_MessageInvocationWithoutResultsPreservesInput(t *testing.T) {
+	provider := textsearch.NewContextProvider(func(context.Context, string) ([]textsearch.Result, error) {
+		return nil, nil
+	}, textsearch.Config{SearchTime: textsearch.BeforeInvoke})
+	messages, _, err := invokeProvider(provider, t.Context(), []*message.Message{message.NewText("Hello")}, agent.WithSession(agenttest.CreateSession()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 1 || messages[0].String() != "Hello" {
+		t.Fatalf("messages = %#v, want only Hello", messages)
+	}
+}
+
+func TestTextSearchProvider_MessageInvocationSearchesOnlyExternalMessages(t *testing.T) {
+	var captured string
+	provider := textsearch.NewContextProvider(func(_ context.Context, query string) ([]textsearch.Result, error) {
+		captured = query
+		return nil, nil
+	}, textsearch.Config{SearchTime: textsearch.BeforeInvoke})
+	external := message.NewText("External message")
+	history := textMessage(message.RoleSystem, "From history").WithSource(message.Source{
+		Type: agent.SourceTypeHistoryProvider, ID: "src",
+	})
+	if _, _, err := invokeProvider(provider, t.Context(), []*message.Message{external, history}, agent.WithSession(agenttest.CreateSession())); err != nil {
+		t.Fatal(err)
+	}
+	if captured != "External message" {
+		t.Fatalf("query = %q, want External message", captured)
+	}
+}
+
 func TestTextSearchProvider_ConfigValidation(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

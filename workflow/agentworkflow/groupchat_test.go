@@ -4,20 +4,359 @@ package agentworkflow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"reflect"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
 )
+
+func TestGroupChatWorkflowBuilder_NameAndDescription(t *testing.T) {
+	wf, err := NewGroupChatWorkflowBuilder(func(agents []*agent.Agent) *GroupChatManager {
+		return NewRoundRobinGroupChatManager(agents, RoundRobinGroupChatOptions{MaximumIterationCount: 2})
+	}, newGroupChatDoubleEchoAgent("agent1"), newGroupChatDoubleEchoAgent("agent2")).
+		WithName("Test Group Chat").WithDescription("A test group chat workflow").Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wf.Name() != "Test Group Chat" || wf.Description() != "A test group chat workflow" {
+		t.Fatalf("metadata = %q/%q", wf.Name(), wf.Description())
+	}
+}
+
+func TestGroupChatWorkflowBuilder_ExplicitDesignationsReplaceDefaults(t *testing.T) {
+	a1, a2, a3 := newGroupChatDoubleEchoAgent("agent1"), newGroupChatDoubleEchoAgent("agent2"), newGroupChatDoubleEchoAgent("agent3")
+	wf, err := NewGroupChatWorkflowBuilder(func(agents []*agent.Agent) *GroupChatManager {
+		return NewRoundRobinGroupChatManager(agents, RoundRobinGroupChatOptions{MaximumIterationCount: 1})
+	}, a1, a2, a3).WithOutputFrom(a1).WithIntermediateOutputFrom(a2).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputs := wf.OutputExecutors()
+	empty, intermediate := 0, 0
+	for _, tags := range outputs {
+		if len(tags) == 0 {
+			empty++
+		}
+		if slices.Contains(tags, workflow.OutputTagIntermediate) {
+			intermediate++
+		}
+	}
+	if len(outputs) != 2 || empty != 1 || intermediate != 1 {
+		t.Fatalf("designations = %v, want one terminal and one intermediate", outputs)
+	}
+}
+
+func readGroupChatPortStream(t *testing.T, stream *inproc.StreamingRun) []workflow.Event {
+	t.Helper()
+	var events []workflow.Event
+	for event, err := range stream.WatchUntilHalt(t.Context()) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	assertNoGroupChatErrors(t, events)
+	return events
+}
+
+func groupChatPortTranscript(t *testing.T, events []workflow.Event) []*message.Message {
+	t.Helper()
+	var result []*message.Message
+	for _, event := range events {
+		if output, ok := event.(workflow.OutputEvent); ok {
+			if messages, ok := output.Output.([]*message.Message); ok {
+				result = messages
+			}
+		}
+	}
+	if result == nil {
+		t.Fatalf("missing final conversation in %v", events)
+	}
+	return result
+}
+
+func TestGroupChatWorkflowBuilder_MidConversationCheckpointPreservesCursorAndBroadcastExclusion(t *testing.T) {
+	a, b, c := newGroupChatRecordingAgent("agentA"), newGroupChatRecordingAgent("agentB"), newGroupChatRecordingAgent("agentC")
+	wf, err := NewGroupChatWorkflowBuilder(func(agents []*agent.Agent) *GroupChatManager {
+		return NewRoundRobinGroupChatManager(agents, RoundRobinGroupChatOptions{MaximumIterationCount: 6})
+	}, a.Agent, b.Agent, c.Agent).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := inproc.Lockstep.WithCheckpointing(checkpoint.NewInMemoryManager())
+	stream, err := env.OpenStreaming(t.Context(), wf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []any{[]*message.Message{textMessage("hello")}, workflow.TurnToken{EmitEvents: new(true)}} {
+		if sent, err := stream.TrySendMessage(t.Context(), input); err != nil || !sent {
+			t.Fatalf("send = %t, %v", sent, err)
+		}
+	}
+	baselineEvents := readGroupChatPortStream(t, stream)
+	if err := stream.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	baseline := groupChatPortTranscript(t, baselineEvents)
+	var checkpoints []workflow.CheckpointInfo
+	for _, event := range baselineEvents {
+		if step, ok := event.(workflow.SuperStepCompletedEvent); ok && step.CompletionInfo != nil && step.CompletionInfo.CheckpointInfo != nil {
+			checkpoints = append(checkpoints, *step.CompletionInfo.CheckpointInfo)
+		}
+	}
+	if len(checkpoints) < 5 {
+		t.Fatalf("baseline checkpoints = %d, want at least five", len(checkpoints))
+	}
+	agents := []*groupChatRecordingAgent{a, b, c}
+	counts := []int{len(a.Invocations()), len(b.Invocations()), len(c.Invocations())}
+	resumed, err := env.ResumeStreaming(t.Context(), wf, checkpoints[len(checkpoints)/2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resumed.Close(t.Context()) }()
+	result := groupChatPortTranscript(t, readGroupChatPortStream(t, resumed))
+	if len(result) != len(baseline) || !slices.Equal(collectGroupChatMessageTexts(result), collectGroupChatMessageTexts(baseline)) {
+		t.Fatalf("resumed transcript = %v, want %v", collectGroupChatMessageTexts(result), collectGroupChatMessageTexts(baseline))
+	}
+	totalPost := 0
+	for i, recorder := range agents {
+		invocations := recorder.Invocations()
+		totalPost += len(invocations) - counts[i]
+		for _, input := range invocations[counts[i]:] {
+			if slices.Contains(input, recorder.name) {
+				t.Fatalf("%s received its own response after resume: %v", recorder.name, input)
+			}
+		}
+	}
+	if totalPost <= 0 {
+		t.Fatal("no participant invoked after restoring the mid-conversation checkpoint")
+	}
+}
+
+type groupChatDeclarationOnly struct{ tool.SchemaTool }
+
+func groupChatCountingClient(name string, tools []tool.Tool, first message.Content, final string, calls *atomic.Int32) *agent.Agent {
+	return agent.New(agent.ProviderConfig{
+		ProviderName: "group-chat-mock-client",
+		Middlewares:  []agent.Middleware{toolautocall.New(toolautocall.Config{})},
+		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				call := calls.Add(1)
+				var content message.Content = &message.TextContent{Text: final}
+				if call == 1 && first != nil {
+					content = first
+				}
+				yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{content}}, nil)
+			}
+		},
+	}, agent.Config{ID: name, Name: name, Tools: tools})
+}
+
+func groupChatFirstCheckpointRequest(t *testing.T, env *inproc.ExecutionEnvironment, wf *workflow.Workflow, input string) (*workflow.ExternalRequest, workflow.CheckpointInfo, []workflow.Event) {
+	t.Helper()
+	stream, err := env.RunStreaming(t.Context(), wf, []*message.Message{textMessage(input)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent, err := stream.TrySendMessage(t.Context(), workflow.TurnToken{EmitEvents: new(false)}); err != nil || !sent {
+		t.Fatalf("send token = %t, %v", sent, err)
+	}
+	events := readGroupChatPortStream(t, stream)
+	if err := stream.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	request := firstGroupChatRequest(t, slices.Values(events))
+	var info *workflow.CheckpointInfo
+	for _, event := range events {
+		if step, ok := event.(workflow.SuperStepCompletedEvent); ok && step.CompletionInfo != nil && step.CompletionInfo.CheckpointInfo != nil {
+			info = step.CompletionInfo.CheckpointInfo
+		}
+	}
+	if info == nil {
+		t.Fatal("missing checkpoint while request is pending")
+	}
+	return request, *info, events
+}
+
+func TestGroupChatOrchestration_ApprovalJSONCheckpointPreservesCallAndInvokesTool(t *testing.T) {
+	var invocations, calls atomic.Int32
+	weather := functool.MustNew(functool.Config{Name: "GetWeather", Description: "Gets the weather for the given city"}, func(_ context.Context, input struct {
+		City string `json:"city"`
+	}) (string, error) {
+		if input.City != "Amsterdam" {
+			t.Errorf("tool city = %q, want Amsterdam", input.City)
+		}
+		invocations.Add(1)
+		return "Sunny, 22°C", nil
+	})
+	participant := groupChatCountingClient("WeatherAgent", []tool.Tool{tool.ApprovalRequiredFunc(weather)}, &message.FunctionCallContent{CallID: "call-1", Name: "GetWeather", Arguments: `{"city":"Amsterdam"}`}, "The weather in Amsterdam is sunny and 22°C.", &calls)
+	wf, err := NewGroupChatWorkflowBuilder(func(agents []*agent.Agent) *GroupChatManager {
+		return NewRoundRobinGroupChatManager(agents, RoundRobinGroupChatOptions{MaximumIterationCount: 4})
+	}, participant).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := inproc.OffThread.WithCheckpointing(checkpoint.NewJSONManager(&sessionCheckpointStore{}))
+	request, info, _ := groupChatFirstCheckpointRequest(t, env, wf, "What's the weather in Amsterdam?")
+	if calls.Load() != 1 || invocations.Load() != 0 {
+		t.Fatalf("chat/tool calls = %d/%d, want 1/0", calls.Load(), invocations.Load())
+	}
+	before := groupChatApprovalRequest(t, request)
+	if _, ok := before.ToolCall.(*message.FunctionCallContent); !ok {
+		t.Fatalf("pre-checkpoint call = %T", before.ToolCall)
+	}
+	resumed, err := env.ResumeStreaming(t.Context(), wf, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resumed.Close(t.Context()) }()
+	replayed := firstGroupChatRequest(t, slices.Values(readGroupChatPortStream(t, resumed)))
+	approval := groupChatApprovalRequest(t, replayed)
+	if _, ok := approval.ToolCall.(*message.FunctionCallContent); !ok {
+		t.Fatalf("post-checkpoint call = %T", approval.ToolCall)
+	}
+	response, err := replayed.CreateResponse(approval.CreateResponse(true, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resumed.SendResponse(t.Context(), response); err != nil {
+		t.Fatal(err)
+	}
+	readGroupChatPortStream(t, resumed)
+	if invocations.Load() != 1 {
+		t.Fatalf("tool invocation count = %d, want one", invocations.Load())
+	}
+}
+
+func TestGroupChatOrchestration_DeniedApprovalContinuesConversation(t *testing.T) {
+	var invocations, firstCalls, secondCalls atomic.Int32
+	privileged := functool.MustNew(functool.Config{Name: "DoSomethingPrivileged", Description: "Performs a privileged action"}, func(context.Context, struct{}) (string, error) { invocations.Add(1); return "tool result", nil })
+	first := groupChatCountingClient("agent1", []tool.Tool{tool.ApprovalRequiredFunc(privileged)}, &message.FunctionCallContent{CallID: "approve_call_1", Name: "DoSomethingPrivileged"}, "agent1 final response", &firstCalls)
+	second := groupChatCountingClient("agent2", nil, nil, "agent2 reply", &secondCalls)
+	wf, err := NewGroupChatWorkflowBuilder(func(agents []*agent.Agent) *GroupChatManager {
+		return NewRoundRobinGroupChatManager(agents, RoundRobinGroupChatOptions{MaximumIterationCount: 2})
+	}, first, second).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := inproc.OffThread.WithCheckpointing(checkpoint.NewInMemoryManager())
+	request, info, _ := groupChatFirstCheckpointRequest(t, env, wf, "hello")
+	if invocations.Load() != 0 {
+		t.Fatal("approval-required tool invoked before approval")
+	}
+	approval := groupChatApprovalRequest(t, request)
+	call, ok := approval.ToolCall.(*message.FunctionCallContent)
+	if !ok || call.Name != "DoSomethingPrivileged" {
+		t.Fatalf("approval call = %#v", approval.ToolCall)
+	}
+	response, err := request.CreateResponse(approval.CreateResponse(false, "Denied"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := env.ResumeStreaming(t.Context(), wf, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resumed.Close(t.Context()) }()
+	if err := resumed.SendResponse(t.Context(), response); err != nil {
+		t.Fatal(err)
+	}
+	result := groupChatPortTranscript(t, readGroupChatPortStream(t, resumed))
+	if invocations.Load() != 0 || firstCalls.Load() < 2 || secondCalls.Load() != 1 {
+		t.Fatalf("tool/agent1/agent2 calls = %d/%d/%d", invocations.Load(), firstCalls.Load(), secondCalls.Load())
+	}
+	if !slices.ContainsFunc(result, func(msg *message.Message) bool { return msg.AuthorName == "agent1" }) ||
+		!slices.ContainsFunc(result, func(msg *message.Message) bool {
+			return msg.AuthorName == "agent2" && msg.Contents.Text() == "agent2 reply"
+		}) {
+		t.Fatalf("final conversation = %v", result)
+	}
+}
+
+func TestGroupChatOrchestration_ExternalFunctionResultContinuesConversation(t *testing.T) {
+	var firstCalls, secondCalls atomic.Int32
+	schema := functool.MustNew(functool.Config{Name: "FetchExternalData", Description: "Fetches external data"}, func(context.Context, struct{}) (bool, error) { return true, nil })
+	first := groupChatCountingClient("agent1", []tool.Tool{groupChatDeclarationOnly{SchemaTool: schema}}, &message.FunctionCallContent{CallID: "fcc_call_1", Name: "FetchExternalData"}, "agent1 final response", &firstCalls)
+	second := groupChatCountingClient("agent2", nil, nil, "agent2 reply", &secondCalls)
+	wf, err := NewGroupChatWorkflowBuilder(func(agents []*agent.Agent) *GroupChatManager {
+		return NewRoundRobinGroupChatManager(agents, RoundRobinGroupChatOptions{MaximumIterationCount: 2})
+	}, first, second).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := inproc.OffThread.WithCheckpointing(checkpoint.NewInMemoryManager())
+	request, info, _ := groupChatFirstCheckpointRequest(t, env, wf, "hello")
+	call := groupChatFunctionCall(t, request)
+	if call.Name != "FetchExternalData" || !strings.HasSuffix(call.CallID, "fcc_call_1") {
+		t.Fatalf("external function call = %#v", call)
+	}
+	response, err := request.CreateResponse(&message.FunctionResultContent{CallID: call.CallID, Result: "external-data-payload"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := env.ResumeStreaming(t.Context(), wf, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resumed.Close(t.Context()) }()
+	if err := resumed.SendResponse(t.Context(), response); err != nil {
+		t.Fatal(err)
+	}
+	result := groupChatPortTranscript(t, readGroupChatPortStream(t, resumed))
+	if firstCalls.Load() < 2 || secondCalls.Load() != 1 {
+		t.Fatalf("agent1/agent2 calls = %d/%d", firstCalls.Load(), secondCalls.Load())
+	}
+	if !slices.ContainsFunc(result, func(msg *message.Message) bool { return msg.AuthorName == "agent1" }) ||
+		!slices.ContainsFunc(result, func(msg *message.Message) bool {
+			return msg.AuthorName == "agent2" && msg.Contents.Text() == "agent2 reply"
+		}) {
+		t.Fatalf("final conversation = %v", result)
+	}
+}
+
+func TestGroupChatManagerStateJSON_Roundtrip(t *testing.T) {
+	value := groupChatManagerState{IterationCount: 7}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result groupChatManagerState
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result != value || result.IterationCount != 7 {
+		t.Fatalf("manager state = %#v, want %#v", result, value)
+	}
+}
+
+func TestRoundRobinGroupChatManagerStateJSON_Roundtrip(t *testing.T) {
+	value := roundRobinGroupChatManagerState{NextIndex: 3}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result roundRobinGroupChatManagerState
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result != value || result.NextIndex != 3 {
+		t.Fatalf("round-robin state = %#v, want %#v", result, value)
+	}
+}
 
 func newGroupChatWorkflow(name string, managerFactory GroupChatManagerFactory, agents ...*agent.Agent) (*workflow.Workflow, error) {
 	return NewGroupChatWorkflowBuilder(managerFactory, agents...).WithName(name).Build()
@@ -282,14 +621,29 @@ func TestGroupChatWorkflowBuilder_AgentsRunInOrder(t *testing.T) {
 				t.Fatalf("Build: %v", err)
 			}
 
-			events := runGroupChatWorkflowTurn(t, wf, "abc")
-			wantTranscript := expectedGroupChatDoubleEchoTranscript(maxIterations, "abc")
-			wantUpdates := wantTranscript[1:]
-			if got := collectGroupChatUpdateTexts(events); !slices.Equal(got, wantUpdates) {
-				t.Fatalf("update texts = %v, want %v", got, wantUpdates)
-			}
-			if got := collectGroupChatOutputTexts(events); !slices.Equal(got, wantTranscript) {
-				t.Fatalf("output transcript = %v, want %v", got, wantTranscript)
+			for range 3 {
+				events := runGroupChatWorkflowTurn(t, wf, "abc")
+				wantTranscript := expectedGroupChatDoubleEchoTranscript(maxIterations, "abc")
+				wantUpdates := wantTranscript[1:]
+				if got := collectGroupChatUpdateTexts(events); !slices.Equal(got, wantUpdates) {
+					t.Fatalf("update texts = %v, want %v", got, wantUpdates)
+				}
+				if got := collectGroupChatOutputTexts(events); !slices.Equal(got, wantTranscript) {
+					t.Fatalf("output transcript = %v, want %v", got, wantTranscript)
+				}
+				result := groupChatPortTranscript(t, events)
+				if len(result) != maxIterations+1 || result[0].Role != message.RoleUser || result[0].AuthorName != "" || result[0].Contents.Text() != "abc" {
+					t.Fatalf("initial result = %v", result)
+				}
+				for i, msg := range result[1:] {
+					author := fmt.Sprintf("agent%d", i%3+1)
+					if msg.Role != message.RoleAssistant || msg.AuthorName != author || msg.Contents.Text() != wantTranscript[i+1] {
+						t.Fatalf("result[%d] = %#v, want assistant %s/%s", i+1, msg, author, wantTranscript[i+1])
+					}
+				}
+				if got := strings.Join(collectGroupChatUpdateTexts(events), ""); got != strings.Join(wantUpdates, "") {
+					t.Fatalf("update concatenation = %q", got)
+				}
 			}
 		})
 	}
@@ -526,14 +880,15 @@ func TestGroupChatWorkflowBuilder_ReturnsErrorsForInvalidInputs(t *testing.T) {
 }
 
 func TestRoundRobinGroupChatManager_CheckpointRestoresCursor(t *testing.T) {
-	agentA := newGroupChatLabelAgent("a", "A", "from-a")
-	agentB := newGroupChatLabelAgent("b", "B", "from-b")
-	manager := NewRoundRobinGroupChatManager([]*agent.Agent{agentA, agentB}, RoundRobinGroupChatOptions{})
+	agentA := newGroupChatLabelAgent("agent1", "", "from-a")
+	agentB := newGroupChatLabelAgent("agent2", "", "from-b")
+	agentC := newGroupChatLabelAgent("agent3", "", "from-c")
+	manager := NewRoundRobinGroupChatManager([]*agent.Agent{agentA, agentB, agentC}, RoundRobinGroupChatOptions{})
 	if _, err := manager.SelectNextAgent(t.Context(), nil); err != nil {
 		t.Fatalf("SelectNextAgent: %v", err)
 	}
 
-	const iterationCount = 4
+	const iterationCount = 7
 	state := make(map[string]any)
 	ctx := newGroupChatStateContext(t.Context(), state)
 	if err := checkpointGroupChatManager(ctx, manager, iterationCount); err != nil {
@@ -549,13 +904,17 @@ func TestRoundRobinGroupChatManager_CheckpointRestoresCursor(t *testing.T) {
 		t.Fatalf("round robin state was written without prefix")
 	}
 
-	restored := NewRoundRobinGroupChatManager([]*agent.Agent{agentA, agentB}, RoundRobinGroupChatOptions{})
+	restored := NewRoundRobinGroupChatManager([]*agent.Agent{agentA, agentB, agentC}, RoundRobinGroupChatOptions{})
+	initialIterationCount, err := restoreGroupChatManagerCheckpoint(newGroupChatStateContext(t.Context(), map[string]any{}), restored)
+	if err != nil || initialIterationCount != 0 {
+		t.Fatalf("initial iteration count = %d, %v, want 0", initialIterationCount, err)
+	}
 	restoredIterationCount, err := restoreGroupChatManagerCheckpoint(newGroupChatStateContext(t.Context(), state), restored)
 	if err != nil {
 		t.Fatalf("restoreGroupChatManagerCheckpoint: %v", err)
 	}
 	if got := restoredIterationCount; got != iterationCount {
-		t.Fatalf("iteration count = %d, want 4", got)
+		t.Fatalf("iteration count = %d, want 7", got)
 	}
 	nextAgent, err := restored.SelectNextAgent(t.Context(), nil)
 	if err != nil {
@@ -653,6 +1012,48 @@ func TestRoundRobinGroupChatManager_ShouldTerminate(t *testing.T) {
 	}
 }
 
+func TestRoundRobinGroupChatManager_WrapsAround(t *testing.T) {
+	first := newGroupChatLabelAgent("agent1", "", "")
+	second := newGroupChatLabelAgent("agent2", "", "")
+	manager := NewRoundRobinGroupChatManager([]*agent.Agent{first, second}, RoundRobinGroupChatOptions{})
+	for range 2 {
+		if _, err := manager.SelectNextAgent(t.Context(), nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := manager.SelectNextAgent(t.Context(), nil)
+	if err != nil || got != first {
+		t.Fatalf("wrapped selection = %v, %v, want first agent", got, err)
+	}
+}
+
+func TestRoundRobinGroupChatManager_CustomTerminationStopsEarly(t *testing.T) {
+	manager := newCustomTerminationManager()
+	history := []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "done"}}}}
+	stop, err := manager.ShouldTerminate(t.Context(), history, 0)
+	if err != nil || !stop {
+		t.Fatalf("ShouldTerminate = %t, %v, want true", stop, err)
+	}
+}
+
+func TestRoundRobinGroupChatManager_CustomTerminationContinuesWhenUnmet(t *testing.T) {
+	manager := newCustomTerminationManager()
+	history := []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "continue"}}}}
+	stop, err := manager.ShouldTerminate(t.Context(), history, 0)
+	if err != nil || stop {
+		t.Fatalf("ShouldTerminate = %t, %v, want false", stop, err)
+	}
+}
+
+func newCustomTerminationManager() *GroupChatManager {
+	return NewRoundRobinGroupChatManager([]*agent.Agent{newGroupChatLabelAgent("agent1", "", "")}, RoundRobinGroupChatOptions{
+		MaximumIterationCount: 100,
+		ShouldTerminate: func(_ context.Context, history []*message.Message, _ int) (bool, error) {
+			return slices.ContainsFunc(history, func(msg *message.Message) bool { return msg.Contents.Text() == "done" }), nil
+		},
+	})
+}
+
 func TestNewRoundRobinGroupChatManager_DoesNotValidateInputs(t *testing.T) {
 	validAgent := newGroupChatLabelAgent("a", "A", "from-a")
 	for _, testCase := range []struct {
@@ -698,6 +1099,7 @@ func TestRoundRobinGroupChatManager_RestoreWithoutCheckpointDefaultsToZeroState(
 		t.Fatalf("SelectNextAgent: %v", err)
 	}
 
+	iterationCount := 3
 	iterationCount, err := restoreGroupChatManagerCheckpoint(newGroupChatStateContext(t.Context(), map[string]any{}), manager)
 	if err != nil {
 		t.Fatalf("restoreGroupChatManagerCheckpoint: %v", err)
