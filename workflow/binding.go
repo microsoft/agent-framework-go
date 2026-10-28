@@ -219,6 +219,14 @@ func BindNewExecutorFunc(id string, fn func(sessionID string, executorID string)
 // instances from that port. Bind panics if the port ID is empty or either
 // message type is nil.
 func (p RequestPort) Bind() ExecutorBinding {
+	return p.BindWithWrappedRequests(true)
+}
+
+// BindWithWrappedRequests is like [RequestPort.Bind] but lets the caller choose
+// whether the executor accepts requests already wrapped in an
+// [ExternalRequest], as produced by a subworkflow host. When allowWrapped is
+// false, such messages are not routed to the port.
+func (p RequestPort) BindWithWrappedRequests(allowWrapped bool) ExecutorBinding {
 	if err := validateRequestPort(p); err != nil {
 		panic(err.Error())
 	}
@@ -228,7 +236,7 @@ func (p RequestPort) Bind() ExecutorBinding {
 		RawValue:         p,
 		Ports:            []RequestPort{p},
 		NewExecutorFunc: func(_ string) (*Executor, error) {
-			return newRequestPortExecutor(p), nil
+			return newRequestPortExecutor(p, allowWrapped), nil
 		},
 		SupportsConcurrentSharedExecution: true,
 	}
