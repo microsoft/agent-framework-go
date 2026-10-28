@@ -74,6 +74,34 @@ func TestNewExecutor_AcceptsRequestPorts(t *testing.T) {
 	}
 }
 
+func TestRequestPort_BindWithWrappedRequests(t *testing.T) {
+	port := workflow.RequestPort{ID: "port", Request: reflect.TypeFor[string](), Response: reflect.TypeFor[int]()}
+	wrappedType := reflect.TypeFor[*workflow.ExternalRequest]()
+	for _, test := range []struct {
+		name    string
+		binding workflow.ExecutorBinding
+		want    bool
+	}{
+		{name: "Bind", binding: port.Bind(), want: true},
+		{name: "allowed", binding: port.BindWithWrappedRequests(true), want: true},
+		{name: "disallowed", binding: port.BindWithWrappedRequests(false), want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			executor, err := test.binding.CreateInstance(port.ID)
+			if err != nil {
+				t.Fatalf("CreateInstance: %v", err)
+			}
+			accepts := executor.DescribeProtocol().Accepts
+			if got := slices.Contains(accepts, wrappedType); got != test.want {
+				t.Fatalf("accepts %v = %v, want %v (accepts: %v)", wrappedType, got, test.want, accepts)
+			}
+			if !slices.Contains(accepts, reflect.TypeFor[string]()) {
+				t.Fatalf("accepts = %v, want raw request type", accepts)
+			}
+		})
+	}
+}
+
 func TestNewExecutor_AcceptsExecutorBinding(t *testing.T) {
 	binding := workflow.BindNewExecutorFunc("binding", func(_ string, executorID string) (*workflow.Executor, error) {
 		return &workflow.Executor{ID: executorID}, nil
