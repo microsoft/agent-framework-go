@@ -1508,8 +1508,12 @@ func TestFileSource_DuplicateRecognizedFields_ExcludeSkill(t *testing.T) {
 
 func TestFileSource_IncorrectlyCasedRecognizedFields_ExcludeSkill(t *testing.T) {
 	for _, test := range []struct{ field, cased string }{
-		{"name", "Name"}, {"description", "Description"}, {"license", "License"},
-		{"compatibility", "Compatibility"}, {"metadata", "Metadata"}, {"allowed-tools", "Allowed-Tools"},
+		{"name", "Name"},
+		{"description", "Description"},
+		{"license", "License"},
+		{"compatibility", "Compatibility"},
+		{"metadata", "Metadata"},
+		{"allowed-tools", "Allowed-Tools"},
 	} {
 		t.Run(test.field, func(t *testing.T) {
 			fields := "name: ambiguous-skill\ndescription: A skill\n" + test.cased + ": value"
@@ -1563,8 +1567,12 @@ func TestFileSource_ConflictingScalarFormats_ExcludeSkillAndLogError(t *testing.
 
 func TestFileSource_ConflictingQuotedFields_ExcludeSkillAndLogError(t *testing.T) {
 	fields := []struct{ key, value string }{
-		{"name", "test-skill"}, {"description", "Read files"}, {"license", "MIT"},
-		{"compatibility", "Any runtime"}, {"metadata", "\n  author: First"}, {"allowed-tools", "read"},
+		{"name", "test-skill"},
+		{"description", "Read files"},
+		{"license", "MIT"},
+		{"compatibility", "Any runtime"},
+		{"metadata", "\n  author: First"},
+		{"allowed-tools", "read"},
 	}
 	for _, field := range fields {
 		var others []string
@@ -1718,7 +1726,6 @@ func TestFileSource_EmptyInlineValue_DoesNotBypassKeyValidation(t *testing.T) {
 			})
 		}
 	}
-
 }
 
 func TestFileSource_LinkedSkillDirectory_SkipsLinkedSkill(t *testing.T) {

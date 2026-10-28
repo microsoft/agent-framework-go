@@ -434,8 +434,10 @@ func TestMessageContentEqual_SameContentItemReferenceReturnsTrue(t *testing.T) {
 	requireMessageContentEqual(t, a, b, true)
 }
 
-type unknownContent struct{ message.Content }
-type otherUnknownContent struct{ message.Content }
+type (
+	unknownContent      struct{ message.Content }
+	otherUnknownContent struct{ message.Content }
+)
 
 func TestMessageContentEqual_UnknownContentSubtypeSameTypeReturnsTrue(t *testing.T) {
 	a := contentMessage(message.RoleUser, &unknownContent{})

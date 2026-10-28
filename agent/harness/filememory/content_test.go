@@ -188,6 +188,7 @@ func TestLineContentLength_BoundsEndAnchoredMatch(t *testing.T) {
 		})
 	}
 }
+
 func TestFileStoreContract_ApplyReplaceLines_ExpectedLineMatching_AppliesTheEdit(t *testing.T) {
 	assertLineReplacement(t, "one\ntwo\nthree\n", "one\nTWO\nthree\n", lineEdit{LineNumber: 2, NewLine: "TWO\n", ExpectedLine: new("two")})
 }

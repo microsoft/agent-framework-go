@@ -202,6 +202,7 @@ func TestConfigureForwarding_ForwardsMessageListUnmodified(t *testing.T) {
 		})
 	}
 }
+
 func TestConfigureForwarding_ForwardsMessageSequenceAsSlice(t *testing.T) {
 	executor := newForwardingExecutorForTest(nil)
 	testMessages := []*message.Message{

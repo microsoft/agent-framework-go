@@ -1328,10 +1328,14 @@ func TestHostedAgent_AssignsStableMessageIDToContentfulUpdates(t *testing.T) {
 			}
 			updates := []*agent.ResponseUpdate{
 				{MessageID: "", ResponseID: "response-id"},
-				{Role: message.RoleAssistant, MessageID: messageID, ResponseID: "response-id",
-					Contents: message.Contents{&message.TextContent{Text: "hello "}}},
-				{MessageID: messageID, ResponseID: "response-id", RawRepresentation: struct{}{},
-					Contents: message.Contents{&message.TextContent{Text: "world"}}},
+				{
+					Role: message.RoleAssistant, MessageID: messageID, ResponseID: "response-id",
+					Contents: message.Contents{&message.TextContent{Text: "hello "}},
+				},
+				{
+					MessageID: messageID, ResponseID: "response-id", RawRepresentation: struct{}{},
+					Contents: message.Contents{&message.TextContent{Text: "world"}},
+				},
 			}
 			events := runHostedAgent(t, newContentAgent(updates...), agentworkflow.Config{
 				EmitUpdateEvents: new(true), EmitResponseEvents: true,

@@ -230,6 +230,7 @@ func TestTruncateHeadTail_NonASCIIBoundary(t *testing.T) {
 		t.Fatalf("replacement rune in %q", got)
 	}
 }
+
 func TestPreserveEnvironmentValuesKeepsOnlyAllowlist(t *testing.T) {
 	source := []string{
 		"PATH=/bin",

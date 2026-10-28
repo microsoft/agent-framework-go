@@ -56,6 +56,7 @@ func sampleRequestOf[T any](value any) bool {
 	request, ok := value.(*workflow.ExternalRequest)
 	return ok && request.Data.Is(reflect.TypeFor[T]())
 }
+
 func sampleResponseOf[T any](value any) bool {
 	response, ok := value.(*workflow.ExternalResponse)
 	return ok && response.Data.Is(reflect.TypeFor[T]())

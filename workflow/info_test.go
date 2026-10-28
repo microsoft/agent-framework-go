@@ -110,9 +110,23 @@ func TestEdgeInfos_AllConnectionCases(t *testing.T) {
 		edge, other workflow.Edge
 		want        bool
 	}{
-		{d1, d1, true}, {d1, d2, true}, {d1, d3, false}, {dc, dc, true}, {d2, dc, false}, {d3, dc, false},
-		{f1, f1, true}, {f1, f2, true}, {f1, f3, false}, {f1, f4, false}, {f1, f5, false}, {fa, fa, true},
-		{i1, i1, true}, {i1, i2, true}, {i1, i3, false}, {i1, i4, false}, {i1, i5, false},
+		{d1, d1, true},
+		{d1, d2, true},
+		{d1, d3, false},
+		{dc, dc, true},
+		{d2, dc, false},
+		{d3, dc, false},
+		{f1, f1, true},
+		{f1, f2, true},
+		{f1, f3, false},
+		{f1, f4, false},
+		{f1, f5, false},
+		{fa, fa, true},
+		{i1, i1, true},
+		{i1, i2, true},
+		{i1, i3, false},
+		{i1, i4, false},
+		{i1, i5, false},
 	} {
 		test.edge.Index = index * 2
 		test.other.Index = index*2 + 1

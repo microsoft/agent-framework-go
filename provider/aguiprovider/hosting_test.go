@@ -374,14 +374,16 @@ func TestAGUIIntegrationClientTriggersMultipleFunctionCalls(t *testing.T) {
 		func(_ context.Context, input struct {
 			A int `json:"a"`
 			B int `json:"b"`
-		}) (int, error) {
+		},
+		) (int, error) {
 			calculateCount.Add(1)
 			return input.A + input.B, nil
 		})
 	format := functool.MustNew(functool.Config{Name: "FormatText", Description: "Formats text to uppercase"},
 		func(_ context.Context, input struct {
 			Text string `json:"text"`
-		}) (string, error) {
+		},
+		) (string, error) {
 			formatCount.Add(1)
 			return strings.ToUpper(input.Text), nil
 		})
@@ -481,7 +483,8 @@ func TestAGUIIntegrationServerToolCustomArguments(t *testing.T) {
 	tl := functool.MustNew(functool.Config{Name: "GetServerForecast", Description: "Gets the weather forecast from server"},
 		func(_ context.Context, input struct {
 			Request serverForecastRequest `json:"request"`
-		}) (serverForecastResponse, error) {
+		},
+		) (serverForecastResponse, error) {
 			count.Add(1)
 			condition := "Sunny"
 			if input.Request.Location == "Seattle" {
@@ -504,7 +507,8 @@ func TestAGUIIntegrationClientToolCustomArguments(t *testing.T) {
 	tl := functool.MustNew(functool.Config{Name: "GetClientForecast", Description: "Gets the weather forecast from client"},
 		func(_ context.Context, input struct {
 			Request clientForecastRequest `json:"request"`
-		}) (clientForecastResponse, error) {
+		},
+		) (clientForecastResponse, error) {
 			count.Add(1)
 			maxTemp := 75
 			if input.Request.City == "Portland" {

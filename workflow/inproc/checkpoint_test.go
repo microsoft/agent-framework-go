@@ -153,10 +153,12 @@ func TestCheckpointParent_StreamingResumeUsesResumedCheckpoint(t *testing.T) {
 	}
 }
 
-type checkpointBarrierContribution struct{ Source string }
-type checkpointApprovalRequest struct{ Prompt string }
-type checkpointApprovalReply struct{ Value string }
-type checkpointBarrierReleased struct{ Source string }
+type (
+	checkpointBarrierContribution struct{ Source string }
+	checkpointApprovalRequest     struct{ Prompt string }
+	checkpointApprovalReply       struct{ Value string }
+	checkpointBarrierReleased     struct{ Source string }
+)
 
 func (checkpointBarrierReleased) Data() any { return nil }
 

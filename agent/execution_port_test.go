@@ -547,7 +547,6 @@ func TestExecutionPort_ChatClientAgent_RunStreamingAsyncInvokesMultipleAIContext
 			t.Fatalf("provider lifecycle = %#v", p)
 		}
 	}
-
 }
 
 func TestExecutionPort_MessageAIContextProviderAgent_RunAsync_SequentialProviders_EachReceivesPreviousOutputAsync(t *testing.T) {
@@ -1163,7 +1162,8 @@ func executionPortNewWeather(t *testing.T, cfg agent.Config, approval bool, serv
 	w := &executionPortWeather{}
 	fn := functool.MustNew(functool.Config{Name: "GetWeather", Description: "Gets the weather"}, func(context.Context, struct {
 		City string `json:"city"`
-	}) (string, error) {
+	},
+	) (string, error) {
 		w.toolCalls++
 		return "Sunny, 22°C", nil
 	})
@@ -2055,8 +2055,8 @@ func executionPortFunctionCalls(calls ...*message.FunctionCallContent) agent.Run
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			contents := make([]message.Content, len(calls))
 			for i, call := range calls {
-				copy := *call
-				contents[i] = &copy
+				clonedCall := *call
+				contents[i] = &clonedCall
 			}
 			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: contents}, nil)
 		}
@@ -2174,7 +2174,8 @@ func TestExecutionPort_FunctionInvocation_RunAsync_WithMultipleFunctionCalls_Inv
 func TestExecutionPort_FunctionInvocation_RunAsync_MiddlewareContext_ContainsCorrectValuesAsync(t *testing.T) {
 	fn := functool.MustNew(functool.Config{Name: "TestFunction", Description: "A test function"}, func(context.Context, struct {
 		Param string `json:"param"`
-	}) (string, error) {
+	},
+	) (string, error) {
 		return "Function result", nil
 	})
 	var captured *agent.FunctionInvocationContext

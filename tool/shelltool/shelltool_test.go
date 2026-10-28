@@ -1991,10 +1991,11 @@ func TestLocal_DefaultConstructorUsesPersistentMode(t *testing.T) {
 
 func TestLocal_ImplementsExecutor(t *testing.T) {
 	cfg, _ := statelessPlatformConfig(t)
-	var executor shelltool.Executor = portShell(t, cfg)
+	executor := portShell(t, cfg)
 	if executor == nil {
 		t.Fatal("local executor is nil")
 	}
+	var _ shelltool.Executor = executor
 }
 
 func TestEnvironmentProvider_PosixHostReportsPosix(t *testing.T) {

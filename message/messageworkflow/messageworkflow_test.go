@@ -160,6 +160,7 @@ func TestExecutor_Handles_ArrayOfMessages(t *testing.T) {
 		}
 	}
 }
+
 func TestExecutor_Handles_SingleMessage(t *testing.T) {
 	for _, test := range []struct {
 		name       string

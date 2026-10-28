@@ -196,7 +196,8 @@ func TestGroupChatOrchestration_ApprovalJSONCheckpointPreservesCallAndInvokesToo
 	var invocations, calls atomic.Int32
 	weather := functool.MustNew(functool.Config{Name: "GetWeather", Description: "Gets the weather for the given city"}, func(_ context.Context, input struct {
 		City string `json:"city"`
-	}) (string, error) {
+	},
+	) (string, error) {
 		if input.City != "Amsterdam" {
 			t.Errorf("tool city = %q, want Amsterdam", input.City)
 		}
@@ -1099,7 +1100,6 @@ func TestRoundRobinGroupChatManager_RestoreWithoutCheckpointDefaultsToZeroState(
 		t.Fatalf("SelectNextAgent: %v", err)
 	}
 
-	iterationCount := 3
 	iterationCount, err := restoreGroupChatManagerCheckpoint(newGroupChatStateContext(t.Context(), map[string]any{}), manager)
 	if err != nil {
 		t.Fatalf("restoreGroupChatManagerCheckpoint: %v", err)

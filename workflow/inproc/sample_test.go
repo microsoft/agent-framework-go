@@ -160,8 +160,10 @@ const (
 	sampleNumberMatched
 )
 
-type sampleNumberBounds struct{ Lower, Upper int }
-type sampleTryCount struct{ Tries int }
+type (
+	sampleNumberBounds struct{ Lower, Upper int }
+	sampleTryCount     struct{ Tries int }
+)
 
 func sampleJudge() workflow.ExecutorBinding {
 	executor := workflow.NewExecutor("Judge", func(ctx *workflow.Context, guess int) (sampleNumberSignal, error) {
@@ -380,6 +382,7 @@ func (store *sampleJSONStore) CreateCheckpoint(_ context.Context, sessionID stri
 	store.index = append(store.index, info)
 	return info, nil
 }
+
 func (store *sampleJSONStore) RetrieveCheckpoint(_ context.Context, _ string, info workflow.CheckpointInfo) (json.RawMessage, error) {
 	value, ok := store.values[info]
 	if !ok {
@@ -387,6 +390,7 @@ func (store *sampleJSONStore) RetrieveCheckpoint(_ context.Context, _ string, in
 	}
 	return slices.Clone(value), nil
 }
+
 func (store *sampleJSONStore) RetrieveIndex(_ context.Context, sessionID string, _ *workflow.CheckpointInfo) ([]workflow.CheckpointInfo, error) {
 	var result []workflow.CheckpointInfo
 	for _, info := range store.index {
@@ -448,11 +452,13 @@ func TestSample_Step5_InPlaceCheckpointRestore(t *testing.T) {
 		t.Run(environment.name, func(t *testing.T) { runSampleGuessCheckpoint(t, environment.env, false, false) })
 	}
 }
+
 func TestSample_Step5a_RehydrateCheckpointRestore(t *testing.T) {
 	for _, environment := range sampleEnvironments() {
 		t.Run(environment.name, func(t *testing.T) { runSampleGuessCheckpoint(t, environment.env, true, false) })
 	}
 }
+
 func TestSample_Step5b_JSONCheckpointRestore(t *testing.T) {
 	for _, environment := range sampleEnvironments() {
 		t.Run(environment.name, func(t *testing.T) { runSampleGuessCheckpoint(t, environment.env, true, true) })
@@ -522,11 +528,14 @@ func TestSample_Step6_GroupChat(t *testing.T) {
 	}
 }
 
-type sampleTextRequest struct{ Text, TaskID string }
-type sampleTextResult struct {
-	TaskID, Text         string
-	WordCount, CharCount int
-}
+type (
+	sampleTextRequest struct{ Text, TaskID string }
+	sampleTextResult  struct {
+		TaskID, Text         string
+		WordCount, CharCount int
+	}
+)
+
 type sampleTextState struct {
 	Results []sampleTextResult
 	Pending map[string]bool

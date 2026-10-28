@@ -109,14 +109,6 @@ func TestSourceAttribution_ObjectEquals_WithDifferentType_ReturnsFalse(t *testin
 	}
 }
 
-func TestSourceAttribution_ObjectEquals_WithNilObject_ReturnsFalse(t *testing.T) {
-	source := message.Source{Type: agent.SourceTypeHistoryProvider, ID: "Provider"}
-	var other any
-	if source == other {
-		t.Fatalf("%+v == nil", source)
-	}
-}
-
 func TestSourceAttribution_ObjectEquals_WithBoxedDifferentAttribution_ReturnsFalse(t *testing.T) {
 	first := message.Source{Type: agent.SourceTypeHistoryProvider, ID: "Provider1"}
 	var second any = message.Source{Type: agent.SourceTypeHistoryProvider, ID: "Provider2"}
@@ -292,14 +284,6 @@ func TestSourceType_Equals_WithDifferentValue_ReturnsFalse(t *testing.T) {
 	}
 }
 
-func TestSourceType_Equals_WithNilObject_ReturnsFalse(t *testing.T) {
-	source := message.SourceType("Test")
-	var other any
-	if source == other {
-		t.Fatalf("%q == nil", source)
-	}
-}
-
 func TestSourceType_Equals_WithDifferentCase_ReturnsFalse(t *testing.T) {
 	first := message.SourceType("Test")
 	second := message.SourceType("test")
@@ -329,14 +313,6 @@ func TestSourceType_ObjectEquals_WithDifferentType_ReturnsFalse(t *testing.T) {
 	var other any = "Test"
 	if source == other {
 		t.Fatalf("typed source %q == untyped string %v", source, other)
-	}
-}
-
-func TestSourceType_ObjectEquals_WithNilObject_ReturnsFalse(t *testing.T) {
-	source := message.SourceType("Test")
-	var other any
-	if source == other {
-		t.Fatalf("%q == nil", source)
 	}
 }
 

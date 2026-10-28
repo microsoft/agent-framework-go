@@ -1087,8 +1087,10 @@ func nullableAggregatorBinding(id string, results *[]string) workflow.ExecutorBi
 	return binding
 }
 
-type functionPortText struct{ Text string }
-type functionPortData struct{ Base64Bytes string }
+type (
+	functionPortText struct{ Text string }
+	functionPortData struct{ Base64Bytes string }
+)
 
 func functionPortDataFor(input functionPortText) functionPortData {
 	return functionPortData{Base64Bytes: base64.StdEncoding.EncodeToString([]byte(input.Text))}
@@ -1281,6 +1283,7 @@ func TestAggregatingExecutor_PersistsStateBetweenCalls(t *testing.T) {
 		}
 	}
 }
+
 func TestNewAggregatingExecutor_AggregatesIncrementallyAndNilClearsState(t *testing.T) {
 	var received []string
 	executor := workflow.NewAggregatingExecutor("aggregate", func(aggregate *string, input string) *string {
