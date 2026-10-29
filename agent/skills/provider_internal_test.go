@@ -111,6 +111,17 @@ func TestProvidedCodeDefinedSkill_NoScripts_ReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestInlineSkill_WithoutAddedScripts_HasNilCollection(t *testing.T) {
+	skill := &Skill{
+		Frontmatter: Frontmatter{Name: "my-skill", Description: "A valid skill."},
+		GetContent:  func(context.Context) (string, error) { return "Instructions.", nil },
+	}
+
+	if scripts := skill.Scripts; scripts != nil {
+		t.Fatalf("Scripts = %#v, want nil when no scripts were added", scripts)
+	}
+}
+
 func TestProvidedInlineSkill_WithoutAddedScripts_ReturnsNotFound(t *testing.T) {
 	skill := newProvidedSkill(&Skill{
 		Frontmatter: Frontmatter{Name: "my-skill", Description: "A valid skill."},

@@ -120,6 +120,9 @@ func TestCachingSource_CachesSuccessfulListsIncludingEmpty(t *testing.T) {
 			if err != nil || !slices.Equal(actual, result) {
 				t.Fatalf("cached list = (%v, %v), want %v", actual, err, result)
 			}
+			if len(result) > 0 && &actual[0] != &result[0] {
+				t.Fatal("cache returned a different skill list")
+			}
 		}
 		if calls != 1 {
 			t.Fatalf("source calls = %d, want 1", calls)
@@ -200,20 +203,21 @@ func TestCachingSource_CapturesRefreshIntervalAndExpires(t *testing.T) {
 
 func TestCachingSource_RetriesFailuresWithoutMaskingThem(t *testing.T) {
 	failure := errors.New("fetch failed")
+	recovered := mustInlineSkill(skills.Frontmatter{Name: "recovered-skill", Description: "Recovered"}, "Body.", nil, nil)
 	calls := 0
 	source := skills.NewCachingSource(skills.SourceFunc(func(context.Context, skills.SourceContext) ([]*skills.Skill, error) {
 		calls++
 		if calls == 1 {
 			return nil, failure
 		}
-		return nil, nil
+		return []*skills.Skill{recovered}, nil
 	}), skills.CachingSourceConfig{})
 	if _, err := source.Skills(t.Context(), skills.SourceContext{}); !errors.Is(err, failure) {
 		t.Fatalf("fetch error = %v", err)
 	}
 	for range 2 {
-		if _, err := source.Skills(t.Context(), skills.SourceContext{}); err != nil {
-			t.Fatal(err)
+		if result, err := source.Skills(t.Context(), skills.SourceContext{}); err != nil || !slices.Equal(result, []*skills.Skill{recovered}) {
+			t.Fatalf("retry result = (%v, %v), want recovered skill", result, err)
 		}
 	}
 	if calls != 2 {
@@ -233,13 +237,15 @@ func TestCachingSource_ConcurrentCallersShareOneFetch(t *testing.T) {
 			<-release
 			return []*skills.Skill{skill}, nil
 		}), skills.CachingSourceConfig{})
+		results := make([][]*skills.Skill, 10)
 		var wg sync.WaitGroup
-		for range 10 {
+		for i := range results {
 			wg.Go(func() {
 				result, err := source.Skills(t.Context(), skills.SourceContext{})
 				if err != nil || !slices.Equal(result, []*skills.Skill{skill}) {
 					t.Errorf("concurrent cached result = (%v, %v)", result, err)
 				}
+				results[i] = result
 			})
 		}
 		<-started
@@ -249,11 +255,20 @@ func TestCachingSource_ConcurrentCallersShareOneFetch(t *testing.T) {
 		if count := calls.Load(); count != 1 {
 			t.Fatalf("source loads = %d, want 1", count)
 		}
+		if len(results[0]) != 1 {
+			t.Fatalf("first result = %v, want one skill", results[0])
+		}
+		for _, result := range results {
+			if len(result) != 1 || &result[0] != &results[0][0] {
+				t.Fatal("concurrent callers received different skill lists")
+			}
+		}
 	})
 }
 
 func TestCachingSource_CancelledOwnerAllowsWaiterToRetry(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		skill := mustInlineSkill(skills.Frontmatter{Name: "skill-a", Description: "A"}, "Instructions A.", nil, nil)
 		var calls atomic.Int32
 		started := make(chan context.Context, 2)
 		release := make(chan struct{})
@@ -264,28 +279,259 @@ func TestCachingSource_CancelledOwnerAllowsWaiterToRetry(t *testing.T) {
 			case <-ctx.Done():
 				return nil, ctx.Err()
 			case <-release:
-				return nil, nil
+				return []*skills.Skill{skill}, nil
 			}
 		}), skills.CachingSourceConfig{})
 		owner, cancel := context.WithCancel(t.Context())
-		ownerDone, waiterDone := make(chan error, 1), make(chan error, 1)
+		type result struct {
+			skills []*skills.Skill
+			err    error
+		}
+		ownerDone, waiterDone := make(chan error, 1), make(chan result, 1)
 		go func() { _, err := source.Skills(owner, skills.SourceContext{}); ownerDone <- err }()
 		<-started
-		go func() { _, err := source.Skills(t.Context(), skills.SourceContext{}); waiterDone <- err }()
+		go func() {
+			loaded, err := source.Skills(t.Context(), skills.SourceContext{})
+			waiterDone <- result{loaded, err}
+		}()
 		synctest.Wait()
 		cancel()
 		if err := <-ownerDone; !errors.Is(err, context.Canceled) {
 			t.Fatalf("owner failure = %v", err)
 		}
-		<-started
+		waiterContext := <-started
 		close(release)
-		if err := <-waiterDone; err != nil {
-			t.Fatal(err)
+		got := <-waiterDone
+		if got.err != nil || !slices.Equal(got.skills, []*skills.Skill{skill}) {
+			t.Fatalf("waiter result = (%v, %v), want skill-a", got.skills, got.err)
 		}
-		if count := calls.Load(); count != 2 {
-			t.Fatalf("source loads = %d, want cancelled owner plus waiter retry", count)
+		if count := calls.Load(); count != 2 || waiterContext.Err() != nil {
+			t.Fatalf("source loads = %d, waiter context error = %v", count, waiterContext.Err())
 		}
 	})
+}
+
+func TestCachingSource_ReturnsSourceSkills(t *testing.T) {
+	inner := &countingSource{skills: []*skills.Skill{
+		mustInlineSkill(skills.Frontmatter{Name: "skill-x", Description: "X"}, "Body X.", nil, nil),
+		mustInlineSkill(skills.Frontmatter{Name: "skill-y", Description: "Y"}, "Body Y.", nil, nil),
+	}}
+	source := skills.NewCachingSource(inner, skills.CachingSourceConfig{})
+	result, err := source.Skills(t.Context(), skills.SourceContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 2 || result[0].Frontmatter.Name != "skill-x" || result[1].Frontmatter.Name != "skill-y" {
+		t.Fatalf("cached skills = %v, want skill-x followed by skill-y", result)
+	}
+}
+
+func TestCachingSource_SameIsolationKeySharesList(t *testing.T) {
+	inner := &countingSource{skills: []*skills.Skill{
+		mustInlineSkill(skills.Frontmatter{Name: "skill-a", Description: "A"}, "Instructions A.", nil, nil),
+	}}
+	source := skills.NewCachingSource(inner, skills.CachingSourceConfig{
+		CacheIsolationKeySelector: func(context.Context, skills.SourceContext) *string { return new("same-key") },
+	})
+	first, err := source.Skills(t.Context(), skills.SourceContext{Agent: agenttest.New(nil), Session: agenttest.CreateSession()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := source.Skills(t.Context(), skills.SourceContext{Agent: agenttest.New(nil), Session: agenttest.CreateSession()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inner.count != 1 || len(first) != 1 || len(second) != 1 || &first[0] != &second[0] {
+		t.Fatalf("source loads = %d; same isolation key did not share the cached list", inner.count)
+	}
+}
+
+func TestCachingSource_DifferentIsolationKeysUseAgentIdentity(t *testing.T) {
+	first, second := agenttest.New(nil), agenttest.New(nil)
+	inner := &countingSource{skills: []*skills.Skill{
+		mustInlineSkill(skills.Frontmatter{Name: "skill-a", Description: "A"}, "Instructions A.", nil, nil),
+	}}
+	source := skills.NewCachingSource(inner, skills.CachingSourceConfig{
+		CacheIsolationKeySelector: func(_ context.Context, request skills.SourceContext) *string {
+			if request.Agent == first {
+				return new("agent-1")
+			}
+			return new("agent-2")
+		},
+	})
+	for _, a := range []*agent.Agent{first, second} {
+		if _, err := source.Skills(t.Context(), skills.SourceContext{Agent: a, Session: agenttest.CreateSession()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if inner.count != 2 {
+		t.Fatalf("source loads = %d, want two agent-specific cache buckets", inner.count)
+	}
+}
+
+func TestCachingSource_NilIsolationKeySharesList(t *testing.T) {
+	inner := &countingSource{skills: []*skills.Skill{
+		mustInlineSkill(skills.Frontmatter{Name: "skill-a", Description: "A"}, "Instructions A.", nil, nil),
+	}}
+	source := skills.NewCachingSource(inner, skills.CachingSourceConfig{
+		CacheIsolationKeySelector: func(context.Context, skills.SourceContext) *string { return nil },
+	})
+	first, err := source.Skills(t.Context(), skills.SourceContext{Agent: agenttest.New(nil), Session: agenttest.CreateSession()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := source.Skills(t.Context(), skills.SourceContext{Agent: agenttest.New(nil), Session: agenttest.CreateSession()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inner.count != 1 || len(first) != 1 || len(second) != 1 || &first[0] != &second[0] {
+		t.Fatalf("source loads = %d; nil isolation keys did not share the cached list", inner.count)
+	}
+}
+
+func TestCachingSource_AllCallersCancel_CancelsSource(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		inner := &gatedCacheSource{started: make(chan context.Context, 2), release: make(chan struct{})}
+		source := skills.NewCachingSource(inner, skills.CachingSourceConfig{})
+		first, cancelFirst := context.WithCancel(t.Context())
+		defer cancelFirst()
+		second, cancelSecond := context.WithCancel(t.Context())
+		defer cancelSecond()
+		done := make(chan error, 2)
+		go func() {
+			_, err := source.Skills(first, skills.SourceContext{})
+			done <- err
+		}()
+		sourceContext := <-inner.started
+		go func() {
+			_, err := source.Skills(second, skills.SourceContext{})
+			done <- err
+		}()
+		synctest.Wait()
+		cancelFirst()
+		cancelSecond()
+		for range 2 {
+			if err := <-done; !errors.Is(err, context.Canceled) {
+				t.Fatalf("source error = %v, want cancellation", err)
+			}
+		}
+		if !errors.Is(sourceContext.Err(), context.Canceled) {
+			t.Fatalf("inner source context error = %v, want cancellation", sourceContext.Err())
+		}
+	})
+}
+
+func TestCachingSource_SingleCallerCancels_CancelsSource(t *testing.T) {
+	inner := &gatedCacheSource{started: make(chan context.Context, 1), release: make(chan struct{})}
+	source := skills.NewCachingSource(inner, skills.CachingSourceConfig{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := source.Skills(ctx, skills.SourceContext{})
+		done <- err
+	}()
+	sourceContext := <-inner.started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("source error = %v, want cancellation", err)
+	}
+	if !errors.Is(sourceContext.Err(), context.Canceled) {
+		t.Fatalf("inner source context error = %v, want cancellation", sourceContext.Err())
+	}
+}
+
+func TestCachingSource_CanceledFetchDoesNotPoisonNextCall(t *testing.T) {
+	inner := &gatedCacheSource{started: make(chan context.Context, 2), release: make(chan struct{})}
+	source := skills.NewCachingSource(inner, skills.CachingSourceConfig{})
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := source.Skills(ctx, skills.SourceContext{})
+		done <- err
+	}()
+	<-inner.started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("first source error = %v, want cancellation", err)
+	}
+	close(inner.release)
+	result, err := source.Skills(t.Context(), skills.SourceContext{})
+	if err != nil || len(result) != 1 || result[0].Frontmatter.Name != "skill-a" {
+		t.Fatalf("retry result = (%v, %v), want skill-a", result, err)
+	}
+	if count := inner.calls.Load(); count != 2 {
+		t.Fatalf("source loads = %d, want cancelled fetch and successful retry", count)
+	}
+}
+
+func TestCachingSource_WithinRefreshIntervalSharesList(t *testing.T) {
+	inner := &countingSource{skills: []*skills.Skill{
+		mustInlineSkill(skills.Frontmatter{Name: "skill-a", Description: "A"}, "Instructions A.", nil, nil),
+	}}
+	source := skills.NewCachingSource(inner, skills.CachingSourceConfig{RefreshInterval: new(time.Hour)})
+	request := skills.SourceContext{}
+	first, err := source.Skills(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := source.Skills(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inner.count != 1 || len(first) != 1 || len(second) != 1 || &first[0] != &second[0] {
+		t.Fatalf("source loads = %d; fresh cache did not reuse the skill list", inner.count)
+	}
+}
+
+func TestCachingSource_ZeroRefreshIntervalRefetches(t *testing.T) {
+	inner := &countingSource{skills: []*skills.Skill{
+		mustInlineSkill(skills.Frontmatter{Name: "skill-a", Description: "A"}, "Instructions A.", nil, nil),
+	}}
+	source := skills.NewCachingSource(inner, skills.CachingSourceConfig{RefreshInterval: new(time.Duration(0))})
+	for range 2 {
+		if _, err := source.Skills(t.Context(), skills.SourceContext{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if inner.count != 2 {
+		t.Fatalf("source loads = %d, want zero interval to refetch", inner.count)
+	}
+}
+
+func TestCachingSource_NegativeRefreshIntervalRefetches(t *testing.T) {
+	inner := &countingSource{skills: []*skills.Skill{
+		mustInlineSkill(skills.Frontmatter{Name: "skill-a", Description: "A"}, "Instructions A.", nil, nil),
+	}}
+	source := skills.NewCachingSource(inner, skills.CachingSourceConfig{RefreshInterval: new(-time.Minute)})
+	for range 2 {
+		if _, err := source.Skills(t.Context(), skills.SourceContext{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if inner.count != 2 {
+		t.Fatalf("source loads = %d, want negative interval to refetch", inner.count)
+	}
+}
+
+func TestCachingSource_NilRefreshIntervalSharesList(t *testing.T) {
+	inner := &countingSource{skills: []*skills.Skill{
+		mustInlineSkill(skills.Frontmatter{Name: "skill-a", Description: "A"}, "Instructions A.", nil, nil),
+	}}
+	source := skills.NewCachingSource(inner, skills.CachingSourceConfig{RefreshInterval: nil})
+	request := skills.SourceContext{}
+	first, err := source.Skills(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := source.Skills(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inner.count != 1 || len(first) != 1 || len(second) != 1 || &first[0] != &second[0] {
+		t.Fatalf("source loads = %d; nil refresh interval did not reuse the skill list", inner.count)
+	}
 }
 
 func TestCachingSource_PanicDoesNotPoisonCache(t *testing.T) {
