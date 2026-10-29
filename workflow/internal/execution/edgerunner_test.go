@@ -55,6 +55,30 @@ func TestPrepareDeliveryForFanOutEdge_AssignerOutOfRangeIndexIgnored(t *testing.
 	requireMapping(t, mapping, []string{"executor2", "executor3"}, []string{"test"})
 }
 
+// An Assigner that selects the same target more than once must deliver to that
+// target once, in the order each target is first named.
+func TestPrepareDeliveryForFanOutEdge_AssignerRepeatedTargetsDeliveredOnce(t *testing.T) {
+	edge := workflow.Edge{
+		Connection: workflow.EdgeConnection{SourceIDs: []string{"executor1"}, SinkIDs: []string{"executor2", "executor3"}},
+		Assigner: func(int, any) iter.Seq[int] {
+			return func(yield func(int) bool) {
+				for _, i := range []int{1, 0, 1, 0} {
+					if !yield(i) {
+						return
+					}
+				}
+			}
+		},
+	}
+
+	runner, builtEdges := newTestEdgeRunner(t, edge)
+	mapping, err := runner.PrepareDeliveryForEdge(context.Background(), builtEdges[0], mustEnvelopeTarget(t, "test", "executor1", ""))
+	if err != nil {
+		t.Fatalf("PrepareDeliveryForEdge: %v", err)
+	}
+	requireMapping(t, mapping, []string{"executor3", "executor2"}, []string{"test"})
+}
+
 // An Assigner that returns a nil iter.Seq must be tolerated: ranging over a nil
 // function value panics, so target selection must guard against it.
 func TestPrepareDeliveryForFanOutEdge_AssignerReturningNilSeqIsTolerated(t *testing.T) {
