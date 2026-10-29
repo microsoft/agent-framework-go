@@ -25,6 +25,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	azfake "github.com/Azure/azure-sdk-for-go/sdk/azcore/fake"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	"github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -52,6 +53,7 @@ import (
 	"github.com/microsoft/agent-framework-go/provider/a2aprovider"
 	"github.com/microsoft/agent-framework-go/provider/aguiprovider"
 	"github.com/microsoft/agent-framework-go/provider/anthropicprovider"
+	"github.com/microsoft/agent-framework-go/provider/azureprovider"
 	"github.com/microsoft/agent-framework-go/provider/copilotprovider"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/provider/geminiprovider"
@@ -82,6 +84,11 @@ var featureActivationCases = []struct {
 	{"harness-mask-disabled", nil, []string{featureMaskDisabledEnvVar + "=true"}},
 	{"history-provide", []int{13}, nil},
 	{"history-store", []int{13}, nil},
+	{"cosmos-history-unused", nil, nil},
+	{"cosmos-history-provide", []int{58}, nil},
+	{"cosmos-history-store", []int{58}, nil},
+	{"cosmos-history-count", []int{58}, nil},
+	{"cosmos-history-clear", []int{58}, nil},
 	{"chat-history-memory", []int{4}, nil},
 	{"chat-history-memory-on-demand", []int{4}, nil},
 	{"text-search", []int{6}, nil},
@@ -185,6 +192,60 @@ func TestCoreAgentFeatureUsageNonStreaming(t *testing.T) {
 
 func TestCoreAgentFeatureUsageStreamingIsCold(t *testing.T) {
 	assertFeatureUsagePort(t, "agent-cold-port", 0)
+}
+
+func TestHarnessFeatureUsageConstructionDoesNotActivate(t *testing.T) {
+	assertFeatureUsagePort(t, "port-harness-construction")
+}
+
+func TestHarnessFeatureUsageNonStreaming(t *testing.T) {
+	assertFeatureUsagePort(t, "port-harness-run", 0, 1)
+}
+
+func TestHarnessFeatureUsageStreamingIsCold(t *testing.T) {
+	assertFeatureUsagePort(t, "port-harness-cold", 0, 1)
+}
+
+func TestFoundryBaseUserAgentPolicyStampsOutgoingRequest(t *testing.T) {
+	if got := runHelper(t, "policy:base-stamp"); got != "ok" {
+		t.Fatalf("policy helper output = %q, want ok", got)
+	}
+}
+
+func TestFoundryBaseUserAgentPolicyDoesNotStampMEAI(t *testing.T) {
+	if got := runHelper(t, "policy:base-no-meai"); got != "ok" {
+		t.Fatalf("policy helper output = %q, want ok", got)
+	}
+}
+
+func TestFoundryBaseUserAgentPolicyPreservesExistingUserAgent(t *testing.T) {
+	if got := runHelper(t, "policy:base-existing"); got != "ok" {
+		t.Fatalf("policy helper output = %q, want ok", got)
+	}
+}
+
+func TestFoundryBaseUserAgentPolicyIsIdempotent(t *testing.T) {
+	if got := runHelper(t, "policy:base-idempotent"); got != "ok" {
+		t.Fatalf("policy helper output = %q, want ok", got)
+	}
+}
+
+func TestAzureOpenAIChatAgentEmitsBaseAndFeatureUserAgent(t *testing.T) {
+	if got := runHelper(t, "policy:openai-chat"); got != "ok" {
+		t.Fatalf("policy helper output = %q, want ok", got)
+	}
+}
+
+func TestAzureOpenAIResponsesAgentEmitsBaseAndFeatureUserAgent(t *testing.T) {
+	if got := runHelper(t, "policy:openai-responses"); got != "ok" {
+		t.Fatalf("policy helper output = %q, want ok", got)
+	}
+}
+
+func TestAzureOpenAIChatAgentDisabledMaskEmitsOnlyBaseUserAgent(t *testing.T) {
+	if got := runHelper(t, "policy:openai-mask-disabled", featureMaskDisabledEnvVar+"=true"); got != "ok" {
+		t.Fatalf("policy helper output = %q, want ok", got)
+	}
 }
 
 func TestToolApprovalFeatureUsageOnlyApproval(t *testing.T) {
@@ -342,6 +403,10 @@ func (activationMemoryGenerator) Generate(_ context.Context, inputs []string, _ 
 
 func runFeatureActivation(t *testing.T, name string) {
 	t.Helper()
+	if strings.HasPrefix(name, "port-harness-") {
+		runHarnessFeatureUsagePort(t, name)
+		return
+	}
 	if strings.HasPrefix(name, "port-provider-") {
 		runProviderFeatureUsagePort(t, name)
 		return
@@ -496,6 +561,46 @@ func runFeatureActivation(t *testing.T, name string) {
 			}
 			_, err := p.Invoking(ctx, invoking)
 			return err
+		}
+	case "cosmos-history-unused", "cosmos-history-provide", "cosmos-history-store", "cosmos-history-count", "cosmos-history-clear":
+		client, err := azcosmos.NewClient("https://cosmos.example", &azfake.TokenCredential{}, &azcosmos.ClientOptions{
+			ClientOptions: azcore.ClientOptions{Transport: &http.Client{Transport: activationTransport(func(req *http.Request) (*http.Response, error) {
+				if req.URL.Path == "/" {
+					return activationResponse(req, `{"id":"test","readableLocations":[{"name":"local","databaseAccountEndpoint":"https://cosmos.example/"}],"writableLocations":[{"name":"local","databaseAccountEndpoint":"https://cosmos.example/"}]}`), nil
+				}
+				if name == "cosmos-history-count" {
+					return activationResponse(req, `{"Documents":[0]}`), nil
+				}
+				return activationResponse(req, `{"Documents":[]}`), nil
+			})}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(client.Close)
+		p, err := azureprovider.NewCosmosHistoryProvider(client, "sample", "history",
+			func(*agent.Session) *azureprovider.CosmosHistoryState {
+				return &azureprovider.CosmosHistoryState{ConversationID: "conversation"}
+			}, azureprovider.CosmosHistoryProviderConfig{MaxMessagesToRetrieve: new(0)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		activate = func() error {
+			switch name {
+			case "cosmos-history-unused":
+				return nil
+			case "cosmos-history-provide":
+				_, err := p.Invoking(ctx, invoking)
+				return err
+			case "cosmos-history-store":
+				return p.Invoked(ctx, agent.InvokedContext{})
+			case "cosmos-history-count":
+				_, err := p.MessageCount(ctx, nil)
+				return err
+			default:
+				_, err := p.ClearMessages(ctx, nil)
+				return err
+			}
 		}
 	case "chat-history-memory", "chat-history-memory-on-demand":
 		config := memory.Config{}
@@ -796,6 +901,138 @@ func runFeatureActivation(t *testing.T, name string) {
 		t.Fatal(err)
 	}
 	fmt.Print(telemetry.ApplyToUserAgent("", true))
+}
+
+func runHarnessFeatureUsagePort(t *testing.T, name string) {
+	t.Helper()
+	cfg, err := harness.AgentConfig(harness.Config{
+		WorkingDirectory: ".",
+		DisableTodo:      true, DisableAgentMode: true, DisableFileMemory: true,
+		DisableSkills: true, DisableWebSearch: true, DisableToolApproval: true, DisableOpenTelemetry: true,
+	}, agent.Config{HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "no-op"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	a := agent.New(agent.ProviderConfig{
+		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			calls++
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				if name != "port-harness-cold" {
+					yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.NewText("done").Contents}, nil)
+				}
+			}
+		},
+	}, cfg)
+	assertNoFeatureUsage(t)
+	if name == "port-harness-construction" {
+		if calls != 0 {
+			t.Fatalf("construction invoked provider %d times", calls)
+		}
+		fmt.Print(telemetry.ApplyToUserAgent("", true))
+		return
+	}
+	stream := a.RunText(t.Context(), "hello", agent.Stream(name == "port-harness-cold"))
+	if name == "port-harness-cold" {
+		assertNoFeatureUsage(t)
+		if calls != 0 {
+			t.Fatal("cold stream invoked the provider")
+		}
+		for update, err := range stream {
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("empty stream yielded %#v", update)
+		}
+	} else if _, err := stream.Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("provider calls = %d, want 1", calls)
+	}
+	fmt.Print(telemetry.ApplyToUserAgent("", true))
+}
+
+func runUserAgentPolicyPort(t *testing.T, name string) {
+	t.Helper()
+	requests := 0
+	var captured []string
+	client := &http.Client{Transport: activationTransport(func(req *http.Request) (*http.Response, error) {
+		requests++
+		captured = append(captured, req.Header.Get(userAgentKey))
+		return activationResponse(req, "{}"), nil
+	})}
+	if strings.HasPrefix(name, "base-") {
+		request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, "https://example.test/anything", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if name == "base-existing" {
+			request.Header.Set(userAgentKey, "existing-app/1.0")
+		}
+		request.Header = telemetry.PrependAgentFrameworkToHTTPHeader(request.Header)
+		if name == "base-idempotent" {
+			request.Header = telemetry.PrependAgentFrameworkToHTTPHeader(request.Header)
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := response.Body.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if requests != 1 || len(captured) != 1 || captured[0] == "" {
+			t.Fatalf("requests = %d, user agents = %q, want one nonempty header", requests, captured)
+		}
+		header := captured[0]
+		switch name {
+		case "base-stamp":
+			if !strings.Contains(header, "agent-framework-go/") {
+				t.Fatalf("User-Agent = %q, want framework product", header)
+			}
+		case "base-no-meai":
+			if strings.Contains(header, "MEAI/") || strings.Contains(header, "foundry-hosting/") {
+				t.Fatalf("User-Agent = %q, want neither MEAI nor foundry-hosting", header)
+			}
+		case "base-existing":
+			if !strings.Contains(header, "existing-app/1.0") || !strings.Contains(header, "agent-framework-go/") {
+				t.Fatalf("User-Agent = %q, want existing and framework products", header)
+			}
+		case "base-idempotent":
+			if strings.Count(header, "agent-framework-go/") != 1 {
+				t.Fatalf("User-Agent = %q, want exactly one framework product", header)
+			}
+		default:
+			t.Fatalf("unknown base policy case %q", name)
+		}
+	} else {
+		endpoint := "https://resource.openai.azure.com/openai/v1/"
+		sdk := openai.NewClient(option.WithAPIKey("test-key"), option.WithBaseURL(endpoint),
+			option.WithHTTPClient(client), option.WithMaxRetries(0))
+		var a *agent.Agent
+		if name == "openai-responses" {
+			a = openaiprovider.NewResponsesAgent(sdk, openaiprovider.AgentConfig{Model: "deployment"})
+		} else {
+			a = openaiprovider.NewChatCompletionsAgent(sdk, openaiprovider.AgentConfig{Model: "deployment"})
+		}
+		assertNoFeatureUsage(t)
+		_, _ = a.RunText(t.Context(), "hello").Collect()
+		if requests != 1 || len(captured) != 1 || captured[0] == "" {
+			t.Fatalf("requests = %d, user agents = %q, want one nonempty header", requests, captured)
+		}
+		header := captured[0]
+		if !strings.Contains(header, "agent-framework-go/") {
+			t.Fatalf("User-Agent = %q, want framework identity", header)
+		}
+		if name == "openai-mask-disabled" {
+			if strings.Contains(header, "(feat=") {
+				t.Fatalf("disabled feature mask was emitted: %q", header)
+			}
+		} else if comment := telemetry.ApplyToUserAgent("", true); comment == "" || !strings.Contains(header, comment) {
+			t.Fatalf("User-Agent = %q, want live feature comment %q", header, comment)
+		}
+	}
+	fmt.Print("ok")
 }
 
 func runProviderFeatureUsagePort(t *testing.T, name string) {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"iter"
 	"testing"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
@@ -103,10 +104,74 @@ func TestNew_ClonesRunOptions(t *testing.T) {
 }
 
 func TestName_SanitizesInvalidCharacters(t *testing.T) {
-	tl := agenttool.New(newNamedAgent("Weather Agent!", "forecasts"), agenttool.Config{})
+	for _, tc := range []struct {
+		name string
+		want string
+	}{
+		{"Weather Agent!", "Weather_Agent_"},
+		{"MyAgent", "MyAgent"},
+		{"Agent123", "Agent123"},
+		{"Agent_With_Underscores", "Agent_With_Underscores"},
+		{"Agent_With_________@@@@_Underscores", "Agent_With_Underscores"},
+		{"123Agent", "123Agent"},
+		{"My-Agent", "My_Agent"},
+		{"My Agent", "My_Agent"},
+		{"Agent@123", "Agent_123"},
+		{"Agent/With\\Slashes", "Agent_With_Slashes"},
+		{"Agent.With.Dots", "Agent_With_Dots"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tl := agenttool.New(newNamedAgent(tc.name, "forecasts"), agenttool.Config{})
+			if got := tl.Name(); got != tc.want {
+				t.Fatalf("Name() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
 
-	if got, want := tl.Name(), "Weather_Agent_"; got != want {
-		t.Fatalf("Name() = %q, want %q", got, want)
+func TestNew_PreservesAgentNameAndDescription(t *testing.T) {
+	tl := agenttool.New(newNamedAgent("TestAgent", "Test agent description"), agenttool.Config{})
+	if tl == nil || tl.Name() != "TestAgent" || tl.Description() != "Test agent description" {
+		t.Fatalf("tool = %#v, want TestAgent with its configured description", tl)
+	}
+}
+
+func TestCall_UsesProvidedCancellationContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	responses := agenttest.NewResponseBuilder(func(callCtx context.Context, _ []*message.Message, _ ...agent.Option) {
+		if callCtx.Done() != ctx.Done() {
+			t.Error("agent did not receive the caller's cancellation signal")
+		}
+	}).AddText("Test response")
+	runner := &agenttest.Runner{Responses: responses.Build()}
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{Name: "TestAgent", Description: "Test description"})
+	tl := agenttool.New(a, agenttool.Config{})
+	result, err := tl.Call(ctx, `{"query":"Test query"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result != "Test response" {
+		t.Fatalf("result = %#v, want Test response", result)
+	}
+}
+
+func TestCall_ReturnsTextFromResponseWithMetadata(t *testing.T) {
+	response := &agent.ResponseUpdate{
+		AgentID: "agent-123", ResponseID: "response-456", CreatedAt: time.Now().UTC(),
+		Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "Complex response"}},
+	}
+	runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().Add(response).Build()}
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{
+		ID: "agent-123", Name: "TestAgent", Description: "Test description",
+	})
+	tl := agenttool.New(a, agenttool.Config{})
+	result, err := tl.Call(t.Context(), `{"query":"Test query"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result != "Complex response" {
+		t.Fatalf("result = %#v, want Complex response", result)
 	}
 }
 

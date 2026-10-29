@@ -105,9 +105,12 @@ func WithServiceID(id string) Option {
 }
 
 // WithStructuredOutput sets the variable pointed to by v to the structured
-// output produced by the agent. Providers that require object-root schemas wrap
-// non-object results in a "data" property on the wire, but assign the unwrapped
-// value to v. The response text retains the provider's JSON. Use
+// output produced by the agent. The final response message is decoded after
+// automatic tool execution completes successfully.
+//
+// Providers that require object-root schemas wrap non-object results in a "data"
+// property on the wire, but assign the unwrapped value to v. The response text
+// retains the provider's JSON. Use
 // [WithResponseFormat] to pass an explicit schema without this wrapping.
 func WithStructuredOutput(v any) Option {
 	return structuredOutputOpt{v}

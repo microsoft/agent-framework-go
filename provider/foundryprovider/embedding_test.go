@@ -18,6 +18,7 @@ import (
 	"github.com/microsoft/agent-framework-go/embedding"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/azure"
 	"github.com/openai/openai-go/v3/option"
 )
 
@@ -195,25 +196,78 @@ func TestNewEmbeddingGeneratorPropagatesErrors(t *testing.T) {
 	}
 }
 
-func TestNewEmbeddingGeneratorRejectsCrossOriginRedirect(t *testing.T) {
-	destinationCalls := 0
-	destination := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		destinationCalls++
-		writeEmbeddingsOK(w)
-	}))
-	defer destination.Close()
-	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, destination.URL+"/embeddings", http.StatusTemporaryRedirect)
-	}))
-	defer server.Close()
-	g := foundryprovider.NewEmbeddingGenerator(server.URL, validCredential, foundryprovider.EmbeddingGeneratorConfig{
-		Model: "test", OpenAIOptions: []option.RequestOption{option.WithHTTPClient(server.Client()), option.WithMaxRetries(0)},
-	})
-	if _, err := g.Generate(t.Context(), []string{"hello"}, nil); err == nil {
-		t.Fatal("expected cross-origin redirect to fail")
+func TestNewEmbeddingGeneratorWithAPIKey(t *testing.T) {
+	for _, withKey := range []bool{false, true} {
+		name := "missing authentication"
+		if withKey {
+			name = "API key"
+		}
+		t.Run(name, func(t *testing.T) {
+			var calls int
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.URL.Path != "/openai/v1/embeddings" || r.URL.Query().Has("api-version") {
+					t.Errorf("unexpected request URL: %s", r.URL)
+				}
+				if r.Header.Get("Api-Key") != "test-foundry-key" || r.Header.Get("Authorization") != "" {
+					t.Error("expected only Azure API-key authentication")
+				}
+				writeEmbeddingsOK(w)
+			}))
+			defer server.Close()
+			options := []option.RequestOption{option.WithHTTPClient(server.Client()), option.WithMaxRetries(0)}
+			if withKey {
+				options = append(options, azure.WithAPIKey("test-foundry-key"))
+			}
+			g := foundryprovider.NewEmbeddingGenerator(server.URL+"/api/projects/proj", nil, foundryprovider.EmbeddingGeneratorConfig{
+				Model: "model", OpenAIOptions: options,
+			})
+			result, err := g.Generate(t.Context(), []string{"hello"}, nil)
+			if !withKey {
+				if err == nil || !strings.Contains(err.Error(), "authentication is required") || calls != 0 {
+					t.Fatalf("error = %v, requests = %d; want missing authentication and no requests", err, calls)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls != 1 || len(result.Embeddings) != 1 || !slices.Equal(result.Embeddings[0].Vector, []float32{1, 2, 3}) {
+				t.Fatalf("result = %+v, requests = %d; want one embedding and 1 request", result, calls)
+			}
+		})
 	}
-	if destinationCalls != 0 {
-		t.Fatalf("credential-bearing redirected requests = %d, want zero", destinationCalls)
+}
+
+func TestNewEmbeddingGeneratorRejectsCrossOriginRedirect(t *testing.T) {
+	for _, auth := range []string{"token", "API key"} {
+		t.Run(auth, func(t *testing.T) {
+			destinationCalls := 0
+			destination := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				destinationCalls++
+				writeEmbeddingsOK(w)
+			}))
+			defer destination.Close()
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, destination.URL+"/embeddings", http.StatusTemporaryRedirect)
+			}))
+			defer server.Close()
+			credential := validCredential
+			options := []option.RequestOption{option.WithHTTPClient(server.Client()), option.WithMaxRetries(0)}
+			if auth == "API key" {
+				credential = nil
+				options = append(options, azure.WithAPIKey("test-foundry-key"))
+			}
+			g := foundryprovider.NewEmbeddingGenerator(server.URL, credential, foundryprovider.EmbeddingGeneratorConfig{
+				Model: "test", OpenAIOptions: options,
+			})
+			if _, err := g.Generate(t.Context(), []string{"hello"}, nil); err == nil {
+				t.Fatal("expected cross-origin redirect to fail")
+			}
+			if destinationCalls != 0 {
+				t.Fatalf("credential-bearing redirected requests = %d, want zero", destinationCalls)
+			}
+		})
 	}
 }
 
@@ -243,9 +297,6 @@ func TestNewEmbeddingGeneratorPanicsWithInvalidArguments(t *testing.T) {
 			})
 		})
 	}
-	assertPanics(t, func() {
-		foundryprovider.NewEmbeddingGenerator(validEndpoint, nil, foundryprovider.EmbeddingGeneratorConfig{Model: "model"})
-	}, "credential is required")
 	assertPanics(t, func() {
 		foundryprovider.NewEmbeddingGenerator(validEndpoint, validCredential, foundryprovider.EmbeddingGeneratorConfig{Model: " "})
 	}, "model is required")

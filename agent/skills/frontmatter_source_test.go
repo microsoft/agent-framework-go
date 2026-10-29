@@ -101,6 +101,12 @@ func TestValidateCompatibility_ExceedsMaxLength_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestValidateCompatibility_Unset_ReturnsNil(t *testing.T) {
+	if err := (skills.Frontmatter{Name: "my-skill", Description: "A valid description."}).Validate(); err != nil {
+		t.Fatalf("unset compatibility must be valid: %v", err)
+	}
+}
+
 func TestInMemorySource_ValidSkills_ReturnsAll(t *testing.T) {
 	source := skills.NewInMemorySource(
 		mustInlineSkill(skills.Frontmatter{Name: "my-skill", Description: "A valid skill."}, "Instructions.", nil, nil),
@@ -116,5 +122,24 @@ func TestInMemorySource_ValidSkills_ReturnsAll(t *testing.T) {
 	}
 	if result[0].Frontmatter.Name != "my-skill" || result[1].Frontmatter.Name != "another" {
 		t.Fatalf("unexpected skills returned: %q, %q", result[0].Frontmatter.Name, result[1].Frontmatter.Name)
+	}
+}
+
+func TestInMemorySource_CodeDefinedSkills_ReturnsAll(t *testing.T) {
+	minimal := mustInlineSkill(skills.Frontmatter{Name: "minimal", Description: "A minimal skill."}, "Minimal skill body.", nil, nil)
+	full := mustInlineSkill(
+		skills.Frontmatter{Name: "full", Description: "A full skill with resources and scripts."},
+		"Full skill body.",
+		[]skills.Resource{{Name: "test-resource", Read: func(context.Context) (any, error) { return "resource content", nil }}},
+		[]skills.Script{{Name: "TestScript", ParametersSchema: `{"type":"object","properties":{"value":{"type":"number"}}}`}},
+	)
+	source := skills.NewInMemorySource(minimal, full)
+
+	result, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 2 || result[0].Frontmatter.Name != "minimal" || result[1].Frontmatter.Name != "full" {
+		t.Fatalf("Skills() = %#v, want minimal and full in registration order", result)
 	}
 }

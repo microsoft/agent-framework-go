@@ -62,6 +62,8 @@ For a detailed .NET-to-Go feature comparison, see the [.NET and Go SDK feature c
   - [Text search package](./agent/textsearch/) | [RAG examples](./examples/02-agents/rag/)
 - **Chat History Memory**: Store conversations in a vector store and retrieve scoped memories automatically or through an on-demand tool.
   - [Memory package](./agent/memory/) | [Memory examples](./examples/02-agents/memory/)
+- **Persistent Chat History**: Store scoped conversations in Cosmos DB with session-backed routing, configurable retention, and history count and clearing.
+  - [Cosmos DB chat history](./provider/azureprovider/README.md#cosmos-db-chat-history)
 - **Embeddings**: Provider-independent batch generation, numeric and binary vectors, request options, usage metadata, and single-input/vector/batch-pair helpers, with an OpenAI/Foundry adapter and opt-in OpenTelemetry instrumentation.
   - [Embedding package](./embedding/) | [OpenAI embedding generator](./provider/openaiprovider/embedding.go) | [Foundry embedding generator](./provider/foundryprovider/embedding.go)
 - **Vector Data**: Vector stores with typed and dynamic collections, CRUD helpers, and vector/hybrid search options with portable filters. Includes Azure AI Search and an in-memory connector with exact vector search, batch embedding generation, and JSON snapshots.

@@ -342,6 +342,9 @@ type ResponseUpdate struct {
 
 	// Contents contains the content items carried by this update.
 	Contents message.Contents `json:",omitzero"`
+
+	// resetStructuredOutput discards prior injected replies without changing message identity.
+	resetStructuredOutput bool
 }
 
 // String returns the concatenated text contents of this update.

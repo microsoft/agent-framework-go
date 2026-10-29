@@ -118,7 +118,8 @@ func saveState(opts []agent.Option, s state) {
 }
 
 // New creates a tool-approval middleware that wraps agent runs with
-// human-in-the-loop approval management.
+// human-in-the-loop approval management. Outside a queued approval batch,
+// unwrapped responses retain their positions in the caller's messages.
 func New(cfg Config) agent.Middleware {
 	return agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 		return run(cfg, next, ctx, messages, opts...)
@@ -295,6 +296,8 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, autoApproved...)
 			if retainedHistory {
 				messages = nil
+			} else {
+				messages = removeConsumedApprovalResponses(messages)
 			}
 			// Non-approval updates were already yielded during streaming.
 		}
@@ -314,6 +317,7 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 	}
 
 	knownRequests := knownApprovalRequests(messages, st)
+	collectResponses := len(st.QueuedApprovalRequests) > 0 || len(st.CollectedApprovalResponses) > 0
 	var cleaned []*message.Message
 	for i, msg := range messages {
 		var hasApproval bool
@@ -324,12 +328,20 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 				hasApproval = true
 				bound := bindApprovalResponse(resp.InnerResponse, &st, knownRequests)
 				if addApprovalRuleFromResponse(&st, resp, bound) {
-					st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, bound)
+					if collectResponses {
+						st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, bound)
+					} else {
+						remaining = append(remaining, bound)
+					}
 				}
 			case *message.ToolApprovalResponseContent:
 				hasApproval = true
 				if bound := bindApprovalResponse(resp, &st, knownRequests); bound != nil {
-					st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, bound)
+					if collectResponses {
+						st.CollectedApprovalResponses = append(st.CollectedApprovalResponses, bound)
+					} else {
+						remaining = append(remaining, bound)
+					}
 				}
 			default:
 				if c != nil {
@@ -355,6 +367,40 @@ func prepareInbound(messages []*message.Message, st state) ([]*message.Message, 
 		return cleaned, st, nil
 	}
 	return messages, st, nil
+}
+
+func removeConsumedApprovalResponses(messages []*message.Message) []*message.Message {
+	var out []*message.Message
+	for i, msg := range messages {
+		if !slices.ContainsFunc(msg.Contents, func(content message.Content) bool {
+			_, ok := content.(*message.ToolApprovalResponseContent)
+			return ok
+		}) {
+			if out != nil {
+				out = append(out, msg)
+			}
+			continue
+		}
+		if out == nil {
+			out = slices.Clone(messages[:i])
+			if out == nil {
+				out = make([]*message.Message, 0, len(messages))
+			}
+		}
+		contents := slices.DeleteFunc(slices.Clone(msg.Contents), func(content message.Content) bool {
+			_, ok := content.(*message.ToolApprovalResponseContent)
+			return ok
+		})
+		if len(contents) > 0 {
+			cloned := msg.Clone()
+			cloned.Contents = contents
+			out = append(out, cloned)
+		}
+	}
+	if out != nil {
+		return out
+	}
+	return messages
 }
 
 func normalizedState(s state) state {

@@ -165,3 +165,82 @@ func TestHostedAgentSessionIDRejectsUnexpectedHeaderSwitch(t *testing.T) {
 func TestHostedAgentSessionIDHelpersRejectInvalidArguments(t *testing.T) {
 	assertPanics(t, func() { foundryprovider.SetHostedAgentSessionID(&agent.Session{}, " ") }, "hosted agent session ID is required")
 }
+
+func TestHostedSessionIDOptionCarriesValue(t *testing.T) {
+	value, ok := agent.GetOption([]agent.Option{foundryprovider.WithHostedAgentSessionID("sess-1")}, foundryprovider.WithHostedAgentSessionID)
+	if !ok || value != "sess-1" {
+		t.Fatalf("hosted session ID option = %q, %t; want sess-1, true", value, ok)
+	}
+}
+
+func TestHostedSessionIDMatchingResponseKeepsPinnedSession(t *testing.T) {
+	var requests int
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		body := jsonMap(t, mustReadBody(t, r))
+		if body["agent_session_id"] != "sess-pinned" {
+			t.Errorf("agent_session_id = %#v, want sess-pinned", body["agent_session_id"])
+		}
+		w.Header().Set("x-agent-session-id", "sess-pinned")
+		writeResponsesOK(w)
+	}))
+	defer server.Close()
+	a := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{})
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundryprovider.SetHostedAgentSessionID(session, "sess-pinned")
+	if _, err := a.RunText(t.Context(), "hi", agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 || foundryprovider.HostedAgentSessionID(session) != "sess-pinned" {
+		t.Fatalf("requests = %d, hosted session ID = %q", requests, foundryprovider.HostedAgentSessionID(session))
+	}
+}
+
+func TestHostedSessionIDMatchingSessionAndOptionsSucceeds(t *testing.T) {
+	var requests int
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		writeResponsesOK(w)
+	}))
+	defer server.Close()
+	a := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{})
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundryprovider.SetHostedAgentSessionID(session, "sess-A")
+	if _, err := a.RunText(t.Context(), "hi", agent.WithSession(session), foundryprovider.WithHostedAgentSessionID("sess-A")).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+}
+
+func TestHostedSessionIDStoredOnSessionIsInjected(t *testing.T) {
+	var requests int
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		body := jsonMap(t, mustReadBody(t, r))
+		if body["agent_session_id"] != "sess-sticky" {
+			t.Errorf("agent_session_id = %#v, want sess-sticky", body["agent_session_id"])
+		}
+		writeResponsesOK(w)
+	}))
+	defer server.Close()
+	a := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{})
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	foundryprovider.SetHostedAgentSessionID(session, "sess-sticky")
+	if _, err := a.RunText(t.Context(), "hi", agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests = %d, want 1", requests)
+	}
+}

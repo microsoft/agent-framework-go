@@ -15,23 +15,22 @@ import (
 )
 
 // NewOpenAIClient creates an OpenAI SDK client for a Foundry resource or project
-// endpoint. It appends /openai/v1/ and uses the supplied credential with the Foundry
-// audience, retaining the SDK's token refresh and origin guards. Use a resource
-// endpoint for model APIs such as embeddings, or a project endpoint for
-// project-scoped operations. Azure OpenAI deployment routing and the api-version
+// endpoint. It appends /openai/v1/. Authentication follows [NewAgent]: use a non-nil
+// credential for Microsoft Entra authentication, or a nil credential with
+// [azure.WithAPIKey] in options for API-key authentication.
+//
+// Use a resource endpoint for model APIs such as embeddings, or a project endpoint
+// for project-scoped operations. Azure OpenAI deployment routing and the api-version
 // query are not used for native OpenAI operations.
 //
-// Options configure the SDK client; Foundry-owned endpoint, authentication, and
-// protocol settings take precedence. Per-request options can select the project
+// Options configure the SDK client; Foundry-owned endpoint and protocol settings
+// take precedence. Per-request options can select the project
 // root and api-version for project administration through the SDK's HTTP methods.
 // The client does not take ownership of the credential or caller-supplied transport.
 //
-// The endpoint must be an absolute Foundry URL and credential must be non-nil;
-// invalid arguments panic. The Azure SDK requires HTTPS for authenticated requests.
+// The endpoint must be an absolute Foundry URL; invalid endpoints panic.
+// The Azure SDK requires HTTPS for authenticated requests.
 func NewOpenAIClient(endpoint string, credential azcore.TokenCredential, options ...option.RequestOption) openai.Client {
-	if credential == nil {
-		panic("credential is required")
-	}
 	endpoint = normalizeAbsoluteEndpoint(endpoint)
 	options = foundryOpenAIOptions(projectOpenAIBaseURL(endpoint), credential, options)
 	options = append(options, option.WithQueryDel("api-version"))
@@ -46,8 +45,8 @@ func foundryOpenAIOptions(baseURL string, credential azcore.TokenCredential, opt
 	basePath := strings.TrimRight(parsed.EscapedPath(), "/")
 	result := make([]option.RequestOption, 0, len(options)+4)
 	result = append(result, options...)
-	return append(result,
-		// WithTokenCredential requires WithEndpoint's Azure marker and guards.
+	result = append(result,
+		// Azure authentication requires WithEndpoint's marker and guards.
 		// Foundry uses the complete OpenAI base URL, not Azure deployment routing.
 		azure.WithEndpoint(baseURL, foundryDataPlaneAPIVersion),
 		option.WithBaseURL(baseURL),
@@ -68,8 +67,11 @@ func foundryOpenAIOptions(baseURL string, credential azcore.TokenCredential, opt
 			req.URL.Path, req.URL.RawPath = decoded, path
 			return next(req)
 		}),
-		azure.WithTokenCredential(credential, azure.WithTokenCredentialScopes([]string{azureAIResourceScope})),
 	)
+	if credential != nil {
+		result = append(result, azure.WithTokenCredential(credential, azure.WithTokenCredentialScopes([]string{azureAIResourceScope})))
+	}
+	return result
 }
 
 // Paths are escaped so a slash in a deployment or agent name remains one segment.

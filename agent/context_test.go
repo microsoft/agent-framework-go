@@ -7,6 +7,7 @@ import (
 	"errors"
 	"iter"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -16,6 +17,284 @@ import (
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
+
+func TestAIContext_SetInstructionsRoundtrips(t *testing.T) {
+	invoking := agent.InvokingContext{Options: []agent.Option{agent.WithInstructions("Test Instructions")}}
+
+	if got, ok := agent.GetOption(invoking.Options, agent.WithInstructions); !ok || got != "Test Instructions" {
+		t.Fatalf("instructions = (%q, %v), want Test Instructions", got, ok)
+	}
+}
+
+func TestAIContext_SetMessagesRoundtrips(t *testing.T) {
+	assistant := message.NewText("Hi there!")
+	assistant.Role = message.RoleAssistant
+	invoking := agent.InvokingContext{Messages: []*message.Message{message.NewText("Hello"), assistant}}
+
+	if invoking.Messages == nil || len(invoking.Messages) != 2 {
+		t.Fatalf("Messages = %v, want two messages", invoking.Messages)
+	}
+	if invoking.Messages[0].String() != "Hello" || invoking.Messages[1].String() != "Hi there!" {
+		t.Fatalf("Messages = %v, want Hello and Hi there!", invoking.Messages)
+	}
+}
+
+func TestAIContext_SetAIFunctionsRoundtrips(t *testing.T) {
+	first := functool.MustNew(functool.Config{Name: "Function1", Description: "Description1"},
+		func(_ context.Context, _ struct{}) (string, error) { return "Function1", nil })
+	second := functool.MustNew(functool.Config{Name: "Function2", Description: "Description2"},
+		func(_ context.Context, _ struct{}) (string, error) { return "Function2", nil })
+	invoking := agent.InvokingContext{Options: []agent.Option{agent.WithTool(first), agent.WithTool(second)}}
+
+	tools := slices.Collect(agent.AllOptions(invoking.Options, agent.WithTool))
+	if tools == nil || len(tools) != 2 || tools[0].Name() != "Function1" || tools[1].Name() != "Function2" {
+		t.Fatalf("tools = %v, want Function1 and Function2", tools)
+	}
+}
+
+func TestContextProvider_Invoked_DefaultCompletesWithoutError(t *testing.T) {
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{SourceID: "test"})
+
+	if err := provider.Invoked(t.Context(), agent.InvokedContext{
+		RequestMessages: []*message.Message{}, ResponseMessages: []*message.Message{},
+	}); err != nil {
+		t.Fatalf("Invoked() = %v, want nil", err)
+	}
+}
+
+func TestContextProvider_InvokedContext_ResponseMessages_Roundtrips(t *testing.T) {
+	request := []*message.Message{message.NewText("Hello")}
+	response := []*message.Message{message.NewText("Response message")}
+	response[0].Role = message.RoleAssistant
+
+	invoked := agent.InvokedContext{RequestMessages: request, ResponseMessages: response}
+
+	if len(invoked.ResponseMessages) != 1 || &invoked.ResponseMessages[0] != &response[0] {
+		t.Fatalf("ResponseMessages = %v, want the supplied slice", invoked.ResponseMessages)
+	}
+}
+
+func TestContextProvider_InvokedContext_InvokeException_Roundtrips(t *testing.T) {
+	request := []*message.Message{message.NewText("Hello")}
+	failure := errors.New("Test exception")
+
+	invoked := agent.InvokedContext{RequestMessages: request, Err: failure}
+
+	if invoked.Err != failure {
+		t.Fatalf("Err = %v, want the supplied error", invoked.Err)
+	}
+}
+
+func TestContextProvider_InvokingContext_Session_ReturnsConstructorValue(t *testing.T) {
+	session := agenttest.CreateSession()
+	invoking := agent.InvokingContext{
+		Messages: []*message.Message{message.NewText("Hello")},
+		Options:  []agent.Option{agent.WithSession(session)},
+	}
+
+	if got, ok := agent.GetOption(invoking.Options, agent.WithSession); !ok || got != session {
+		t.Fatalf("session = (%p, %v), want %p", got, ok, session)
+	}
+}
+
+func TestContextProvider_InvokingContext_Session_CanBeNil(t *testing.T) {
+	invoking := agent.InvokingContext{
+		Messages: []*message.Message{message.NewText("Hello")},
+		Options:  []agent.Option{agent.WithSession(nil)},
+	}
+
+	if got, ok := agent.GetOption(invoking.Options, agent.WithSession); !ok || got != nil {
+		t.Fatalf("session = (%p, %v), want nil", got, ok)
+	}
+}
+
+func TestContextProvider_InvokedContext_Session_ReturnsConstructorValue(t *testing.T) {
+	session := agenttest.CreateSession()
+	invoked := agent.InvokedContext{
+		RequestMessages:  []*message.Message{message.NewText("Hello")},
+		ResponseMessages: []*message.Message{},
+		Options:          []agent.Option{agent.WithSession(session)},
+	}
+
+	if got, ok := agent.GetOption(invoked.Options, agent.WithSession); !ok || got != session {
+		t.Fatalf("session = (%p, %v), want %p", got, ok, session)
+	}
+}
+
+func TestContextProvider_InvokedContext_Session_CanBeNil(t *testing.T) {
+	invoked := agent.InvokedContext{
+		RequestMessages:  []*message.Message{message.NewText("Hello")},
+		ResponseMessages: []*message.Message{},
+		Options:          []agent.Option{agent.WithSession(nil)},
+	}
+
+	if got, ok := agent.GetOption(invoked.Options, agent.WithSession); !ok || got != nil {
+		t.Fatalf("session = (%p, %v), want nil", got, ok)
+	}
+}
+
+func TestContextProvider_Invoking_MergesInstructions(t *testing.T) {
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "test",
+		Provide: func(context.Context, agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return nil, []agent.Option{agent.WithInstructions("Provided instructions")}, nil
+		},
+	})
+	input := agent.InvokingContext{Options: []agent.Option{agent.WithInstructions("Input instructions")}}
+
+	_, options, err := provider.Invoking(t.Context(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := strings.Join(slices.Collect(agent.AllOptions(options, agent.WithInstructions)), "\n"); got != "Input instructions\nProvided instructions" {
+		t.Fatalf("merged instructions = %q", got)
+	}
+}
+
+func TestMessageContextProvider_Invoking_ReturnsOnlyInputWhenNothingProvided(t *testing.T) {
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{SourceID: "test"})
+	input := agent.InvokingContext{Messages: []*message.Message{message.NewText("Hello")}}
+
+	messages, _, err := provider.Invoking(t.Context(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(messages) != 1 || messages[0].String() != "Hello" {
+		t.Fatalf("messages = %v, want Hello", messages)
+	}
+}
+
+func TestMessageContextProvider_Invoking_StampsProvidedMessages(t *testing.T) {
+	provided := message.NewText("Provided")
+	provided.Role = message.RoleSystem
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "test",
+		Provide: func(context.Context, agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return []*message.Message{provided}, nil, nil
+		},
+	})
+
+	messages, _, err := provider.Invoking(t.Context(), agent.InvokingContext{Messages: []*message.Message{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(messages) != 1 || messages[0].Source.Type != agent.SourceTypeContextProvider {
+		t.Fatalf("messages = %v, want one context-provider message", messages)
+	}
+}
+
+func TestMessageContextProvider_Invoking_FiltersInputToExternalOnly(t *testing.T) {
+	external := message.NewText("External")
+	history := message.NewText("History").WithSource(message.Source{Type: agent.SourceTypeHistoryProvider, ID: "src"})
+	provided := message.NewText("ContextProvider").WithSource(message.Source{Type: agent.SourceTypeContextProvider, ID: "src"})
+	var captured *agent.InvokingContext
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "test",
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			captured = &invoking
+			return nil, nil, nil
+		},
+	})
+
+	if _, _, err := provider.Invoking(t.Context(), agent.InvokingContext{Messages: []*message.Message{external, history, provided}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if captured == nil || len(captured.Messages) != 1 || captured.Messages[0].String() != "External" {
+		t.Fatalf("provided context = %+v, want only External", captured)
+	}
+}
+
+func TestMessageContextProvider_Invoking_UsesCustomProvideInputFilter(t *testing.T) {
+	external := message.NewText("External")
+	history := message.NewText("History").WithSource(message.Source{Type: agent.SourceTypeHistoryProvider, ID: "src"})
+	var captured *agent.InvokingContext
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "test",
+		ProvideInputMessageFilter: func(_ context.Context, messages []*message.Message) ([]*message.Message, error) {
+			return messages, nil
+		},
+		Provide: func(_ context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			captured = &invoking
+			return nil, nil, nil
+		},
+	})
+
+	if _, _, err := provider.Invoking(t.Context(), agent.InvokingContext{Messages: []*message.Message{external, history}}); err != nil {
+		t.Fatal(err)
+	}
+
+	if captured == nil || len(captured.Messages) != 2 {
+		t.Fatalf("provided context = %+v, want both input messages", captured)
+	}
+}
+
+func TestMessageContextProvider_Invoking_MergesOriginalUnfilteredMessages(t *testing.T) {
+	provided := message.NewText("Provided")
+	provided.Role = message.RoleSystem
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{
+		SourceID: "test",
+		Provide: func(context.Context, agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+			return []*message.Message{provided}, nil, nil
+		},
+	})
+	external := message.NewText("External")
+	history := message.NewText("History").WithSource(message.Source{Type: agent.SourceTypeHistoryProvider, ID: "src"})
+
+	messages, _, err := provider.Invoking(t.Context(), agent.InvokingContext{Messages: []*message.Message{external, history}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(messages) != 3 || messages[0].String() != "External" || messages[1].String() != "History" || messages[2].String() != "Provided" {
+		t.Fatalf("messages = %v, want External, History, Provided", messages)
+	}
+}
+
+func TestMessageContextProvider_Invoking_PreservesAbsentInstructionsAndTools(t *testing.T) {
+	provider := agent.NewContextProvider(agent.ContextProviderConfig{SourceID: "test"})
+	input := agent.InvokingContext{Messages: []*message.Message{message.NewText("Hello")}}
+
+	messages, options, err := provider.Invoking(t.Context(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := agent.GetOption(options, agent.WithInstructions); ok {
+		t.Fatal("instructions unexpectedly supplied")
+	}
+	if tools := slices.Collect(agent.AllOptions(options, agent.WithTool)); tools != nil {
+		t.Fatalf("tools = %v, want nil", tools)
+	}
+	if len(messages) != 1 || messages[0].String() != "Hello" {
+		t.Fatalf("messages = %v, want Hello", messages)
+	}
+}
+
+func TestMessageContextProvider_InvokingContext_RequestMessages_SetterAcceptsValidValue(t *testing.T) {
+	invoking := agent.InvokingContext{Messages: []*message.Message{}}
+	replacement := []*message.Message{message.NewText("Updated")}
+
+	invoking.Messages = replacement
+
+	if len(invoking.Messages) != 1 || &invoking.Messages[0] != &replacement[0] {
+		t.Fatalf("Messages = %v, want the replacement slice", invoking.Messages)
+	}
+}
+
+func TestMessageContextProvider_InvokingContext_AllowsNilSession(t *testing.T) {
+	invoking := agent.InvokingContext{
+		Messages: []*message.Message{},
+		Options:  []agent.Option{agent.WithSession(nil)},
+	}
+
+	if got, ok := agent.GetOption(invoking.Options, agent.WithSession); !ok || got != nil {
+		t.Fatalf("session = (%p, %v), want nil", got, ok)
+	}
+}
 
 func TestContextProvider_Invoking_WithoutProvide_ReturnsNoAdditions(t *testing.T) {
 	request := message.NewText("r1")

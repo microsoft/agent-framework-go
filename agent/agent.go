@@ -33,6 +33,7 @@ type ProviderConfig struct {
 	Run RunFunc
 
 	// Middlewares wrap Run after agent history and context providers.
+	// Structured-output decoding wraps these middlewares to process their final response.
 	Middlewares []Middleware
 
 	// ManagesToolExecution indicates that Run invokes function tools supplied through
@@ -156,6 +157,12 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		agentMiddlewares = append([]Middleware{newRunLoggerMiddleware(cfg.Logger, cfg.LogSensitiveData)}, agentMiddlewares...)
 	}
 	providerMiddlewares := make([]Middleware, 0, len(prov.Middlewares)+3)
+	if prov.Format != nil || prov.Unmarshal != nil {
+		providerMiddlewares = append(providerMiddlewares, &structuredOutputMiddleware{
+			format:    prov.Format,
+			unmarshal: prov.Unmarshal,
+		})
+	}
 	providerMiddlewares = append(providerMiddlewares, prov.Middlewares...)
 	if cfg.MessageInjector != nil {
 		providerMiddlewares = append(providerMiddlewares, MiddlewareFunc(cfg.MessageInjector.run))
@@ -190,12 +197,6 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 	}
 	if a.perServiceCallHistoryPersistence {
 		providerMiddlewares = append(providerMiddlewares, MiddlewareFunc(a.persistServiceCallHistory))
-	}
-	if prov.Format != nil || prov.Unmarshal != nil {
-		providerMiddlewares = append(providerMiddlewares, &structuredOutputMiddleware{
-			format:    prov.Format,
-			unmarshal: prov.Unmarshal,
-		})
 	}
 	providerRun := prov.Run
 	if prov.ManagesToolExecution {

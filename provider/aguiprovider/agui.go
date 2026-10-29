@@ -59,7 +59,8 @@ func WithThreadID(id string) agent.Option { return threadIDOpt(id) }
 
 // NewAgent creates a new [agent.Agent] backed by a remote agent that speaks the
 // AG-UI protocol over Server-Sent Events via the AG-UI client. It panics if
-// aclient is nil.
+// aclient is nil. Provider updates retain their original AG-UI event in
+// [agent.ResponseUpdate.RawRepresentation].
 func NewAgent(aclient *aguiSSEClient.Client, config AgentConfig) *agent.Agent {
 	if aclient == nil {
 		panic("aguiprovider: client cannot be nil")
@@ -165,6 +166,7 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 					if update == nil {
 						continue
 					}
+					update.RawRepresentation = evt
 					if update.ResponseID == "" {
 						update.ResponseID = runID
 					}

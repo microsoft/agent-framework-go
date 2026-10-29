@@ -11,6 +11,94 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
+type jsonSerializableTestValue struct {
+	ID   int
+	Name string
+}
+
+func TestPortableValueJSON_InternalMessage(t *testing.T) {
+	value := message.NewText("Hello, world!")
+	portable := workflow.AnyPortableValue(value)
+	data, err := json.Marshal(portable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result workflow.PortableValue
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.TypeID != portable.TypeID {
+		t.Fatal("type identity changed during round trip")
+	}
+	got, ok := workflow.PortableValueAs[*message.Message](result)
+	if !ok || got.Role != message.RoleUser || got.Contents.Text() != "Hello, world!" {
+		t.Fatalf("decoded message = %#v, %t", got, ok)
+	}
+	if _, ok := workflow.PortableValueAs[int](result); ok {
+		t.Fatal("message decoded as int")
+	}
+}
+
+func TestPortableValueJSON_CustomValue(t *testing.T) {
+	value := jsonSerializableTestValue{ID: 42, Name: "Test"}
+	portable := workflow.AnyPortableValue(value)
+	data, err := json.Marshal(portable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result workflow.PortableValue
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.TypeID != portable.TypeID {
+		t.Fatal("type identity changed during round trip")
+	}
+	got, ok := workflow.PortableValueAs[jsonSerializableTestValue](result)
+	if !ok || got != value {
+		t.Fatalf("decoded custom value = %#v, %t, want %#v", got, ok, value)
+	}
+	if _, ok := workflow.PortableValueAs[int](result); ok {
+		t.Fatal("custom value decoded as int")
+	}
+}
+
+func TestEdgeInfoJSON_FanOut(t *testing.T) {
+	for _, hasAssigner := range []bool{false, true} {
+		value := workflow.EdgeInfo{
+			Connection:  workflow.EdgeConnection{SourceIDs: []string{"SourceExecutor"}, SinkIDs: []string{"TargetExecutor1", "TargetExecutor2"}},
+			HasAssigner: hasAssigner,
+		}
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got workflow.EdgeInfo
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got, value) {
+			t.Fatalf("fan-out round trip = %#v, want %#v", got, value)
+		}
+	}
+}
+
+func TestEdgeInfoJSON_FanIn(t *testing.T) {
+	value := workflow.EdgeInfo{Connection: workflow.EdgeConnection{
+		SourceIDs: []string{"SourceExecutor1", "SourceExecutor2"}, SinkIDs: []string{"TargetExecutor"},
+	}}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got workflow.EdgeInfo
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, value) {
+		t.Fatalf("fan-in round trip = %#v, want %#v", got, value)
+	}
+}
+
 func TestOutputTag_JSONRoundtrip(t *testing.T) {
 	data, err := json.Marshal(workflow.OutputTagIntermediate)
 	if err != nil {

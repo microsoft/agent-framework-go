@@ -21,6 +21,134 @@ type nullablePerson struct {
 	Name string
 }
 
+func TestAgentSession_StateBag_Default_IsEmpty(t *testing.T) {
+	var session agent.Session
+	if got := session.Count(); got != 0 {
+		t.Fatalf("Count() = %d, want 0", got)
+	}
+}
+
+func TestSessionStateBag_GetValue_WithComplexObject_CachesDeserializedValue(t *testing.T) {
+	var session agent.Session
+	animal := &abstractionPortAnimal{ID: 2, FullName: "Whiskers", Species: "Tiger"}
+	session.Set("animal", animal)
+
+	var first, second *abstractionPortAnimal
+	if found, err := session.Get("animal", &first); err != nil || !found {
+		t.Fatalf("first Get() = (%v, %v)", found, err)
+	}
+	if found, err := session.Get("animal", &second); err != nil || !found {
+		t.Fatalf("second Get() = (%v, %v)", found, err)
+	}
+
+	if first != second {
+		t.Fatalf("Get() returned distinct objects %p and %p", first, second)
+	}
+}
+
+func TestSessionStateBag_GetValue_WithEmptyKey_Panics(t *testing.T) {
+	var session agent.Session
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Get with an empty key did not panic")
+		}
+	}()
+
+	var value string
+	_, _ = session.Get("", &value)
+}
+
+func TestSessionStateBag_TryGetValue_WithEmptyKey_Panics(t *testing.T) {
+	var session agent.Session
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Get with an empty key did not panic")
+		}
+	}()
+
+	var value string
+	_, _ = session.Get("", &value)
+}
+
+func TestSessionStateBag_SetValue_WithEmptyKey_Panics(t *testing.T) {
+	var session agent.Session
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Set with an empty key did not panic")
+		}
+	}()
+
+	session.Set("", "value")
+}
+
+func TestSessionStateBag_SetValue_WithWhitespaceKey_Panics(t *testing.T) {
+	var session agent.Session
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Set with a whitespace key did not panic")
+		}
+	}()
+
+	session.Set("   ", "value")
+}
+
+func TestSessionStateBag_TryRemoveValue_WithEmptyKey_Panics(t *testing.T) {
+	var session agent.Session
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Delete with an empty key did not panic")
+		}
+	}()
+
+	session.Delete("")
+}
+
+func TestSessionStateBag_TryRemoveValue_WithWhitespaceKey_Panics(t *testing.T) {
+	var session agent.Session
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Delete with a whitespace key did not panic")
+		}
+	}()
+
+	session.Delete("   ")
+}
+
+func TestSessionStateBag_JsonSerializerSerialize_EmptyStateBag_ReturnsEmptyObject(t *testing.T) {
+	var session agent.Session
+
+	data, err := json.Marshal(&session)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var payload struct{ State json.RawMessage }
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(payload.State); got != "{}" {
+		t.Fatalf("serialized state = %s, want {}", got)
+	}
+}
+
+func TestSessionStateBag_JsonSerializerSerialize_WithStringValue_ProducesSameOutputAsSerializeMethod(t *testing.T) {
+	var session agent.Session
+	session.Set("stringKey", "stringValue")
+
+	fromSerializer, err := json.Marshal(&session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fromMethod, err := session.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(fromSerializer) != string(fromMethod) {
+		t.Fatalf("json.Marshal = %s; MarshalJSON = %s", fromSerializer, fromMethod)
+	}
+}
+
 type sessionMarshalCallback struct {
 	session *agent.Session
 }

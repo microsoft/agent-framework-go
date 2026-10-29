@@ -16,6 +16,7 @@ Use NuGet packages rather than building the solution when a published release is
 | Same version with the .NET release-tag prefix | `go -C _catalog run ./cmd/dotnetsymbols -release dotnet-1.22.0` |
 | Latest release, only the abstractions package | `go -C _catalog run ./cmd/dotnetsymbols -package Microsoft.Agents.AI.Abstractions` |
 | Selected core and provider packages | `go -C _catalog run ./cmd/dotnetsymbols -release 1.22.0 -package Microsoft.Agents.AI.Abstractions -package Microsoft.Agents.AI.OpenAI` |
+| Pinned Cosmos integration | `go -C _catalog run ./cmd/dotnetsymbols -release 1.22.0 -package Microsoft.Agents.AI.CosmosNoSql@1.22.0-preview.260918.1` |
 | Latest release, a different target framework | `go -C _catalog run ./cmd/dotnetsymbols -framework net10.0` |
 | Latest release from the public .NET package mirror | `go -C _catalog run ./cmd/dotnetsymbols -nuget-source https://pkgs.dev.azure.com/dnceng/public/_packaging/dotnet-public/nuget/v3/index.json` |
 
@@ -81,7 +82,7 @@ See [test mapping and reconciliation](../../../docs/dotnet-go-sdk-feature-compar
 
 ### Current snapshot
 
-The maintained [catalog](../../dotnet-go-sdk-symbol-mapping.json) retains the three core MAF 1.22.0 API packages at `net8.0` from the public .NET package mirror. Its test section contains **6,750 method declarations from 45 assemblies**, built from `0c9944cc9f577d51277ac7c55dbc388b60a577af` using SDK **10.0.401**, `Release`, and `net10.0`. This is one compiled target configuration, not runtime theory cases or every target framework. Reproducing this scope requires the same pinned API inputs and all selected test assemblies; an API-only refresh does not regenerate the test section.
+The maintained [catalog](../../dotnet-go-sdk-symbol-mapping.json) retains the three core MAF 1.22.0 API packages from the public .NET package mirror and `Microsoft.Agents.AI.CosmosNoSql` `1.22.0-preview.260918.1` from NuGet.org, all at `net8.0`. Cosmos is selected explicitly with the pinned `-package` override above; stable extraction defaults are unchanged. Its test section contains **6,750 method declarations from 45 assemblies**, built from `0c9944cc9f577d51277ac7c55dbc388b60a577af` using SDK **10.0.401**, `Release`, and `net10.0`. This is one compiled target configuration, not runtime theory cases or every target framework. Reproducing this scope requires the same pinned API inputs and all selected test assemblies; an API-only refresh does not regenerate the test section.
 
 All 48 test-bearing projects under the pinned test tree were built without running tests. `CopilotStudio.IntegrationTests`, `OpenAIChatCompletion.IntegrationTests`, and `OpenAIResponse.IntegrationTests` contain only inherited test methods; those declarations appear once in `AgentConformance.IntegrationTests`. The separate Foundry integration-test container host has no test declarations and was excluded.
 

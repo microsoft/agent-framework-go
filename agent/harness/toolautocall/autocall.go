@@ -802,6 +802,20 @@ func bindApprovalResponses(session *agent.Session, messages []*message.Message) 
 		return messages, false, nil
 	}
 
+	// Results prevent the response processor from invoking these calls again.
+	// Their approvals are settled history and must survive transcript replay.
+	settledCallIDs := make(map[string]struct{})
+	for _, msg := range messages {
+		if msg == nil {
+			continue
+		}
+		for _, content := range msg.Contents {
+			if result, ok := content.(*message.FunctionResultContent); ok && result != nil {
+				settledCallIDs[result.CallID] = struct{}{}
+			}
+		}
+	}
+
 	known := make(map[string]*message.ToolApprovalRequestContent)
 	var state pendingApprovalRequestsState
 	if ok, err := session.Get(pendingApprovalRequestsStateKey, &state); err != nil {
@@ -829,6 +843,12 @@ func bindApprovalResponses(session *agent.Session, messages []*message.Message) 
 				contents = append(contents, content)
 				continue
 			}
+			if response.ToolCall != nil {
+				if _, settled := settledCallIDs[response.ToolCall.GetCallID()]; settled {
+					contents = append(contents, content)
+					continue
+				}
+			}
 
 			request, found := known[response.RequestID]
 			if !found {
@@ -836,6 +856,10 @@ func bindApprovalResponses(session *agent.Session, messages []*message.Message) 
 				continue
 			}
 			delete(known, response.RequestID)
+			if toolCallsEquivalent(response.ToolCall, request.ToolCall) {
+				contents = append(contents, content)
+				continue
+			}
 			rebound := *response
 			rebound.ToolCall = request.ToolCall
 			contents = append(contents, &rebound)
@@ -1503,6 +1527,9 @@ func (f *autocall) extractAndRemoveToolApprovalRequestsAndResponses(ctx context.
 		msgs = slices.DeleteFunc(msgs, func(m *message.Message) bool {
 			return m == nil
 		})
+	}
+	for callID := range functionResultCallIds {
+		delete(approvalRequestCallIDs, callID)
 	}
 	if len(approvalRequestCallIDs) > 0 {
 		// Validation: If we got an approval for each request, we should have no call ids left.

@@ -42,6 +42,7 @@ const (
 	FeatureOpenAI                    = 54
 	FeatureAnthropic                 = 55
 	FeatureGitHubCopilot             = 57
+	FeatureAzureCosmos               = 58
 	FeatureA2A                       = 62
 	FeatureHostingAGUI               = 63
 	FeatureShell                     = 69

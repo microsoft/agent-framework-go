@@ -3,7 +3,10 @@
 package fsskills_test
 
 import (
+	"bytes"
+	"fmt"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +14,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
 )
 
@@ -1156,5 +1160,736 @@ func TestFileSource_MetadataWithBlankLine_KeepsAllKeys(t *testing.T) {
 	m := loaded[0].Frontmatter.Metadata
 	if m["a"] != "1" || m["b"] != "2" || m["c"] != "3" {
 		t.Fatalf("metadata keys dropped after blank line: %#v", m)
+	}
+}
+
+func rawSkillSource(name, content string, opts fsskills.SourceOptions) *fsskills.Source {
+	return fsskills.NewSourceOptions(opts, fstest.MapFS{
+		name + "/SKILL.md": {Data: []byte(content)},
+	})
+}
+
+func loadFileSkills(t *testing.T, source *fsskills.Source) []*skills.Skill {
+	t.Helper()
+	loaded, err := source.Skills(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return loaded
+}
+
+func TestFileSource_ValidSkill_ReturnsNameAndDescription(t *testing.T) {
+	source := rawSkillSource("my-skill",
+		"---\nname: my-skill\ndescription: A test skill\n---\nUse this skill to do things.", fsskills.SourceOptions{})
+
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || loaded[0].Frontmatter.Name != "my-skill" || loaded[0].Frontmatter.Description != "A test skill" {
+		t.Fatalf("Skills() = %#v, want the valid skill and its description", loaded)
+	}
+}
+
+func TestFileSource_QuotedFrontmatterValues_AreParsed(t *testing.T) {
+	source := rawSkillSource("quoted-skill",
+		"---\nname: 'quoted-skill'\ndescription: \"A quoted description\"\n---\nBody text.", fsskills.SourceOptions{})
+
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || loaded[0].Frontmatter.Name != "quoted-skill" || loaded[0].Frontmatter.Description != "A quoted description" {
+		t.Fatalf("Skills() = %#v, want unquoted name and description", loaded)
+	}
+}
+
+func TestFileSource_MissingFrontmatter_ExcludesSkill(t *testing.T) {
+	source := rawSkillSource("bad-skill", "No frontmatter here.", fsskills.SourceOptions{})
+	if got := loadFileSkills(t, source); len(got) != 0 {
+		t.Fatalf("Skills() = %#v, want no skills", got)
+	}
+}
+
+func TestFileSource_MissingName_ExcludesSkill(t *testing.T) {
+	source := rawSkillSource("no-name", "---\ndescription: A skill without a name\n---\nBody.", fsskills.SourceOptions{})
+	if got := loadFileSkills(t, source); len(got) != 0 {
+		t.Fatalf("Skills() = %#v, want no skills", got)
+	}
+}
+
+func TestFileSource_MissingDescription_ExcludesSkill(t *testing.T) {
+	source := rawSkillSource("no-desc", "---\nname: no-desc\n---\nBody.", fsskills.SourceOptions{})
+	if got := loadFileSkills(t, source); len(got) != 0 {
+		t.Fatalf("Skills() = %#v, want no skills", got)
+	}
+}
+
+func TestFileSource_InvalidNames_ExcludeSkill(t *testing.T) {
+	for _, name := range []string{"BadName", "-leading-hyphen", "trailing-hyphen-", "has spaces", "consecutive--hyphens"} {
+		t.Run(name, func(t *testing.T) {
+			source := rawSkillSource(name, "---\nname: "+name+"\ndescription: A skill\n---\nBody.", fsskills.SourceOptions{})
+			if got := loadFileSkills(t, source); len(got) != 0 {
+				t.Fatalf("Skills() = %#v, want invalid name %q excluded", got, name)
+			}
+		})
+	}
+}
+
+func TestFileSource_NameMismatch_ExcludesSkill(t *testing.T) {
+	source := rawSkillSource("wrong-dir-name",
+		"---\nname: actual-skill-name\ndescription: A skill\n---\nBody.", fsskills.SourceOptions{})
+	if got := loadFileSkills(t, source); len(got) != 0 {
+		t.Fatalf("Skills() = %#v, want mismatched directory name excluded", got)
+	}
+}
+
+func TestFileSource_NameTooLong_ExcludesSkill(t *testing.T) {
+	source := rawSkillSource("long-name",
+		"---\nname: "+strings.Repeat("a", 65)+"\ndescription: A skill\n---\nBody.", fsskills.SourceOptions{})
+	if got := loadFileSkills(t, source); len(got) != 0 {
+		t.Fatalf("Skills() = %#v, want overlong name excluded", got)
+	}
+}
+
+func TestFileSource_DescriptionTooLong_ExcludesSkill(t *testing.T) {
+	source := rawSkillSource("long-desc",
+		"---\nname: long-desc\ndescription: "+strings.Repeat("x", 1025)+"\n---\nBody.", fsskills.SourceOptions{})
+	if got := loadFileSkills(t, source); len(got) != 0 {
+		t.Fatalf("Skills() = %#v, want overlong description excluded", got)
+	}
+}
+
+func TestFileSource_Utf8Bom_ParsesNameAndDescription(t *testing.T) {
+	source := rawSkillSource("bom-skill",
+		"\uFEFF---\nname: bom-skill\ndescription: Skill with BOM\n---\nBody content.", fsskills.SourceOptions{})
+
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || loaded[0].Frontmatter.Name != "bom-skill" || loaded[0].Frontmatter.Description != "Skill with BOM" {
+		t.Fatalf("Skills() = %#v, want the BOM-prefixed skill", loaded)
+	}
+}
+
+func TestFileSource_License_IsParsed(t *testing.T) {
+	source := rawSkillSource("licensed-skill",
+		"---\nname: licensed-skill\ndescription: A skill with license\nlicense: MIT\n---\nBody.", fsskills.SourceOptions{})
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || loaded[0].Frontmatter.License != "MIT" {
+		t.Fatalf("Skills() = %#v, want license MIT", loaded)
+	}
+}
+
+func TestFileSource_Compatibility_IsParsed(t *testing.T) {
+	source := rawSkillSource("compat-skill",
+		"---\nname: compat-skill\ndescription: A skill with compatibility\ncompatibility: Requires Node.js 18+\n---\nBody.", fsskills.SourceOptions{})
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || loaded[0].Frontmatter.Compatibility != "Requires Node.js 18+" {
+		t.Fatalf("Skills() = %#v, want compatibility requirement", loaded)
+	}
+}
+
+func TestFileSource_AllowedTools_IsParsed(t *testing.T) {
+	source := rawSkillSource("tools-skill",
+		"---\nname: tools-skill\ndescription: A skill with tools\nallowed-tools: grep glob bash\n---\nBody.", fsskills.SourceOptions{})
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || loaded[0].Frontmatter.AllowedTools != "grep glob bash" {
+		t.Fatalf("Skills() = %#v, want allowed tools", loaded)
+	}
+}
+
+func TestFileSource_Metadata_IsParsed(t *testing.T) {
+	source := rawSkillSource("meta-skill",
+		"---\nname: meta-skill\ndescription: A skill with metadata\nmetadata:\n  author: test-user\n  version: 1.0\n---\nBody.", fsskills.SourceOptions{})
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || loaded[0].Frontmatter.Metadata["author"] != "test-user" || loaded[0].Frontmatter.Metadata["version"] != "1.0" {
+		t.Fatalf("Skills() = %#v, want parsed author and version metadata", loaded)
+	}
+}
+
+func TestFileSource_ValidExtensionList_Succeeds(t *testing.T) {
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		AllowedResourceExtensions: []string{".md", ".json", ".custom"},
+	}, fstest.MapFS{})
+	if source == nil {
+		t.Fatal("expected source accepting all valid extensions")
+	}
+}
+
+func TestFileSource_MixedValidAndInvalidExtensions_Panics(t *testing.T) {
+	defer func() {
+		if got := recover(); got != `invalid extension "json": must start with '.'` {
+			t.Fatalf("panic = %v, want invalid json extension", got)
+		}
+	}()
+	fsskills.NewSourceOptions(fsskills.SourceOptions{
+		AllowedResourceExtensions: []string{".md", "json"},
+	}, fstest.MapFS{})
+}
+
+func TestFileSource_MatchingExtensions_DiscoverBothResources(t *testing.T) {
+	fsys := fstest.MapFS{
+		"resource-skill/SKILL.md":          {Data: []byte("---\nname: resource-skill\ndescription: Has resources\n---\nSee docs for details.")},
+		"resource-skill/references/FAQ.md": {Data: []byte("FAQ content")},
+		"resource-skill/assets/data.json":  {Data: []byte("{}")},
+	}
+	loaded := loadFileSkills(t, fsskills.NewSource(fsys))
+	if len(loaded) != 1 {
+		t.Fatalf("Skills() = %#v, want one skill", loaded)
+	}
+	names := []string{}
+	for _, resource := range loaded[0].Resources {
+		names = append(names, resource.Name)
+	}
+	if len(names) != 2 || !slices.Contains(names, "references/FAQ.md") || !slices.Contains(names, "assets/data.json") {
+		t.Fatalf("resource names = %v, want both matching resources", names)
+	}
+}
+
+func TestFileSource_NonMatchingExtensions_AreExcluded(t *testing.T) {
+	fsys := fstest.MapFS{
+		"ext-skill/SKILL.md":             {Data: []byte("---\nname: ext-skill\ndescription: Extension test\n---\nBody.")},
+		"ext-skill/references/image.png": {Data: []byte("fake image")},
+		"ext-skill/references/data.json": {Data: []byte("{}")},
+	}
+	loaded := loadFileSkills(t, fsskills.NewSource(fsys))
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 || loaded[0].Resources[0].Name != "references/data.json" {
+		t.Fatalf("Skills() = %#v, want only the JSON resource", loaded)
+	}
+}
+
+func TestFileSource_SkillMd_IsNotAResource(t *testing.T) {
+	fsys := fstest.MapFS{
+		"selfref-skill/SKILL.md":            {Data: []byte("---\nname: selfref-skill\ndescription: Self ref test\n---\nBody.")},
+		"selfref-skill/references/notes.md": {Data: []byte("notes")},
+	}
+	loaded := loadFileSkills(t, fsskills.NewSource(fsys))
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 || loaded[0].Resources[0].Name != "references/notes.md" {
+		t.Fatalf("Skills() = %#v, want only references/notes.md", loaded)
+	}
+}
+
+func TestFileSource_NestedResourceFiles_OnlyDiscoversWithinDefaultDepth(t *testing.T) {
+	fsys := fstest.MapFS{
+		"nested-res-skill/SKILL.md":                         {Data: []byte("---\nname: nested-res-skill\ndescription: Nested resources\n---\nBody.")},
+		"nested-res-skill/references/top.md":                {Data: []byte("top content")},
+		"nested-res-skill/references/level1/level2/deep.md": {Data: []byte("deep content")},
+	}
+	loaded := loadFileSkills(t, fsskills.NewSource(fsys))
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 || loaded[0].Resources[0].Name != "references/top.md" {
+		t.Fatalf("Skills() = %#v, want only references/top.md", loaded)
+	}
+}
+
+func TestFileSource_CustomResourceExtensions_ExcludesDefaultExtensions(t *testing.T) {
+	fsys := fstest.MapFS{
+		"custom-ext-skill/SKILL.md":               {Data: []byte("---\nname: custom-ext-skill\ndescription: Custom extensions\n---\nBody.")},
+		"custom-ext-skill/references/data.custom": {Data: []byte("custom data")},
+		"custom-ext-skill/references/data.json":   {Data: []byte("{}")},
+	}
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{AllowedResourceExtensions: []string{".custom"}}, fsys)
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 || loaded[0].Resources[0].Name != "references/data.custom" {
+		t.Fatalf("Skills() = %#v, want only the custom resource", loaded)
+	}
+}
+
+func TestFileSource_RootResources_AreDiscoveredByDefault(t *testing.T) {
+	fsys := fstest.MapFS{
+		"root-resource-skill/SKILL.md":    {Data: []byte("---\nname: root-resource-skill\ndescription: Root resources\n---\nBody.")},
+		"root-resource-skill/guide.md":    {Data: []byte("guide content")},
+		"root-resource-skill/config.json": {Data: []byte("{}")},
+	}
+	loaded := loadFileSkills(t, fsskills.NewSource(fsys))
+	if len(loaded) != 1 {
+		t.Fatalf("Skills() = %#v, want one skill", loaded)
+	}
+	names := []string{}
+	for _, resource := range loaded[0].Resources {
+		names = append(names, resource.Name)
+	}
+	if len(names) != 2 || !slices.Contains(names, "guide.md") || !slices.Contains(names, "config.json") {
+		t.Fatalf("resource names = %v, want both root resources", names)
+	}
+}
+
+func TestFileSource_AnySubdirectoryResource_IsDiscoveredByDefault(t *testing.T) {
+	fsys := fstest.MapFS{
+		"non-spec-skill/SKILL.md":       {Data: []byte("---\nname: non-spec-skill\ndescription: Non-spec directory\n---\nBody.")},
+		"non-spec-skill/docs/readme.md": {Data: []byte("docs content")},
+	}
+	loaded := loadFileSkills(t, fsskills.NewSource(fsys))
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 || loaded[0].Resources[0].Name != "docs/readme.md" {
+		t.Fatalf("Skills() = %#v, want the docs resource", loaded)
+	}
+}
+
+func TestFileSource_ResourceFilter_ExcludesSelectedDirectory(t *testing.T) {
+	fsys := fstest.MapFS{
+		"custom-directory-skill/SKILL.md":          {Data: []byte("---\nname: custom-directory-skill\ndescription: Custom directory\n---\nBody.")},
+		"custom-directory-skill/docs/readme.md":    {Data: []byte("docs content")},
+		"custom-directory-skill/references/ref.md": {Data: []byte("ref content")},
+	}
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ResourceFilter: func(ctx fsskills.FilterContext) bool {
+			return !strings.HasPrefix(strings.ToLower(ctx.RelativeFilePath), "docs/")
+		},
+	}, fsys)
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 || loaded[0].Resources[0].Name != "references/ref.md" {
+		t.Fatalf("Skills() = %#v, want only references/ref.md", loaded)
+	}
+}
+
+func TestFileSource_ResourceFilter_WhitelistsReferences(t *testing.T) {
+	fsys := fstest.MapFS{
+		"dotslash-res-skill/SKILL.md":             {Data: []byte("---\nname: dotslash-res-skill\ndescription: Dot-slash prefix\n---\nBody.")},
+		"dotslash-res-skill/references/data.json": {Data: []byte("{}")},
+		"dotslash-res-skill/assets/image.txt":     {Data: []byte("data")},
+	}
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ResourceFilter: func(ctx fsskills.FilterContext) bool {
+			return strings.HasPrefix(strings.ToLower(ctx.RelativeFilePath), "references/")
+		},
+	}, fsys)
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 || loaded[0].Resources[0].Name != "references/data.json" {
+		t.Fatalf("Skills() = %#v, want only references/data.json", loaded)
+	}
+}
+
+func TestFileSource_DepthOne_ExcludesSubdirectoryScripts(t *testing.T) {
+	fsys := fstest.MapFS{
+		"depth-one-skill/SKILL.md":       {Data: []byte("---\nname: depth-one-skill\ndescription: Depth one\n---\nBody.")},
+		"depth-one-skill/scripts/run.py": {Data: []byte("print('hello')")},
+	}
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: new(1)}, fsys)
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || len(loaded[0].Scripts) != 0 {
+		t.Fatalf("Skills() = %#v, want subdirectory scripts excluded at depth 1", loaded)
+	}
+}
+
+func TestFileSource_DeepResource_ExcludedWithDefaultDepth(t *testing.T) {
+	fsys := fstest.MapFS{
+		"nested-directory-skill/SKILL.md":           {Data: []byte("---\nname: nested-directory-skill\ndescription: Nested directory\n---\nBody.")},
+		"nested-directory-skill/f1/f2/f3/data.json": {Data: []byte("{}")},
+	}
+	loaded := loadFileSkills(t, fsskills.NewSource(fsys))
+	if len(loaded) != 1 || len(loaded[0].Resources) != 0 {
+		t.Fatalf("Skills() = %#v, want deep resource excluded", loaded)
+	}
+}
+
+func TestFileSource_DeepResource_DiscoveredWithHigherDepth(t *testing.T) {
+	fsys := fstest.MapFS{
+		"deep-res-skill/SKILL.md":           {Data: []byte("---\nname: deep-res-skill\ndescription: Deep resource\n---\nBody.")},
+		"deep-res-skill/f1/f2/f3/data.json": {Data: []byte("{}")},
+	}
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: new(5)}, fsys)
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 || loaded[0].Resources[0].Name != "f1/f2/f3/data.json" {
+		t.Fatalf("Skills() = %#v, want the deep resource", loaded)
+	}
+}
+
+func TestFileSource_DuplicateRecognizedFields_ExcludeSkill(t *testing.T) {
+	for _, field := range []string{"name", "description", "license", "compatibility", "metadata", "allowed-tools"} {
+		t.Run(field, func(t *testing.T) {
+			fields := "name: ambiguous-skill\ndescription: A skill\n" + field + ": first\n" + field + ": second"
+			switch field {
+			case "name":
+				fields = "name: ambiguous-skill\nname: ambiguous-skill\ndescription: A skill"
+			case "description":
+				fields = "name: ambiguous-skill\ndescription: A skill\ndescription: A second description"
+			case "metadata":
+				fields = "name: ambiguous-skill\ndescription: A skill\nmetadata:\n  author: first\nmetadata:\n  version: 1.0"
+			}
+			source := rawSkillSource("ambiguous-skill", "---\n"+fields+"\n---\nBody.", fsskills.SourceOptions{})
+			if got := loadFileSkills(t, source); len(got) != 0 {
+				t.Fatalf("Skills() = %#v, want duplicate %s excluded", got, field)
+			}
+		})
+	}
+}
+
+func TestFileSource_IncorrectlyCasedRecognizedFields_ExcludeSkill(t *testing.T) {
+	for _, test := range []struct{ field, cased string }{
+		{"name", "Name"},
+		{"description", "Description"},
+		{"license", "License"},
+		{"compatibility", "Compatibility"},
+		{"metadata", "Metadata"},
+		{"allowed-tools", "Allowed-Tools"},
+	} {
+		t.Run(test.field, func(t *testing.T) {
+			fields := "name: ambiguous-skill\ndescription: A skill\n" + test.cased + ": value"
+			switch test.field {
+			case "name":
+				fields = test.cased + ": ambiguous-skill\ndescription: A skill"
+			case "description":
+				fields = "name: ambiguous-skill\n" + test.cased + ": A skill"
+			case "metadata":
+				fields = "name: ambiguous-skill\ndescription: A skill\n" + test.cased + ":\n  author: test"
+			}
+			source := rawSkillSource("ambiguous-skill", "---\n"+fields+"\n---\nBody.", fsskills.SourceOptions{})
+			if got := loadFileSkills(t, source); len(got) != 0 {
+				t.Fatalf("Skills() = %#v, want incorrectly cased %s excluded", got, test.field)
+			}
+		})
+	}
+}
+
+func TestFileSource_ConflictingScalarFormats_ExcludeSkillAndLogError(t *testing.T) {
+	firstValues := []string{"First", "'First'", `"First"`, "|-\n  First", ">-\n  First"}
+	secondValues := []string{"Second", "'Second'", `"Second"`, "|-\n  Second", ">-\n  Second"}
+	for i, first := range firstValues {
+		for j, second := range secondValues {
+			for _, key := range []string{"description", "Description", "DESCRIPTION"} {
+				t.Run(fmt.Sprintf("%d_%d_%s", i, j, key), func(t *testing.T) {
+					var logs bytes.Buffer
+					source := rawSkillSource("test-skill",
+						fmt.Sprintf("---\nname: test-skill\ndescription: %s\n%s: %s\nlicense: MIT\n---\nBody.", first, key, second),
+						fsskills.SourceOptions{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+					if got := loadFileSkills(t, source); len(got) != 0 {
+						t.Fatalf("Skills() = %#v, want conflicting scalar fields excluded", got)
+					}
+					diagnostic := "duplicate frontmatter field"
+					if key != "description" {
+						diagnostic = "incorrectly cased frontmatter field"
+					}
+					logged := logs.String()
+					if strings.Count(logged, `"level":"ERROR"`) != 1 || !strings.Contains(logged, diagnostic) ||
+						!strings.Contains(logged, fmt.Sprintf(`"fieldName":%q`, key)) {
+						t.Fatalf("expected one field-specific diagnostic, got %s", logged)
+					}
+					if key != "description" && !strings.Contains(logged, `"expectedFieldName":"description"`) {
+						t.Fatalf("missing canonical field name in %s", logged)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestFileSource_ConflictingQuotedFields_ExcludeSkillAndLogError(t *testing.T) {
+	fields := []struct{ key, value string }{
+		{"name", "test-skill"},
+		{"description", "Read files"},
+		{"license", "MIT"},
+		{"compatibility", "Any runtime"},
+		{"metadata", "\n  author: First"},
+		{"allowed-tools", "read"},
+	}
+	for _, field := range fields {
+		var others []string
+		for _, other := range fields {
+			if other.key != field.key {
+				others = append(others, other.key+": "+other.value)
+			}
+		}
+		for _, quote := range []string{"'", `"`} {
+			quotedKey := quote + field.key + quote
+			quotedField, bareField := quotedKey+": "+field.value, field.key+": "+field.value
+			otherQuote := `"`
+			if quote == `"` {
+				otherQuote = "'"
+			}
+			declarations := []string{
+				quote + strings.ToUpper(field.key) + quote + ": " + field.value,
+				quotedField + "\n" + bareField,
+				bareField + "\n" + quotedField,
+				quotedField + "\n" + quotedField,
+				quotedField + "\n" + otherQuote + field.key + otherQuote + ": " + field.value,
+				quotedKey + ":\n" + bareField,
+				bareField + "\n" + quotedKey + ":",
+			}
+			for _, newline := range []string{"\n", "\r\n"} {
+				for i, declaration := range declarations {
+					t.Run(fmt.Sprintf("%s_%q_%q_%d", field.key, quote, newline, i), func(t *testing.T) {
+						var logs bytes.Buffer
+						content := "---\n" + strings.Join(others, "\n") + "\n" + declaration + "\n---\nBody."
+						source := rawSkillSource("test-skill", strings.ReplaceAll(content, "\n", newline),
+							fsskills.SourceOptions{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+						if got := loadFileSkills(t, source); len(got) != 0 {
+							t.Fatalf("Skills() = %#v, want conflicting quoted fields excluded", got)
+						}
+						diagnostic, key := "duplicate frontmatter field", field.key
+						if i == 0 {
+							diagnostic, key = "incorrectly cased frontmatter field", strings.ToUpper(field.key)
+						}
+						logged := logs.String()
+						if strings.Count(logged, `"level":"ERROR"`) != 1 || !strings.Contains(logged, diagnostic) ||
+							!strings.Contains(logged, fmt.Sprintf(`"fieldName":%q`, key)) {
+							t.Fatalf("expected one field-specific diagnostic, got %s", logged)
+						}
+						if i == 0 && !strings.Contains(logged, fmt.Sprintf(`"expectedFieldName":%q`, field.key)) {
+							t.Fatalf("missing canonical field name in %s", logged)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestFileSource_NestedMetadataAndUnknownFields_KeepFirstMetadataValue(t *testing.T) {
+	const content = "---\nname: test-skill\ndescription: Read files\n" +
+		"# description: Not a field\nmetadata:\n  author: First\n  author: Second\n  Description: Nested text\n" +
+		"  \"description\": Ignored\n  'metadata': Ignored\nvendor-option: First\nvendor-option: Second\n" +
+		"'vendor-option': Third\n\"VENDOR-OPTION\": Fourth\n---\n\"description\": Body text"
+	loaded := loadFileSkills(t, rawSkillSource("test-skill", content, fsskills.SourceOptions{}))
+	if len(loaded) != 1 {
+		t.Fatalf("Skills() = %#v, want one skill", loaded)
+	}
+	fm := loaded[0].Frontmatter
+	if fm.Description != "Read files" || len(fm.Metadata) != 2 || fm.Metadata["author"] != "First" || fm.Metadata["Description"] != "Nested text" {
+		t.Fatalf("frontmatter = %#v, want original root description and first metadata values", fm)
+	}
+}
+
+func TestFileSource_EmptyBlockBeforeAnotherField_ExcludesSkill(t *testing.T) {
+	for _, indicator := range []string{"|", "|-", "|+", ">", ">-", ">+"} {
+		t.Run(indicator, func(t *testing.T) {
+			content := "---\nname: test-skill\ndescription: " + indicator + "\n\nlicense: MIT\n---\nBody."
+			source := rawSkillSource("test-skill", content, fsskills.SourceOptions{})
+			if got := loadFileSkills(t, source); len(got) != 0 {
+				t.Fatalf("Skills() = %#v, want empty block description excluded", got)
+			}
+		})
+	}
+}
+
+func TestFileSource_QuotedEmptyOptionalFields_RemainUnset(t *testing.T) {
+	for _, quote := range []string{"'", `"`} {
+		for _, newline := range []string{"\n", "\r\n"} {
+			t.Run(fmt.Sprintf("%q_%q", quote, newline), func(t *testing.T) {
+				content := fmt.Sprintf("---\n%[1]smetadata%[1]s:\n%[1]sname%[1]s: test-skill\n"+
+					"%[1]sdescription%[1]s: Read files\n%[1]slicense%[1]s:\n"+
+					"%[1]scompatibility%[1]s:\n%[1]sallowed-tools%[1]s:\n---\nBody.", quote)
+				loaded := loadFileSkills(t, rawSkillSource("test-skill", strings.ReplaceAll(content, "\n", newline), fsskills.SourceOptions{}))
+				if len(loaded) != 1 {
+					t.Fatalf("Skills() = %#v, want one skill", loaded)
+				}
+				fm := loaded[0].Frontmatter
+				if fm.Name != "test-skill" || fm.Description != "Read files" || fm.Metadata != nil || fm.License != "" || fm.Compatibility != "" || fm.AllowedTools != "" {
+					t.Fatalf("frontmatter = %#v, want required fields and unset optionals", fm)
+				}
+			})
+		}
+	}
+}
+
+func TestFileSource_EmptyInlineValue_DoesNotConsumeNextField(t *testing.T) {
+	for _, field := range []string{"metadata", "license", "compatibility", "allowed-tools", "vendor-option"} {
+		for _, newline := range []string{"\n", "\r\n"} {
+			t.Run(fmt.Sprintf("%s_%q", field, newline), func(t *testing.T) {
+				content := "---\n" + field + ": \t\nname: test-skill\ndescription: A test skill.\n---\nBody."
+				loaded := loadFileSkills(t, rawSkillSource("test-skill", strings.ReplaceAll(content, "\n", newline), fsskills.SourceOptions{}))
+				if len(loaded) != 1 {
+					t.Fatalf("Skills() = %#v, want one skill", loaded)
+				}
+				fm := loaded[0].Frontmatter
+				if fm.Name != "test-skill" || fm.Description != "A test skill." || fm.License != "" || fm.Compatibility != "" || fm.AllowedTools != "" {
+					t.Fatalf("empty optional value consumed a following field: %#v", fm)
+				}
+			})
+		}
+	}
+}
+
+func TestFileSource_EmptyOptionalScalarAtEnd_RemainsUnset(t *testing.T) {
+	for _, field := range []string{"license", "compatibility", "allowed-tools"} {
+		for _, newline := range []string{"\n", "\r\n"} {
+			t.Run(fmt.Sprintf("%s_%q", field, newline), func(t *testing.T) {
+				content := "---\nname: test-skill\ndescription: Read files\n" + field + ": \t\n---\nBody."
+				loaded := loadFileSkills(t, rawSkillSource("test-skill", strings.ReplaceAll(content, "\n", newline), fsskills.SourceOptions{}))
+				if len(loaded) != 1 {
+					t.Fatalf("Skills() = %#v, want one skill", loaded)
+				}
+				fm := loaded[0].Frontmatter
+				if fm.Description != "Read files" || fm.License != "" || fm.Compatibility != "" || fm.AllowedTools != "" {
+					t.Fatalf("empty trailing optional value was not preserved: %#v", fm)
+				}
+			})
+		}
+	}
+}
+
+func TestFileSource_EmptyInlineValue_DoesNotBypassKeyValidation(t *testing.T) {
+	fields := []string{
+		"name:", "description:", "metadata:\nmetadata:", "license:\nlicense: MIT", "license: MIT\nlicense:",
+		"compatibility:\ncompatibility: Any runtime", "allowed-tools:\nallowed-tools: read",
+		"Metadata:", "allowed-tools: read\nALLOWED-TOOLS:",
+	}
+	for i, field := range fields {
+		for _, newline := range []string{"\n", "\r\n"} {
+			t.Run(fmt.Sprintf("%d_%q", i, newline), func(t *testing.T) {
+				content := "---\n" + field + "\nname: test-skill\ndescription: A test skill.\n---\nBody."
+				source := rawSkillSource("test-skill", strings.ReplaceAll(content, "\n", newline), fsskills.SourceOptions{})
+				if got := loadFileSkills(t, source); len(got) != 0 {
+					t.Fatalf("Skills() = %#v, want empty fields validated before being ignored", got)
+				}
+			})
+		}
+	}
+}
+
+func TestFileSource_LinkedSkillDirectory_SkipsLinkedSkill(t *testing.T) {
+	fsys := fstest.MapFS{
+		"root/good-skill/SKILL.md":    {Data: []byte("---\nname: good-skill\ndescription: A skill\n---\nBody.")},
+		"outside/evil-skill/SKILL.md": {Data: []byte("---\nname: evil-skill\ndescription: Linked skill\n---\nBody.")},
+		"root/evil-skill":             {Mode: fs.ModeSymlink, Data: []byte("../outside/evil-skill")},
+	}
+	root, err := fs.Sub(fsys, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := loadFileSkills(t, fsskills.NewSource(root))
+	if len(loaded) != 1 || loaded[0].Frontmatter.Name != "good-skill" {
+		t.Fatalf("Skills() = %#v, want only good-skill", loaded)
+	}
+}
+
+func TestFileSource_LinkInResourcePath_SkipsLinkedResources(t *testing.T) {
+	fsys := fstest.MapFS{
+		"root/symlink-escape-skill/SKILL.md":        {Data: []byte("---\nname: symlink-escape-skill\ndescription: Symlinked directory escape\n---\nBody.")},
+		"root/symlink-escape-skill/assets/legit.md": {Data: []byte("legit content")},
+		"root/symlink-escape-skill/references":      {Mode: fs.ModeSymlink, Data: []byte("../../outside")},
+		"outside/secret.md":                         {Data: []byte("secret content")},
+	}
+	root, err := fs.Sub(fsys, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := loadFileSkills(t, fsskills.NewSource(root))
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 || loaded[0].Resources[0].Name != "assets/legit.md" {
+		t.Fatalf("Skills() = %#v, want only the legitimate asset", loaded)
+	}
+}
+
+func TestFileSource_LinkedResourceDirectory_SkipsExternalFiles(t *testing.T) {
+	fsys := fstest.MapFS{
+		"root/symlink-directory-skip/SKILL.md":        {Data: []byte("---\nname: symlink-directory-skip\ndescription: Symlinked directory skip\n---\nBody.")},
+		"root/symlink-directory-skip/assets/legit.md": {Data: []byte("legit content")},
+		"root/symlink-directory-skip/references":      {Mode: fs.ModeSymlink, Data: []byte("../../outside-resources")},
+		"outside-resources/external.md":               {Data: []byte("external content")},
+		"outside-resources/data.json":                 {Data: []byte("{}")},
+	}
+	root, err := fs.Sub(fsys, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := loadFileSkills(t, fsskills.NewSource(root))
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 || loaded[0].Resources[0].Name != "assets/legit.md" {
+		t.Fatalf("Skills() = %#v, want external resource directory excluded", loaded)
+	}
+}
+
+func TestFileSource_LinkedScriptDirectory_SkipsExternalScripts(t *testing.T) {
+	fsys := fstest.MapFS{
+		"root/symlink-script-skip/SKILL.md": {Data: []byte("---\nname: symlink-script-skip\ndescription: Symlinked script directory\n---\nBody.")},
+		"root/symlink-script-skip/scripts":  {Mode: fs.ModeSymlink, Data: []byte("../../outside-scripts")},
+		"outside-scripts/malicious.py":      {Data: []byte("print('external')")},
+	}
+	root, err := fs.Sub(fsys, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := loadFileSkills(t, fsskills.NewSource(root))
+	if len(loaded) != 1 || len(loaded[0].Scripts) != 0 {
+		t.Fatalf("Skills() = %#v, want external scripts excluded", loaded)
+	}
+}
+
+func TestFileSource_LinkedIntermediateDirectory_SkipsDeepResources(t *testing.T) {
+	fsys := fstest.MapFS{
+		"root/symlink-intermediate/SKILL.md":     {Data: []byte("---\nname: symlink-intermediate\ndescription: Intermediate symlink\n---\nBody.")},
+		"root/symlink-intermediate/sub":          {Mode: fs.ModeSymlink, Data: []byte("../../outside-intermediate")},
+		"outside-intermediate/resources/data.md": {Data: []byte("data")},
+	}
+	root, err := fs.Sub(fsys, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: new(4)}, root)
+	loaded := loadFileSkills(t, source)
+	if len(loaded) != 1 || len(loaded[0].Resources) != 0 {
+		t.Fatalf("Skills() = %#v, want linked intermediate directory excluded", loaded)
+	}
+}
+
+func TestFileSource_LinkedFileInRealDirectory_SkipsOnlyLinkedFile(t *testing.T) {
+	fsys := fstest.MapFS{
+		"root/symlink-file-skill/SKILL.md":            {Data: []byte("---\nname: symlink-file-skill\ndescription: Symlinked file\n---\nBody.")},
+		"root/symlink-file-skill/references/legit.md": {Data: []byte("legit content")},
+		"root/symlink-file-skill/references/leak.md":  {Mode: fs.ModeSymlink, Data: []byte("../../../outside-file/secret.md")},
+		"outside-file/secret.md":                      {Data: []byte("secret content")},
+	}
+	root, err := fs.Sub(fsys, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded := loadFileSkills(t, fsskills.NewSource(root))
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 || loaded[0].Resources[0].Name != "references/legit.md" {
+		t.Fatalf("Skills() = %#v, want only the real file", loaded)
+	}
+}
+
+func TestFileSource_ReadResource_RejectsReplacedSymlink(t *testing.T) {
+	fsys := fstest.MapFS{
+		"read-symlink-skill/SKILL.md":          {Data: []byte("---\nname: read-symlink-skill\ndescription: A skill\n---\nSee docs.")},
+		"read-symlink-skill/references/doc.md": {Data: []byte("Safe content.")},
+		"secret.md":                            {Data: []byte("Secret content.")},
+	}
+	loaded := loadFileSkills(t, fsskills.NewSource(fsys))
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 {
+		t.Fatalf("Skills() = %#v, want one resource", loaded)
+	}
+	resource := loaded[0].Resources[0]
+	fsys["read-symlink-skill/references/doc.md"] = &fstest.MapFile{Mode: fs.ModeSymlink, Data: []byte("../../secret.md")}
+
+	if got, err := resource.Read(t.Context()); err == nil || !strings.Contains(err.Error(), "symbolic link") || got != nil {
+		t.Fatalf("Read() = %#v, %v, want rejected replacement link", got, err)
+	}
+}
+
+func TestFileSource_ReadResource_RejectsReplacedSkillDirectory(t *testing.T) {
+	fsys := fstest.MapFS{
+		"swapped-skill/SKILL.md": {Data: []byte("---\nname: swapped-skill\ndescription: A skill\n---\nSee docs.")},
+		"swapped-skill/doc.md":   {Data: []byte("Safe content.")},
+		"decoy/doc.md":           {Data: []byte("Attacker content.")},
+	}
+	loaded := loadFileSkills(t, fsskills.NewSource(fsys))
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 {
+		t.Fatalf("Skills() = %#v, want one resource", loaded)
+	}
+	resource := loaded[0].Resources[0]
+	delete(fsys, "swapped-skill/SKILL.md")
+	delete(fsys, "swapped-skill/doc.md")
+	fsys["swapped-skill"] = &fstest.MapFile{Mode: fs.ModeSymlink, Data: []byte("decoy")}
+
+	if got, err := resource.Read(t.Context()); err == nil || !strings.Contains(err.Error(), "symbolic link") || got != nil {
+		t.Fatalf("Read() = %#v, %v, want rejected replacement directory", got, err)
+	}
+}
+
+type unreadableSkillDirectoryFS struct {
+	fstest.MapFS
+	listAttempts int
+}
+
+func (f *unreadableSkillDirectoryFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	if name == "blocked" {
+		f.listAttempts++
+		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrPermission}
+	}
+	return f.MapFS.ReadDir(name)
+}
+
+func TestFileSource_UnreadableSubdirectory_StillDiscoversSibling(t *testing.T) {
+	fsys := &unreadableSkillDirectoryFS{MapFS: fstest.MapFS{
+		"blocked":             {Mode: fs.ModeDir},
+		"good-skill/SKILL.md": {Data: []byte("---\nname: good-skill\ndescription: A skill\n---\nBody.")},
+	}}
+	loaded := loadFileSkills(t, fsskills.NewSource(fsys))
+	if len(loaded) != 1 || loaded[0].Frontmatter.Name != "good-skill" {
+		t.Fatalf("Skills() = %#v, want good-skill despite inaccessible sibling", loaded)
+	}
+	if fsys.listAttempts != 1 {
+		t.Fatalf("blocked directory listing attempts = %d, want 1", fsys.listAttempts)
 	}
 }

@@ -77,7 +77,8 @@ func messageWasStreamed(streamed map[streamedMessageKey]struct{}, executorID str
 // NewAgent wraps a [*workflow.Workflow] as an [*agent.Agent].
 //
 // The workflow's start executor must accept [[]*message.Message] (typically
-// configured via messageworkflow.Configure). On the first call to
+// configured via messageworkflow.Configure). A catch-all start executor also
+// accepts these messages. On the first call to
 // the agent's Run for a given session, a fresh streaming run is started.
 // Subsequent calls reuse that run, sending follow-up messages and
 // [workflow.ExternalResponse]s.
@@ -96,7 +97,7 @@ func NewAgent(wf *workflow.Workflow, cfg AgentConfig) (*agent.Agent, error) {
 		return nil, fmt.Errorf("workflow start executor protocol could not be determined: %w", err)
 	}
 	// Validate that the start executor can accept the messages we'll send.
-	if !slices.Contains(descriptor.Accepts, messagesSliceType) {
+	if !descriptor.AcceptsAll && !slices.Contains(descriptor.Accepts, messagesSliceType) {
 		return nil, fmt.Errorf("workflow start executor does not accept []*message.Message")
 	}
 

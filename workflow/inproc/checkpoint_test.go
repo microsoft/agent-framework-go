@@ -14,7 +14,380 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/checkpoint"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
+	internalcheckpoint "github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 )
+
+func checkpointForwardBinding(id string) workflow.ExecutorBinding {
+	return sampleFactory(id, func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+		pb.SendsMessageType(reflect.TypeFor[string]())
+		pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, value any) (any, error) { return nil, ctx.SendMessage("", value) })
+		return pb, nil
+	})
+}
+
+func checkpointParentWorkflow(t *testing.T, loop bool) *workflow.Workflow {
+	t.Helper()
+	a, b := checkpointForwardBinding("A"), checkpointForwardBinding("B")
+	builder := workflow.NewBuilder(a).AddEdge(a, b)
+	if loop {
+		builder.AddEdge(b, a)
+	}
+	wf, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wf
+}
+
+func readCheckpointInfos(t *testing.T, stream *inproc.StreamingRun, limit int) []workflow.CheckpointInfo {
+	t.Helper()
+	var infos []workflow.CheckpointInfo
+	for event, err := range stream.WatchStream(t.Context()) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if failure, ok := event.(workflow.ErrorEvent); ok {
+			t.Fatal(failure.Error)
+		}
+		if step, ok := event.(workflow.SuperStepCompletedEvent); ok && step.CompletionInfo != nil && step.CompletionInfo.CheckpointInfo != nil {
+			infos = append(infos, *step.CompletionInfo.CheckpointInfo)
+			if limit > 0 && len(infos) >= limit {
+				break
+			}
+		}
+	}
+	return infos
+}
+
+func lookupCheckpointParent(t *testing.T, manager checkpoint.Manager, info workflow.CheckpointInfo) *workflow.CheckpointInfo {
+	t.Helper()
+	stored, err := manager.(internalcheckpoint.Manager).Lookup(t.Context(), info.SessionID, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stored.Parent
+}
+
+func TestCheckpointParent_FirstStreamingCheckpointHasNilParent(t *testing.T) {
+	for _, environment := range checkpointTestEnvironments() {
+		t.Run(environment.name, func(t *testing.T) {
+			manager := checkpoint.NewInMemoryManager()
+			stream, err := environment.env.WithCheckpointing(manager).RunStreaming(t.Context(), checkpointParentWorkflow(t, false), "Hello")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = stream.Close(t.Context()) }()
+			infos := readCheckpointInfos(t, stream, 0)
+			if len(infos) == 0 {
+				t.Fatal("expected a stored checkpoint")
+			}
+			if parent := lookupCheckpointParent(t, manager, infos[0]); parent != nil {
+				t.Fatalf("first checkpoint parent = %v, want nil", parent)
+			}
+		})
+	}
+}
+
+func TestCheckpointParent_StreamingLoopChainsParents(t *testing.T) {
+	for _, environment := range checkpointTestEnvironments() {
+		t.Run(environment.name, func(t *testing.T) {
+			manager := checkpoint.NewInMemoryManager()
+			stream, err := environment.env.WithCheckpointing(manager).RunStreaming(t.Context(), checkpointParentWorkflow(t, true), "Hello")
+			if err != nil {
+				t.Fatal(err)
+			}
+			infos := readCheckpointInfos(t, stream, 3)
+			if err := stream.Close(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if len(infos) < 3 {
+				t.Fatalf("checkpoint count = %d, want at least three", len(infos))
+			}
+			if parent := lookupCheckpointParent(t, manager, infos[0]); parent != nil {
+				t.Fatalf("first parent = %v", parent)
+			}
+			for i := 1; i < 3; i++ {
+				parent := lookupCheckpointParent(t, manager, infos[i])
+				if parent == nil || *parent != infos[i-1] {
+					t.Fatalf("checkpoint %d parent = %v, want %v", i, parent, infos[i-1])
+				}
+			}
+		})
+	}
+}
+
+func TestCheckpointParent_StreamingResumeUsesResumedCheckpoint(t *testing.T) {
+	for _, environment := range checkpointTestEnvironments() {
+		t.Run(environment.name, func(t *testing.T) {
+			manager := checkpoint.NewInMemoryManager()
+			wf := checkpointParentWorkflow(t, true)
+			env := environment.env.WithCheckpointing(manager)
+			first, err := env.RunStreaming(t.Context(), wf, "Hello")
+			if err != nil {
+				t.Fatal(err)
+			}
+			infos := readCheckpointInfos(t, first, 2)
+			if err := first.Close(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if len(infos) < 2 {
+				t.Fatalf("checkpoint count = %d, want at least two", len(infos))
+			}
+			resumePoint := infos[0]
+			resumed, err := env.ResumeStreaming(t.Context(), wf, resumePoint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resumedInfos := readCheckpointInfos(t, resumed, 1)
+			if err := resumed.Close(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if len(resumedInfos) == 0 {
+				t.Fatal("expected checkpoint after resume")
+			}
+			parent := lookupCheckpointParent(t, manager, resumedInfos[0])
+			if parent == nil || *parent != resumePoint {
+				t.Fatalf("first resumed parent = %v, want %v", parent, resumePoint)
+			}
+		})
+	}
+}
+
+type (
+	checkpointBarrierContribution struct{ Source string }
+	checkpointApprovalRequest     struct{ Prompt string }
+	checkpointApprovalReply       struct{ Value string }
+	checkpointBarrierReleased     struct{ Source string }
+)
+
+func (checkpointBarrierReleased) Data() any { return nil }
+
+func checkpointBarrierWorkflow(t *testing.T, portID, sinkID string, multi bool) *workflow.Workflow {
+	t.Helper()
+	port := workflow.RequestPort{ID: portID, Request: reflect.TypeFor[checkpointApprovalRequest](), Response: reflect.TypeFor[checkpointApprovalReply]()}
+	sink := sampleFactory(sinkID, func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+		pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[checkpointBarrierContribution](), nil, func(ctx *workflow.Context, value any) (any, error) {
+			return nil, ctx.AddEvent(checkpointBarrierReleased{Source: value.(checkpointBarrierContribution).Source})
+		})
+		return pb, nil
+	})
+	after := sampleFactory("AfterResume", func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+		pb.SendsMessageType(reflect.TypeFor[checkpointBarrierContribution]())
+		pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[checkpointApprovalReply](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+			return nil, ctx.SendMessage(sinkID, checkpointBarrierContribution{Source: "after"})
+		})
+		return pb, nil
+	})
+	contributor := func(id, label string, post bool) workflow.ExecutorBinding {
+		return sampleFactory(id, func(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+			pb.SendsMessageType(reflect.TypeFor[checkpointBarrierContribution](), reflect.TypeFor[checkpointApprovalRequest]())
+			pb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, _ any) (any, error) {
+				if label != "" {
+					if err := ctx.SendMessage(sinkID, checkpointBarrierContribution{Source: label}); err != nil {
+						return nil, err
+					}
+				}
+				if post {
+					return nil, ctx.SendMessage(portID, checkpointApprovalRequest{Prompt: "continue?"})
+				}
+				return nil, nil
+			})
+			return pb, nil
+		})
+	}
+	var builder *workflow.Builder
+	var sources []workflow.ExecutorBinding
+	if multi {
+		start := checkpointForwardBinding("Start")
+		earlyA, earlyB, kickoff := contributor("EarlyA", "before-1", false), contributor("EarlyB", "before-2", false), contributor("Kickoff", "", true)
+		builder = workflow.NewBuilder(start).AddEdge(start, earlyA).AddEdge(start, earlyB).AddEdge(start, kickoff).AddEdge(kickoff, port.Bind())
+		sources = []workflow.ExecutorBinding{earlyA, earlyB, after}
+	} else {
+		before := contributor("BeforePause", "before", true)
+		builder = workflow.NewBuilder(before).AddEdge(before, port.Bind())
+		sources = []workflow.ExecutorBinding{before, after}
+	}
+	wf, err := builder.AddEdge(port.Bind(), after).AddFanInBarrierEdge(sources, sink).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wf
+}
+
+func captureBarrierStreamingCheckpoint(t *testing.T, env *inproc.ExecutionEnvironment, wf *workflow.Workflow) (*workflow.ExternalRequest, workflow.CheckpointInfo) {
+	t.Helper()
+	stream, err := env.RunStreaming(t.Context(), wf, "start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.Close(t.Context()) }()
+	events := readStreamToHalt(t, t.Context(), stream)
+	if hasErrorEvents(events) {
+		t.Fatalf("first run errors: %v", events)
+	}
+	requests := requestsFromEvents(events)
+	if len(requests) != 1 {
+		t.Fatalf("pending requests = %d, want one", len(requests))
+	}
+	return requests[0], checkpointFromEvents(t, events)
+}
+
+func resumeBarrierStreamingCheckpoint(t *testing.T, env *inproc.ExecutionEnvironment, wf *workflow.Workflow, info workflow.CheckpointInfo, want []string) *workflow.ExternalRequest {
+	t.Helper()
+	stream, err := env.ResumeStreaming(t.Context(), wf, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.Close(t.Context()) }()
+	events := readStreamToHalt(t, t.Context(), stream)
+	requests := requestsFromEvents(events)
+	if hasErrorEvents(events) || len(requests) != 1 {
+		t.Fatalf("resumed events = %v, want one replayed request", events)
+	}
+	response, err := requests[0].CreateResponse(checkpointApprovalReply{Value: "yes"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stream.SendResponse(t.Context(), response); err != nil {
+		t.Fatal(err)
+	}
+	events = readStreamToHalt(t, t.Context(), stream)
+	if hasErrorEvents(events) {
+		t.Fatalf("completion errors: %v", events)
+	}
+	var got []string
+	for _, event := range events {
+		if released, ok := event.(checkpointBarrierReleased); ok {
+			got = append(got, released.Source)
+		}
+	}
+	slices.Sort(got)
+	want = slices.Clone(want)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("barrier releases = %v, want %v", got, want)
+	}
+	if status, err := stream.GetStatus(t.Context()); err != nil || status != inproc.RunStatusIdle {
+		t.Fatalf("status = %v, %v, want idle", status, err)
+	}
+	return requests[0]
+}
+
+func TestCheckpointResume_StreamingPreservesFanInBarrierMessages(t *testing.T) {
+	for _, environment := range checkpointTestEnvironments() {
+		t.Run(environment.name, func(t *testing.T) {
+			env := environment.env.WithCheckpointing(checkpoint.NewInMemoryManager())
+			wf := checkpointBarrierWorkflow(t, "Approval", "Sink", false)
+			pending, info := captureBarrierStreamingCheckpoint(t, env, wf)
+			replayed := resumeBarrierStreamingCheckpoint(t, env, wf, info, []string{"before", "after"})
+			if replayed.RequestID != pending.RequestID {
+				t.Fatalf("request ID = %q, want %q", replayed.RequestID, pending.RequestID)
+			}
+		})
+	}
+}
+
+func TestCheckpointResume_StreamingPreservesMultiSourceFanInMessages(t *testing.T) {
+	for _, environment := range checkpointTestEnvironments() {
+		t.Run(environment.name, func(t *testing.T) {
+			env := environment.env.WithCheckpointing(checkpoint.NewInMemoryManager())
+			wf := checkpointBarrierWorkflow(t, "Approval", "Sink", true)
+			pending, info := captureBarrierStreamingCheckpoint(t, env, wf)
+			replayed := resumeBarrierStreamingCheckpoint(t, env, wf, info, []string{"before-1", "before-2", "after"})
+			if replayed.RequestID != pending.RequestID {
+				t.Fatalf("request ID = %q, want %q", replayed.RequestID, pending.RequestID)
+			}
+		})
+	}
+}
+
+func TestCheckpointResume_FanInCheckpointCanBeStreamedTwice(t *testing.T) {
+	for _, environment := range checkpointTestEnvironments() {
+		t.Run(environment.name, func(t *testing.T) {
+			env := environment.env.WithCheckpointing(checkpoint.NewInMemoryManager())
+			_, info := captureBarrierStreamingCheckpoint(t, env, checkpointBarrierWorkflow(t, "Approval", "Sink", false))
+			for range 2 {
+				resumeBarrierStreamingCheckpoint(t, env, checkpointBarrierWorkflow(t, "Approval", "Sink", false), info, []string{"before", "after"})
+			}
+		})
+	}
+}
+
+func TestCheckpointResume_StreamingPreservesNestedFanInMessages(t *testing.T) {
+	for _, environment := range checkpointTestEnvironments() {
+		t.Run(environment.name, func(t *testing.T) {
+			buildOuter := func() *workflow.Workflow {
+				host := inproc.BindSubworkflowAsExecutor(checkpointBarrierWorkflow(t, "InnerApproval", "InnerSink", false), "InnerSubworkflow")
+				port := workflow.RequestPort{ID: "ForwardedInnerApproval", Request: reflect.TypeFor[checkpointApprovalRequest](), Response: reflect.TypeFor[checkpointApprovalReply]()}
+				wf, err := workflow.NewBuilder(host).AddEdge(host, port.Bind(), workflow.WithEdgeCondition(externalRequestOnly)).
+					AddEdge(port.Bind(), host, workflow.WithEdgeCondition(externalResponseOnly)).Build()
+				if err != nil {
+					t.Fatal(err)
+				}
+				return wf
+			}
+			env := environment.env.WithCheckpointing(checkpoint.NewInMemoryManager())
+			pending, info := captureBarrierStreamingCheckpoint(t, env, buildOuter())
+			replayed := resumeBarrierStreamingCheckpoint(t, env, buildOuter(), info, []string{"before", "after"})
+			if replayed.RequestID != pending.RequestID {
+				t.Fatalf("request ID = %q, want %q", replayed.RequestID, pending.RequestID)
+			}
+		})
+	}
+}
+
+func TestCheckpointResume_StreamingResponseCompletesWithoutDuplicateRequest(t *testing.T) {
+	for _, environment := range checkpointTestEnvironments() {
+		t.Run(environment.name, func(t *testing.T) {
+			port := workflow.RequestPort{ID: "TestPort", Request: reflect.TypeFor[string](), Response: reflect.TypeFor[string]()}
+			processor := checkpointForwardBinding("Processor")
+			wf, err := workflow.NewBuilder(port.Bind()).AddEdge(port.Bind(), processor).Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			env := environment.env.WithCheckpointing(checkpoint.NewInMemoryManager())
+			first, err := env.RunStreaming(t.Context(), wf, "Hello")
+			if err != nil {
+				t.Fatal(err)
+			}
+			firstEvents := readStreamToHalt(t, t.Context(), first)
+			pending := requestsFromEvents(firstEvents)
+			if len(pending) != 1 {
+				t.Fatalf("pending requests = %d, want one", len(pending))
+			}
+			info := checkpointFromEvents(t, firstEvents)
+			if err := first.Close(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			resumed, err := env.ResumeStreaming(t.Context(), wf, info)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resumed.Close(t.Context()) }()
+			replayed := requestsFromEvents(readStreamToHalt(t, t.Context(), resumed))
+			if len(replayed) != 1 || replayed[0].RequestID != pending[0].RequestID {
+				t.Fatalf("replayed requests = %v", replayed)
+			}
+			if status, err := resumed.GetStatus(t.Context()); err != nil || status != inproc.RunStatusPendingRequests {
+				t.Fatalf("pending status = %v, %v", status, err)
+			}
+			response, err := pending[0].CreateResponse("World")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := resumed.SendResponse(t.Context(), response); err != nil {
+				t.Fatal(err)
+			}
+			events := readStreamToHalt(t, t.Context(), resumed)
+			if len(requestsFromEvents(events)) != 0 || hasErrorEvents(events) {
+				t.Fatalf("completion events = %v", events)
+			}
+			if status, err := resumed.GetStatus(t.Context()); err != nil || status != inproc.RunStatusIdle {
+				t.Fatalf("final status = %v, %v", status, err)
+			}
+		})
+	}
+}
 
 func TestCheckpoint_ResumeWithPendingRequests_RepublishesRequestInfoEvents(t *testing.T) {
 	for _, env := range checkpointTestEnvironments() {

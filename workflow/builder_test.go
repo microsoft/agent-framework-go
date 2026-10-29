@@ -71,6 +71,85 @@ func newPlaceholder(id string) workflow.ExecutorBinding {
 	return workflow.ExecutorBinding{ID: id}
 }
 
+func TestBuilder_SwitchCreatesFanOutWithCasesAndDefault(t *testing.T) {
+	source := newNoOpExecutor("start")
+	stringTarget, intTarget, defaultTarget := newNoOpExecutor("string-target"), newNoOpExecutor("int-target"), newNoOpExecutor("default-target")
+	builder := workflow.NewBuilder(newPlaceholder(source.ID))
+	builder.AddSwitch(source).
+		AddCase(func(value any) bool { text, ok := value.(string); return ok && text == "match" }, stringTarget).
+		AddCase(func(value any) bool { number, ok := value.(int); return ok && number > 0 }, intTarget).
+		WithDefault(defaultTarget).
+		AddToBuilder(builder)
+	wf, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	edges := wf.Edges()[source.ID]
+	if len(edges) != 1 {
+		t.Fatalf("edges = %v, want one fan-out", edges)
+	}
+	edge := edges[0]
+	if !slices.Equal(edge.Connection.SourceIDs, []string{source.ID}) ||
+		!slices.Equal(edge.Connection.SinkIDs, []string{stringTarget.ID, intTarget.ID, defaultTarget.ID}) || edge.Assigner == nil {
+		t.Fatalf("switch edge = %#v", edge)
+	}
+	for _, test := range []struct {
+		input any
+		want  []int
+	}{{"match", []int{0}}, {2, []int{1}}, {"other", []int{2}}} {
+		if got := slices.Collect(edge.Assigner(3, test.input)); !slices.Equal(got, test.want) {
+			t.Errorf("selection for %v = %v, want %v", test.input, got, test.want)
+		}
+	}
+}
+
+func TestBuilder_IntermediateOutputAddsIntermediateTag(t *testing.T) {
+	a, b := newNoOpExecutor("a"), newNoOpExecutor("b")
+	wf, err := workflow.NewBuilder(newPlaceholder("a")).AddEdge(a, b).WithIntermediateOutputFrom(b).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wf.OutputExecutors()["b"]; !slices.Equal(got, []workflow.OutputTag{workflow.OutputTagIntermediate}) {
+		t.Fatalf("tags = %v", got)
+	}
+}
+
+func TestBuilder_RepeatedIntermediateDesignationDedupes(t *testing.T) {
+	a, b := newNoOpExecutor("a"), newNoOpExecutor("b")
+	wf, err := workflow.NewBuilder(newPlaceholder("a")).AddEdge(a, b).WithIntermediateOutputFrom(b).WithIntermediateOutputFrom(b).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wf.OutputExecutors()["b"]; !slices.Equal(got, []workflow.OutputTag{workflow.OutputTagIntermediate}) {
+		t.Fatalf("tags = %v", got)
+	}
+}
+
+func TestBuilder_MultipleTerminalExecutorsAreUntagged(t *testing.T) {
+	a, b, c := newNoOpExecutor("a"), newNoOpExecutor("b"), newNoOpExecutor("c")
+	wf, err := workflow.NewBuilder(newPlaceholder("a")).AddEdge(a, b).AddEdge(a, c).WithOutputFrom(b, c).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputs := wf.OutputExecutors()
+	if len(outputs) != 2 || len(outputs["b"]) != 0 || len(outputs["c"]) != 0 {
+		t.Fatalf("output designations = %v, want two untagged executors", outputs)
+	}
+}
+
+func TestBuilder_OutputDesignationTracksPlaceholderBinding(t *testing.T) {
+	a, future := newNoOpExecutor("a"), newNoOpExecutor("future")
+	wf, err := workflow.NewBuilder(newPlaceholder("a")).AddEdge(a, newPlaceholder("future")).
+		WithIntermediateOutputFrom(newPlaceholder("future")).BindExecutor(future).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags, ok := wf.OutputExecutors()["future"]
+	if !ok || !slices.Equal(tags, []workflow.OutputTag{workflow.OutputTagIntermediate}) {
+		t.Fatalf("future tags = %v, %t", tags, ok)
+	}
+}
+
 func TestBuilder_InfersEmptyImplementationID(t *testing.T) {
 	binding := workflow.ExecutorBinding{
 		ID: "start",

@@ -7,6 +7,7 @@ import (
 	"context"
 	"iter"
 	"log/slog"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -115,6 +116,9 @@ func TestSessionConfig_WithApprovalRequiredTool_InstallsAskPreToolUseHook(t *tes
 	if dangerousDecision == nil || dangerousDecision.PermissionDecision != "ask" {
 		t.Fatalf("dangerous permission decision = %#v, want ask", dangerousDecision)
 	}
+	if dangerousDecision.PermissionDecisionReason == "" {
+		t.Fatal("approval permission decision has no reason")
+	}
 
 	plainDecision, err := cfg.Hooks.OnPreToolUse(copilot.PreToolUseHookInput{ToolName: "plain"}, copilot.HookInvocation{})
 	if err != nil {
@@ -205,16 +209,17 @@ func TestSessionConfig_WithExistingPreToolUseHookAndApprovalTools_LogsWarning(t 
 		slog.SetDefault(defaultLogger)
 	})
 
+	expected := &copilot.PreToolUseHookOutput{PermissionDecision: "allow"}
 	source := &copilot.SessionConfig{
 		Hooks: &copilot.SessionHooks{
 			OnPreToolUse: func(copilot.PreToolUseHookInput, copilot.HookInvocation) (*copilot.PreToolUseHookOutput, error) {
-				return nil, nil
+				return expected, nil
 			},
 		},
 	}
 	p := &provider{cfg: AgentConfig{SessionConfig: source}}
 
-	_ = p.sessionConfig(true, nil, []agent.Option{
+	cfg := p.sessionConfig(true, nil, []agent.Option{
 		agent.WithTool(tool.ApprovalRequiredFunc(testFuncTool(t, "dangerous-a"))),
 		agent.WithTool(tool.ApprovalRequiredFunc(testFuncTool(t, "dangerous-b"))),
 	})
@@ -228,6 +233,149 @@ func TestSessionConfig_WithExistingPreToolUseHookAndApprovalTools_LogsWarning(t 
 	}
 	if !strings.Contains(logOutput, "dangerous-a, dangerous-b") {
 		t.Fatalf("expected tool names in warning log, got %q", logOutput)
+	}
+	if strings.Count(strings.TrimSpace(logOutput), "\n") != 0 {
+		t.Fatalf("expected one warning, got %q", logOutput)
+	}
+	decision, err := cfg.Hooks.OnPreToolUse(copilot.PreToolUseHookInput{ToolName: "dangerous-a"}, copilot.HookInvocation{})
+	if err != nil || decision != expected {
+		t.Fatalf("caller hook decision = %#v, %v; want original output", decision, err)
+	}
+}
+
+func TestSessionConfigApprovalToolDoesNotMutateCallerHooks(t *testing.T) {
+	hooks := &copilot.SessionHooks{}
+	source := &copilot.SessionConfig{Hooks: hooks}
+	p := &provider{cfg: AgentConfig{SessionConfig: source}}
+	_ = p.sessionConfig(true, nil, []agent.Option{
+		agent.WithTool(tool.ApprovalRequiredFunc(testFuncTool(t, "ApprovalRequiredOperation"))),
+	})
+	if hooks.OnPreToolUse != nil || source.Hooks != hooks {
+		t.Fatal("caller-owned hooks were mutated")
+	}
+}
+
+func TestSessionConfigPlainToolsDoNotInstallApprovalHook(t *testing.T) {
+	p := &provider{}
+	config := p.sessionConfig(true, nil, []agent.Option{agent.WithTool(testFuncTool(t, "PlainOperation"))})
+	if config.Hooks != nil && config.Hooks.OnPreToolUse != nil {
+		t.Fatal("plain tool installed an approval hook")
+	}
+}
+
+func TestSessionConfigUserHookWithoutApprovalToolsDoesNotWarn(t *testing.T) {
+	var logs bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(previous) })
+	source := &copilot.SessionConfig{Hooks: &copilot.SessionHooks{
+		OnPreToolUse: func(copilot.PreToolUseHookInput, copilot.HookInvocation) (*copilot.PreToolUseHookOutput, error) {
+			return nil, nil
+		},
+	}}
+	p := &provider{cfg: AgentConfig{SessionConfig: source}}
+	_ = p.sessionConfig(true, nil, []agent.Option{agent.WithTool(testFuncTool(t, "PlainOperation"))})
+	if logs.Len() != 0 {
+		t.Fatalf("unexpected warning: %s", logs.String())
+	}
+}
+
+func TestCopyResumeSessionConfigNullSourceReturnsDefaults(t *testing.T) {
+	got := copyResumeSessionConfig(nil)
+	want := copilot.ResumeSessionConfig{Streaming: new(true)}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("default resume config = %#v, want %#v", got, want)
+	}
+}
+
+func TestCopySessionConfigPreservesConfiguredProperties(t *testing.T) {
+	source := configuredCopilotSession()
+	got := copySessionConfig(source)
+	assertCopiedCopilotProperties(t, got, source)
+	if got.Streaming == nil || !*got.Streaming {
+		t.Fatal("unset streaming did not default to true")
+	}
+}
+
+func TestCopyResumeSessionConfigPreservesConfiguredProperties(t *testing.T) {
+	source := configuredCopilotSession()
+	got := copyResumeSessionConfig(source)
+	assertCopiedCopilotProperties(t, got, source)
+	source.MCPServers["identity-probe"] = copilot.MCPStdioServerConfig{Command: "probe"}
+	if _, ok := got.MCPServers["identity-probe"]; !ok {
+		t.Fatal("MCP server map identity was not preserved")
+	}
+	if got.ReasoningSummary != copilot.ReasoningSummaryDetailed || got.ContextTier != copilot.ContextTierLongContext {
+		t.Fatalf("reasoning summary/context tier = %q / %q", got.ReasoningSummary, got.ContextTier)
+	}
+	if got.Streaming == nil || !*got.Streaming {
+		t.Fatal("unset streaming did not default to true")
+	}
+}
+
+func TestCopySessionConfigPreservesDisabledStreaming(t *testing.T) {
+	got := copySessionConfig(&copilot.SessionConfig{Streaming: new(false), Model: "gpt-4o"})
+	if got.Streaming == nil || *got.Streaming {
+		t.Fatal("explicitly disabled streaming was not preserved")
+	}
+}
+
+func TestCopySessionConfigDefaultsUnsetStreaming(t *testing.T) {
+	got := copySessionConfig(&copilot.SessionConfig{Model: "gpt-4o"})
+	if got.Streaming == nil || !*got.Streaming {
+		t.Fatal("unset streaming did not default to true")
+	}
+}
+
+func TestCopyResumeSessionConfigPreservesDisabledStreaming(t *testing.T) {
+	got := copyResumeSessionConfig(&copilot.SessionConfig{Streaming: new(false), Model: "gpt-4o"})
+	if got.Streaming == nil || *got.Streaming {
+		t.Fatal("explicitly disabled streaming was not preserved")
+	}
+}
+
+func TestCopyResumeSessionConfigDefaultsUnsetStreaming(t *testing.T) {
+	got := copyResumeSessionConfig(&copilot.SessionConfig{Model: "gpt-4o"})
+	if got.Streaming == nil || !*got.Streaming {
+		t.Fatal("unset streaming did not default to true")
+	}
+}
+
+func configuredCopilotSession() *copilot.SessionConfig {
+	return &copilot.SessionConfig{
+		Model: "gpt-4o", ReasoningEffort: "high",
+		ReasoningSummary: copilot.ReasoningSummaryDetailed, ContextTier: copilot.ContextTierLongContext,
+		Tools:            []copilot.Tool{{Name: "TestFunc", Description: "Test function"}},
+		SystemMessage:    &copilot.SystemMessageConfig{Mode: "append", Content: "Be helpful"},
+		AvailableTools:   []string{"tool1", "tool2"},
+		ExcludedTools:    []string{"tool3"},
+		WorkingDirectory: "/workspace", ConfigDirectory: "/config",
+		Hooks: &copilot.SessionHooks{}, InfiniteSessions: &copilot.InfiniteSessionConfig{},
+		OnPermissionRequest: copilot.PermissionHandler.ApproveAll,
+		OnUserInputRequest: func(copilot.UserInputRequest, copilot.UserInputInvocation) (copilot.UserInputResponse, error) {
+			return copilot.UserInputResponse{Answer: "input"}, nil
+		},
+		MCPServers:     map[string]copilot.MCPServerConfig{"server1": copilot.MCPStdioServerConfig{}},
+		DisabledSkills: []string{"skill1"},
+	}
+}
+
+func assertCopiedCopilotProperties(t *testing.T, got any, source *copilot.SessionConfig) {
+	t.Helper()
+	actual, original := reflect.ValueOf(got), reflect.ValueOf(source).Elem()
+	for _, name := range []string{
+		"Model", "ReasoningEffort", "Tools", "SystemMessage", "AvailableTools", "ExcludedTools",
+		"WorkingDirectory", "ConfigDirectory", "Hooks", "InfiniteSessions",
+		"OnPermissionRequest", "OnUserInputRequest", "MCPServers", "DisabledSkills",
+	} {
+		a, b := actual.FieldByName(name), original.FieldByName(name)
+		if a.Kind() == reflect.Func || a.Kind() == reflect.Pointer {
+			if a.Pointer() != b.Pointer() {
+				t.Errorf("%s was not preserved", name)
+			}
+		} else if !reflect.DeepEqual(a.Interface(), b.Interface()) {
+			t.Errorf("%s = %#v, want %#v", name, a.Interface(), b.Interface())
+		}
 	}
 }
 

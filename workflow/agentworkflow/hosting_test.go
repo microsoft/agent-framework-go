@@ -4,6 +4,7 @@ package agentworkflow_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -17,6 +18,7 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/agentworkflow"
 	"github.com/microsoft/agent-framework-go/workflow/inproc"
+	internalcheckpoint "github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 )
 
 const (
@@ -74,6 +76,209 @@ func splitWordsKeepSpaces(s string) []string {
 	return words
 }
 
+func TestSpecializedExecutor_MetadataMatchesCreatedInstance(t *testing.T) {
+	host := agentworkflow.New(newContentAgent(), agentworkflow.Config{})
+	port := workflow.RequestPort{ID: "ExternalFunction", Request: reflect.TypeFor[*message.FunctionCallContent](), Response: reflect.TypeFor[*message.FunctionResultContent]()}
+	for _, binding := range []workflow.ExecutorBinding{host, port.Bind()} {
+		wf, err := workflow.NewBuilder(binding).Build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		info := internalcheckpoint.NewWorkflowInfo(wf).Executors[binding.ID]
+		instance, err := binding.CreateInstance("")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.ExecutorID != instance.ID || info.ImplementationID != instance.ImplementationID {
+			t.Fatalf("executor info = %#v, instance ID/type = %q/%q", info, instance.ID, instance.ImplementationID)
+		}
+	}
+}
+
+func TestHostedAgent_InterceptsRequestsIfConfigured(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		intercept bool
+		approval  bool
+	}{{"intercept function calls", true, false}, {"external function calls", false, false}, {"external approvals", false, true}} {
+		t.Run(test.name, func(t *testing.T) {
+			pending := map[string]message.Content{}
+			started := false
+			run := func(_ context.Context, messages []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				return func(yield func(*agent.ResponseUpdate, error) bool) {
+					emit := func(contents ...message.Content) bool {
+						return yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: contents}, nil)
+					}
+					if !started {
+						started = true
+						if !emit(&message.TextContent{Text: "Creating 5 requests, 3 paired."}) {
+							return
+						}
+						var paired []message.Content
+						for i := range 5 {
+							id := fmt.Sprintf("call-%d", i)
+							call := &message.FunctionCallContent{CallID: id, Name: "TestFunction"}
+							var request message.Content = call
+							var response message.Content = &message.FunctionResultContent{CallID: id, Result: call}
+							if test.approval {
+								request = &message.ToolApprovalRequestContent{RequestID: id, ToolCall: call}
+								response = request.(*message.ToolApprovalRequestContent).CreateResponse(true, "")
+							}
+							if i < 2 {
+								pending[id] = request
+							} else {
+								paired = append(paired, response)
+							}
+							if !emit(request) {
+								return
+							}
+						}
+						emit(paired...)
+						return
+					}
+					for _, msg := range messages {
+						for _, content := range msg.Contents {
+							switch response := content.(type) {
+							case *message.FunctionResultContent:
+								request, ok := pending[response.CallID]
+								if !ok || !reflect.DeepEqual(response.Result, request) {
+									yield(nil, fmt.Errorf("unexpected function response %#v", response))
+									return
+								}
+								delete(pending, response.CallID)
+							case *message.ToolApprovalResponseContent:
+								request, ok := pending[response.RequestID].(*message.ToolApprovalRequestContent)
+								if !ok || !response.Approved || !reflect.DeepEqual(response.ToolCall, request.ToolCall) {
+									yield(nil, fmt.Errorf("unexpected approval response %#v", response))
+									return
+								}
+								delete(pending, response.RequestID)
+							}
+						}
+					}
+					text := "Done"
+					if len(pending) > 0 {
+						text = fmt.Sprintf("Remaining: %d", len(pending))
+					}
+					emit(&message.TextContent{Text: text})
+				}
+			}
+			a := agent.New(agent.ProviderConfig{ProviderName: "request-agent", Run: run}, agent.Config{
+				ID: testAgentID, Name: testAgentName,
+				HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"}),
+			})
+			cfg := agentworkflow.Config{EmitResponseEvents: true, InterceptUnterminatedFunctionCalls: test.intercept}
+			executor, err := agentworkflow.New(a, cfg).CreateInstance("")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var sent []message.Content
+			var external []*workflow.ExternalRequest
+			var responses []*agent.Response
+			ctx := &workflow.Context{
+				Context: t.Context(), AddEvent: func(workflow.Event) error { return nil },
+				SendMessage: func(_ string, value any) error {
+					if content, ok := value.(message.Content); ok {
+						sent = append(sent, content)
+					}
+					return nil
+				},
+				PostRequest: func(request *workflow.ExternalRequest) error { external = append(external, request); return nil },
+				YieldOutput: func(output any) error {
+					if response, ok := output.(*agent.Response); ok {
+						responses = append(responses, response)
+					}
+					return nil
+				},
+			}
+			if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+				t.Fatal(err)
+			}
+			var delivered []any
+			if test.intercept {
+				if len(sent) != 2 || len(external) != 0 {
+					t.Fatalf("intercepted/external requests = %d/%d, want 2/0", len(sent), len(external))
+				}
+				for _, content := range sent {
+					call, ok := content.(*message.FunctionCallContent)
+					if !ok || pending[call.CallID] != call {
+						t.Fatalf("unexpected intercepted request %#v", content)
+					}
+					delivered = append(delivered, &message.FunctionResultContent{CallID: call.CallID, Result: call})
+				}
+			} else {
+				if len(external) != 2 || len(sent) != 0 {
+					t.Fatalf("external/intercepted requests = %d/%d, want 2/0", len(external), len(sent))
+				}
+				for _, request := range external {
+					content := request.Data.Any()
+					var response message.Content
+					switch content := content.(type) {
+					case *message.FunctionCallContent:
+						if pending[content.CallID] != content {
+							t.Fatalf("unexpected external call %#v", content)
+						}
+						response = &message.FunctionResultContent{CallID: content.CallID, Result: content}
+					case *message.ToolApprovalRequestContent:
+						if pending[content.RequestID] != content {
+							t.Fatalf("unexpected external approval %#v", content)
+						}
+						response = content.CreateResponse(true, "")
+					default:
+						t.Fatalf("unexpected request data %T", content)
+					}
+					wrapped, err := request.CreateResponse(response)
+					if err != nil {
+						t.Fatal(err)
+					}
+					delivered = append(delivered, wrapped)
+				}
+			}
+			if len(pending) != 2 {
+				t.Fatalf("unpaired requests = %d, want 2", len(pending))
+			}
+			for i, response := range delivered {
+				if _, err := executor.Execute(ctx, response); err != nil {
+					t.Fatal(err)
+				}
+				want := []string{"Remaining: 1", "Done"}[i]
+				if len(responses) == 0 || responses[len(responses)-1].String() != want {
+					t.Fatalf("response after response %d = %v, want %q", i, responses, want)
+				}
+			}
+		})
+	}
+}
+
+func TestHostedAgent_StreamingMessagesAreAggregated(t *testing.T) {
+	executor, err := agentworkflow.New(newReplayAgent(), agentworkflow.Config{}).CreateInstance("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var messages []*message.Message
+	ctx := &workflow.Context{
+		Context: t.Context(), AddEvent: func(workflow.Event) error { return nil },
+		YieldOutput: func(any) error { return nil },
+		SendMessage: func(_ string, value any) error {
+			if batch, ok := value.([]*message.Message); ok {
+				messages = append(messages, batch...)
+			}
+			return nil
+		},
+	}
+	if _, err := executor.Execute(ctx, workflow.TurnToken{EmitEvents: new(true)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != len(testReplayMessages)-1 {
+		t.Fatalf("forwarded messages = %d, want %d", len(messages), len(testReplayMessages)-1)
+	}
+	for i, msg := range messages {
+		if got, want := msg.Contents.Text(), testReplayMessages[i+1]; got != want {
+			t.Errorf("message[%d] = %q, want %q", i, got, want)
+		}
+	}
+}
+
 func TestNewPanicsForNilAgent(t *testing.T) {
 	defer func() {
 		if got := recover(); got != "agentworkflow: agent is required" {
@@ -101,7 +306,7 @@ func newReplayAgent() *agent.Agent {
 		for _, w := range splitWordsKeepSpaces(text) {
 			segments = append(segments, segment{
 				messageID: msgID,
-				content:   &message.TextContent{Text: w},
+				content:   &message.TextContent{ContentHeader: message.ContentHeader{RawRepresentation: w}, Text: w},
 			})
 		}
 	}
@@ -285,59 +490,23 @@ func assertHostedAgentBindingID(t *testing.T, wf *workflow.Workflow, binding wor
 func collectForwardedResponseMessages(t *testing.T, a *agent.Agent, cfg agentworkflow.Config) []*message.Message {
 	t.Helper()
 	var observed []*message.Message
-	sinkID := "sink"
-	sink := workflow.ExecutorBinding{
-		ID:               sinkID,
-		ImplementationID: "*workflow.Executor",
-	}
-	sink.NewExecutorFunc = func(_ string) (*workflow.Executor, error) {
-		return &workflow.Executor{
-			ID: sinkID,
-
-			AutoSendMessageHandlerResultObject: new(false),
-			AutoYieldOutputHandlerResultObject: new(false),
-			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[[]*message.Message](), nil, func(_ *workflow.Context, msg any) (any, error) {
-					observed = append(observed, msg.([]*message.Message)...)
-					return nil, nil
-				})
-				return rb, nil
-			},
-		}, nil
-	}
-
-	hostCfg := cfg
-	hostCfg.ForwardIncomingMessages = new(false)
-	binding := agentworkflow.New(a, hostCfg)
-	wf, err := workflow.NewBuilder(binding).
-		AddEdge(binding, sink).
-		Build()
+	executor, err := agentworkflow.New(a, cfg).CreateInstance("")
 	if err != nil {
-		t.Fatalf("build: %v", err)
+		t.Fatal(err)
 	}
-
-	ctx := t.Context()
-	stream, err := inproc.Lockstep.OpenStreaming(ctx, wf)
-	if err != nil {
-		t.Fatalf("Stream: %v", err)
+	ctx := &workflow.Context{
+		Context: t.Context(), AddEvent: func(workflow.Event) error { return nil },
+		YieldOutput: func(any) error { return nil },
+		PostRequest: func(*workflow.ExternalRequest) error { return nil },
+		SendMessage: func(_ string, value any) error {
+			if messages, ok := value.([]*message.Message); ok {
+				observed = append(observed, messages...)
+			}
+			return nil
+		},
 	}
-	defer func() { _ = stream.CancelRun() }()
-
-	sendStreamMessage(t, stream, ctx, []*message.Message{{
-		Role:     message.RoleUser,
-		Contents: []message.Content{&message.TextContent{Text: "go"}},
-	}})
-	sendStreamMessage(t, stream, ctx, workflow.TurnToken{})
-	for event, err := range stream.WatchUntilHalt(ctx) {
-		if err != nil {
-			t.Fatalf("watch: %v", err)
-		}
-		switch event := event.(type) {
-		case workflow.ErrorEvent:
-			t.Fatalf("unexpected workflow error: %v", event.Error)
-		case workflow.ExecutorFailedEvent:
-			t.Fatalf("unexpected executor failure from %q: %v", event.ExecutorID, event.Error)
-		}
+	if _, err := executor.Execute(ctx, workflow.TurnToken{}); err != nil {
+		t.Fatal(err)
 	}
 	return observed
 }
@@ -407,9 +576,7 @@ func TestHostedAgent_EmitsStreamingUpdatesIfConfigured(t *testing.T) {
 			}
 			token := workflow.TurnToken{EmitEvents: tc.turnSetting}
 
-			events := runHostedAgent(t, newReplayAgent(), cfg, token, []*message.Message{
-				{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}},
-			})
+			events := runHostedAgent(t, newReplayAgent(), cfg, token, nil)
 
 			updates := collectOutputPayloads[*agent.ResponseUpdate](events)
 
@@ -426,8 +593,8 @@ func TestHostedAgent_EmitsStreamingUpdatesIfConfigured(t *testing.T) {
 					t.Fatalf("expected %d updates, got %d", len(expectedContents), len(updates))
 				}
 				for i, u := range updates {
-					if u.ExecutorID == "" {
-						t.Errorf("update[%d] missing ExecutorID", i)
+					if want := agentworkflow.New(newReplayAgent(), cfg).ID; u.ExecutorID != want {
+						t.Errorf("update[%d] ExecutorID = %q, want %q", i, u.ExecutorID, want)
 					}
 					if u.Payload.AgentID != testAgentID {
 						t.Errorf("update[%d] AgentID = %q, want %q", i, u.Payload.AgentID, testAgentID)
@@ -445,6 +612,9 @@ func TestHostedAgent_EmitsStreamingUpdatesIfConfigured(t *testing.T) {
 					gotText := u.Payload.Contents[0].(*message.TextContent).Text
 					if gotText != expectedContents[i].Text {
 						t.Errorf("update[%d] text = %q, want %q", i, gotText, expectedContents[i].Text)
+					}
+					if got := u.Payload.Contents[0].Header().RawRepresentation; got != expectedContents[i].Text {
+						t.Errorf("update[%d] content raw representation = %v, want %q", i, got, expectedContents[i].Text)
 					}
 				}
 			} else if len(updates) != 0 {
@@ -472,7 +642,7 @@ func TestHostedAgent_EmitsResponseIfConfigured(t *testing.T) {
 			events := runHostedAgent(t, newReplayAgent(),
 				agentworkflow.Config{EmitResponseEvents: executorSetting},
 				workflow.TurnToken{},
-				[]*message.Message{{Role: message.RoleUser, Contents: []message.Content{&message.TextContent{Text: "hi"}}}})
+				nil)
 
 			responses := collectOutputPayloads[*agent.Response](events)
 
@@ -481,11 +651,14 @@ func TestHostedAgent_EmitsResponseIfConfigured(t *testing.T) {
 					t.Fatalf("expected 1 response output, got %d", len(responses))
 				}
 				resp := responses[0]
-				if resp.ExecutorID == "" {
-					t.Error("response output missing ExecutorID")
+				if want := agentworkflow.New(newReplayAgent(), agentworkflow.Config{}).ID; resp.ExecutorID != want {
+					t.Errorf("response ExecutorID = %q, want %q", resp.ExecutorID, want)
 				}
 				if resp.Payload == nil {
 					t.Fatal("response output payload is nil")
+				}
+				if resp.Payload.AgentID != testAgentID {
+					t.Errorf("response AgentID = %q, want %q", resp.Payload.AgentID, testAgentID)
 				}
 				// One *Message per non-empty source message: 3 in the
 				// reference data (the first is empty and produces no updates,
@@ -494,9 +667,12 @@ func TestHostedAgent_EmitsResponseIfConfigured(t *testing.T) {
 					t.Errorf("Response.Messages count = %d, want %d",
 						len(resp.Payload.Messages), len(testReplayMessages)-1)
 				}
-				for _, msg := range resp.Payload.Messages {
+				for i, msg := range resp.Payload.Messages {
 					if msg.AuthorName != testAgentName {
 						t.Errorf("message AuthorName = %q, want %q", msg.AuthorName, testAgentName)
+					}
+					if want := testReplayMessages[i+1]; msg.Contents.Text() != want {
+						t.Errorf("message[%d] text = %q, want %q", i, msg.Contents.Text(), want)
 					}
 				}
 			} else if len(responses) != 0 {
@@ -584,14 +760,14 @@ func TestHostedAgent_CancellationSuppressesFinalResponseEmission(t *testing.T) {
 func TestHostedAgent_ReassignsRolesIfConfigured(t *testing.T) {
 	userMsg := &message.Message{
 		Role: message.RoleUser, AuthorName: "User",
-		Contents: []message.Content{&message.TextContent{Text: "hello"}},
+		Contents: []message.Content{&message.TextContent{Text: "Hello from User!"}},
 	}
 	selfMsg := &message.Message{
 		Role: message.RoleAssistant, AuthorName: testAgentName,
 		Contents: []message.Content{&message.TextContent{Text: fmt.Sprintf("Hello from %s!", testAgentName)}},
 	}
 	otherMsg := &message.Message{
-		Role: message.RoleAssistant, AuthorName: "OtherAgent",
+		Role: message.RoleAssistant, AuthorName: "User",
 		Contents: []message.Content{&message.TextContent{Text: "Hello from Assistant!"}},
 	}
 	cases := []struct {
@@ -655,7 +831,7 @@ func TestHostedAgent_ReassignsRolesIfConfigured(t *testing.T) {
 					continue
 				}
 				sawError = true
-				if !tc.wantErrorReport || !strings.Contains(runErr.Error(), "message from other assistant role detected: AuthorName=OtherAgent") {
+				if !tc.wantErrorReport || !strings.Contains(runErr.Error(), "message from other assistant role detected: AuthorName=User") {
 					t.Errorf("unexpected error: %v", runErr)
 				}
 			}
@@ -973,7 +1149,16 @@ func TestHostedAgent_FiltersNonPortableContentFromForwardedResponseMessages(t *t
 			MessageID:         "reasoning-message",
 			RawRepresentation: "provider-reasoning",
 			Contents: message.Contents{
-				&message.TextReasoningContent{Text: "internal reasoning"},
+				&message.TextReasoningContent{Text: "internal thinking"},
+			},
+		},
+		&agent.ResponseUpdate{
+			Role:      message.RoleAssistant,
+			MessageID: "unknown-message",
+			Contents: message.Contents{
+				&message.RawContent{ContentHeader: message.ContentHeader{
+					RawRepresentation: json.RawMessage(`{"type":"mcp_list_tools","description":"mcp_list_tools payload"}`),
+				}},
 			},
 		},
 		&agent.ResponseUpdate{
@@ -992,6 +1177,9 @@ func TestHostedAgent_FiltersNonPortableContentFromForwardedResponseMessages(t *t
 	}
 	if forwarded[0].ID != "text-message" {
 		t.Fatalf("expected text-message to be forwarded, got %q", forwarded[0].ID)
+	}
+	if forwarded[0].Role != message.RoleAssistant {
+		t.Fatalf("forwarded role = %q, want assistant", forwarded[0].Role)
 	}
 	if len(forwarded[0].Contents) != 1 {
 		t.Fatalf("expected 1 forwarded content item, got %d", len(forwarded[0].Contents))
@@ -1072,7 +1260,7 @@ func TestHostedAgent_PreservesForwardableContentInMixedForwardedResponseMessages
 		Contents: message.Contents{
 			&message.TextContent{Text: "Visible text"},
 			&message.TextReasoningContent{Text: "Hidden reasoning"},
-			&message.FunctionCallContent{CallID: "call-1", Name: "my_function", Arguments: `{"arg":"val"}`},
+			&message.FunctionCallContent{CallID: "call_1", Name: "my_function", Arguments: `{"arg":"val"}`},
 		},
 	})
 
@@ -1098,6 +1286,15 @@ func TestHostedAgent_DropsResponseMessagesWithOnlyNonPortableContent(t *testing.
 	agent := newContentAgent(
 		&agent.ResponseUpdate{
 			Role:      message.RoleAssistant,
+			MessageID: "unknown-message",
+			Contents: message.Contents{
+				&message.RawContent{ContentHeader: message.ContentHeader{
+					RawRepresentation: json.RawMessage(`{"type":"web_search_call"}`),
+				}},
+			},
+		},
+		&agent.ResponseUpdate{
+			Role:      message.RoleAssistant,
 			MessageID: "reasoning-message",
 			Contents: message.Contents{
 				&message.TextReasoningContent{Text: "reasoning only"},
@@ -1115,6 +1312,70 @@ func TestHostedAgent_DropsResponseMessagesWithOnlyNonPortableContent(t *testing.
 	forwarded := collectForwardedResponseMessages(t, agent, agentworkflow.Config{})
 	if len(forwarded) != 0 {
 		t.Fatalf("expected no forwarded messages, got %d", len(forwarded))
+	}
+}
+
+func TestHostedAgent_AssignsStableMessageIDToContentfulUpdates(t *testing.T) {
+	for _, missing := range []*string{nil, new(""), new(" ")} {
+		name := "nil"
+		if missing != nil {
+			name = fmt.Sprintf("%q", *missing)
+		}
+		t.Run(name, func(t *testing.T) {
+			messageID := ""
+			if missing != nil {
+				messageID = *missing
+			}
+			updates := []*agent.ResponseUpdate{
+				{MessageID: "", ResponseID: "response-id"},
+				{
+					Role: message.RoleAssistant, MessageID: messageID, ResponseID: "response-id",
+					Contents: message.Contents{&message.TextContent{Text: "hello "}},
+				},
+				{
+					MessageID: messageID, ResponseID: "response-id", RawRepresentation: struct{}{},
+					Contents: message.Contents{&message.TextContent{Text: "world"}},
+				},
+			}
+			events := runHostedAgent(t, newContentAgent(updates...), agentworkflow.Config{
+				EmitUpdateEvents: new(true), EmitResponseEvents: true,
+			}, workflow.TurnToken{}, nil)
+			got := collectOutputPayloads[*agent.ResponseUpdate](events)
+			if len(got) != 3 {
+				t.Fatalf("updates = %d, want 3", len(got))
+			}
+			if got[0].Payload.MessageID != "" {
+				t.Fatalf("contentless update ID = %q, want empty", got[0].Payload.MessageID)
+			}
+			id := got[1].Payload.MessageID
+			if strings.TrimSpace(id) == "" || got[2].Payload.MessageID != id {
+				t.Fatalf("contentful update IDs = %q, %q, want shared nonempty ID", id, got[2].Payload.MessageID)
+			}
+			responses := collectResponseOutputs(t, events)
+			if len(responses) != 1 || len(responses[0].Messages) != 1 {
+				t.Fatalf("responses = %#v, want one response with one message", responses)
+			}
+			msg := responses[0].Messages[0]
+			if msg.ID != id || msg.Contents.Text() != "hello world" {
+				t.Fatalf("response message = %#v, want ID %q and hello world", msg, id)
+			}
+		})
+	}
+}
+
+func TestHostedAgent_RoleReassignmentDoesNotMutateOriginalMessage(t *testing.T) {
+	original := &message.Message{
+		Role: message.RoleAssistant, AuthorName: "firstAgent",
+		Contents: message.Contents{&message.TextContent{Text: "from first agent"}},
+	}
+	var calls [][]*message.Message
+	runHostedAgent(t, newRecordingAgent(&calls), agentworkflow.Config{}, workflow.TurnToken{}, []*message.Message{original})
+	if len(calls) != 1 || len(calls[0]) != 1 {
+		t.Fatalf("received calls = %v, want one message", calls)
+	}
+	copied := calls[0][0]
+	if original.Role != message.RoleAssistant || copied.Role != message.RoleUser || copied == original {
+		t.Fatalf("original/copy = %#v/%#v, want unchanged assistant and separate user copy", original, copied)
 	}
 }
 

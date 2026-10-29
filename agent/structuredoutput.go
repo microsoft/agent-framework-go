@@ -48,7 +48,7 @@ func (m *structuredOutputMiddleware) Run(next RunFunc, ctx context.Context, mess
 			if update == nil {
 				continue
 			}
-			if !sawUpdate || current.isDifferent(update) {
+			if !sawUpdate || update.resetStructuredOutput || current.isDifferent(update) {
 				data = data[:0]
 				current = structuredOutputMessageKey{}
 				sawUpdate = true

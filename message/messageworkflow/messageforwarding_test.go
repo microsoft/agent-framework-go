@@ -3,6 +3,7 @@
 package messageworkflow_test
 
 import (
+	"fmt"
 	"iter"
 	"reflect"
 	"slices"
@@ -173,6 +174,32 @@ func TestConfigureForwarding_ForwardsMessageSliceUnmodified(t *testing.T) {
 	}
 	if &got[0] != &testMessages[0] {
 		t.Fatal("sent message slice does not share backing storage with input")
+	}
+}
+
+func TestConfigureForwarding_ForwardsMessageListUnmodified(t *testing.T) {
+	for _, sendAsInterface := range []bool{false, true} {
+		t.Run(fmt.Sprint(sendAsInterface), func(t *testing.T) {
+			executor := newForwardingExecutorForTest(nil)
+			messages := []*message.Message{
+				{Role: message.Role(customRoleName), Contents: message.Contents{&message.TextContent{Text: testMessageContent}}},
+				{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "ResponseMessage"}}},
+			}
+			var sent []any
+			if sendAsInterface {
+				var collection any = messages
+				sent = runForwardMessageTest(t, executor, collection)
+			} else {
+				sent = runForwardMessageTest(t, executor, messages)
+			}
+			if len(sent) != 1 {
+				t.Fatalf("sent = %v, want one list", sent)
+			}
+			got, ok := sent[0].([]*message.Message)
+			if !ok || !slices.Equal(got, messages) || &got[0] != &messages[0] {
+				t.Fatalf("sent = %#v, want original list and backing storage", sent[0])
+			}
+		})
 	}
 }
 

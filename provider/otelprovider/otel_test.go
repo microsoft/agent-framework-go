@@ -247,6 +247,9 @@ func TestOtel_ModelTracing_Adapters(t *testing.T) {
 					}
 					agentSpan := findSpanByOperation(t, spans, "invoke_agent")
 					modelSpan := findSpanByOperation(t, spans, "chat")
+					if !strings.HasPrefix(agentSpan.Name, "invoke_agent") {
+						t.Fatalf("agent span name = %q, want invoke_agent prefix", agentSpan.Name)
+					}
 					if modelSpan.Name != "chat request-model" || modelSpan.SpanKind != trace.SpanKindClient ||
 						modelSpan.Parent.SpanID() != agentSpan.SpanContext.SpanID() ||
 						modelSpan.SpanContext.TraceID() != agentSpan.SpanContext.TraceID() ||
@@ -308,6 +311,168 @@ func TestOtel_ModelTracing_Adapters(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func newAutoWireChatClient(t *testing.T) openai.Client {
+	t.Helper()
+	client := &http.Client{Transport: modelTestTransport(func(r *http.Request) (*http.Response, error) {
+		var request struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			return nil, err
+		}
+		contentType := "application/json"
+		data := `{"id":"response-1","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`
+		if request.Stream {
+			contentType = "text/event-stream"
+			data = "data: " + `{"id":"response-1","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{contentType}},
+			Body:       &modelTestBody{Reader: strings.NewReader(data)},
+			Request:    r,
+		}, nil
+	})}
+	return openai.NewClient(option.WithAPIKey("test"), option.WithHTTPClient(client), option.WithMaxRetries(0))
+}
+
+func TestOtel_AutoWire_StreamingEmitsChatSpan(t *testing.T) {
+	exporter := setupTracer(t)
+	a := openaiprovider.NewChatCompletionsAgent(newAutoWireChatClient(t), openaiprovider.AgentConfig{
+		Model: "test-model",
+		Config: agent.Config{Middlewares: []agent.Middleware{
+			otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "auto-wire-stream"}),
+		}},
+	})
+	for _, err := range a.RunText(t.Context(), "hi", agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 2 {
+		t.Fatalf("spans = %d, want invoke_agent and chat", len(spans))
+	}
+	if span := findSpanByOperation(t, spans, "invoke_agent"); !strings.HasPrefix(span.Name, "invoke_agent") {
+		t.Fatalf("agent span name = %q", span.Name)
+	}
+	_ = findSpanByOperation(t, spans, "chat")
+}
+
+func TestOtel_AutoWire_DisabledOmitsChatSpan(t *testing.T) {
+	exporter := setupTracer(t)
+	a := openaiprovider.NewChatCompletionsAgent(newAutoWireChatClient(t), openaiprovider.AgentConfig{
+		Model: "test-model",
+		Config: agent.Config{Middlewares: []agent.Middleware{
+			otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "auto-wire-disabled", DisableModelTracing: true}),
+		}},
+	})
+	if _, err := a.RunText(t.Context(), "hi").Collect(); err != nil {
+		t.Fatal(err)
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 1 || !strings.HasPrefix(spans[0].Name, "invoke_agent") {
+		t.Fatalf("disabled auto-wire spans = %v, want only invoke_agent", spans)
+	}
+}
+
+func TestOtel_AutoWire_StreamingDisabledOmitsChatSpan(t *testing.T) {
+	exporter := setupTracer(t)
+	a := openaiprovider.NewChatCompletionsAgent(newAutoWireChatClient(t), openaiprovider.AgentConfig{
+		Model: "test-model",
+		Config: agent.Config{Middlewares: []agent.Middleware{
+			otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "auto-wire-stream-disabled", DisableModelTracing: true}),
+		}},
+	})
+	for _, err := range a.RunText(t.Context(), "hi", agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 1 || !strings.HasPrefix(spans[0].Name, "invoke_agent") {
+		t.Fatalf("disabled streaming spans = %v, want only invoke_agent", spans)
+	}
+}
+
+func TestOtel_AutoWire_NonModelRunPreservesAbsentOptions(t *testing.T) {
+	var observed []agent.Option
+	calls := 0
+	next := func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		observed = options
+		calls++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.NewText("ok").Contents}, nil)
+		}
+	}
+	middleware := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	for _, err := range middleware.Run(next, t.Context(), []*message.Message{message.NewText("hi")}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 || observed != nil {
+		t.Fatalf("non-model run calls = %d, options = %v; want one call and nil options", calls, observed)
+	}
+}
+
+func TestOtel_AutoWire_ExecuteToolSpanHasAgentParentAndModelSpans(t *testing.T) {
+	exporter := setupTracer(t)
+	const sourceName = "auto-wire-tools"
+	var calls atomic.Int32
+	client := &http.Client{Transport: modelTestTransport(func(r *http.Request) (*http.Response, error) {
+		data := `{"id":"response-2","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`
+		if calls.Add(1) == 1 {
+			data = `{"id":"response-1","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       &modelTestBody{Reader: strings.NewReader(data)},
+			Request:    r,
+		}, nil
+	})}
+	getWeather := functool.MustNew(functool.Config{Name: "get_weather"}, func(context.Context, struct{}) (string, error) {
+		return "sunny", nil
+	})
+	a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(
+		option.WithAPIKey("test"), option.WithHTTPClient(client), option.WithMaxRetries(0),
+	), openaiprovider.AgentConfig{
+		Model: "test-model",
+		Config: agent.Config{
+			Tools: []tool.Tool{getWeather},
+			Middlewares: []agent.Middleware{
+				otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: sourceName}),
+			},
+		},
+	})
+	if _, err := a.RunText(t.Context(), "weather?").Collect(); err != nil {
+		t.Fatal(err)
+	}
+	spans := exporter.GetSpans()
+	var agentSpans, toolSpans, chatSpans int
+	for _, span := range spans {
+		if strings.HasPrefix(span.Name, "invoke_agent") {
+			agentSpans++
+		}
+		if strings.HasPrefix(span.Name, "execute_tool") {
+			toolSpans++
+		}
+		if modelSpanAttributes(span)["gen_ai.operation.name"].AsString() == "chat" {
+			chatSpans++
+		}
+	}
+	if agentSpans != 1 || toolSpans != 1 || chatSpans == 0 || calls.Load() != 2 {
+		t.Fatalf("agent/tool/chat spans = %d/%d/%d, model calls = %d", agentSpans, toolSpans, chatSpans, calls.Load())
+	}
+	invokeAgent := findSpanByOperation(t, spans, "invoke_agent")
+	executeTool := findSpanByOperation(t, spans, "execute_tool")
+	if executeTool.InstrumentationScope.Name != sourceName || executeTool.Parent.SpanID() != invokeAgent.SpanContext.SpanID() {
+		t.Fatalf("execute_tool source = %q, parent = %v; want %q and %v",
+			executeTool.InstrumentationScope.Name, executeTool.Parent.SpanID(), sourceName, invokeAgent.SpanContext.SpanID())
 	}
 }
 

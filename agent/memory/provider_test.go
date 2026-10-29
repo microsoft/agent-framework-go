@@ -206,6 +206,36 @@ func TestChatHistoryMemoryProvider_ConfigValidation(t *testing.T) {
 	}
 }
 
+func TestChatHistoryMemoryProvider_ConstructorRequiresVectorStore(t *testing.T) {
+	defer func() {
+		if got := recover(); got != "store is required" {
+			t.Fatalf("constructor panic = %v, want store is required", got)
+		}
+	}()
+	_, _ = memory.NewHistoryProvider(nil, "testcollection", 1, func(*agent.Session) *memory.State {
+		return &memory.State{StorageScope: memory.Scope{UserID: new("UID")}}
+	}, memory.Config{})
+}
+
+func TestChatHistoryMemoryProvider_ConstructorRequiresStateInitializer(t *testing.T) {
+	defer func() {
+		if got := recover(); got != "stateInitializer is required" {
+			t.Fatalf("constructor panic = %v, want stateInitializer is required", got)
+		}
+	}()
+	_, _ = memory.NewHistoryProvider(vectordata.NewStore(&testStore{collection: &testCollection{}}),
+		"testcollection", 1, nil, memory.Config{})
+}
+
+func TestChatHistoryMemoryProvider_StateKeysUsesConfiguredKey(t *testing.T) {
+	provider := newProvider(t, &testCollection{}, func(*agent.Session) *memory.State {
+		return &memory.State{StorageScope: memory.Scope{UserID: new("UID")}}
+	}, memory.Config{StateKey: new("custom-key")})
+	if got := provider.StateKeys(); !slices.Equal(got, []string{"custom-key"}) {
+		t.Fatalf("StateKeys = %v, want [custom-key]", got)
+	}
+}
+
 func TestChatHistoryMemoryProvider_CollectionDefinition(t *testing.T) {
 	store := &testStore{collection: &testCollection{ensure: func(context.Context) error {
 		t.Fatal("collection was created eagerly")
@@ -506,7 +536,10 @@ func TestChatHistoryMemoryProvider_EmptyStorageAndScopes(t *testing.T) {
 }
 
 func TestChatHistoryMemoryProvider_FailedRunSkipsStorage(t *testing.T) {
-	provider := newProvider(t, &testCollection{}, func(*agent.Session) *memory.State {
+	provider := newProvider(t, &testCollection{upsert: func(context.Context, ...record) error {
+		t.Fatal("failed run upserted messages")
+		return nil
+	}}, func(*agent.Session) *memory.State {
 		t.Fatal("failed run initialized state")
 		return nil
 	}, memory.Config{StorageInputRequestMessageFilter: func(context.Context, []*message.Message) ([]*message.Message, error) {
@@ -517,6 +550,81 @@ func TestChatHistoryMemoryProvider_FailedRunSkipsStorage(t *testing.T) {
 		RequestMessages: []*message.Message{message.NewText("request")}, Err: errors.New("run failed"),
 	}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestChatHistoryMemoryProvider_UpsertFailureIsLoggedAndIgnored(t *testing.T) {
+	var logs bytes.Buffer
+	calls := 0
+	provider := newProvider(t, &testCollection{
+		upsert: func(context.Context, ...record) error {
+			calls++
+			return errors.New("Upsert failed")
+		},
+	}, func(*agent.Session) *memory.State {
+		return &memory.State{StorageScope: memory.Scope{UserID: new("UID")}}
+	}, memory.Config{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	request := message.NewText("request text")
+	request.ID = "req-1"
+	err := provider.Invoked(t.Context(), agent.InvokedContext{
+		RequestMessages: []*message.Message{request},
+		Options:         []agent.Option{agent.WithSession(agenttest.CreateSession())},
+	})
+	if err != nil || calls != 1 {
+		t.Fatalf("Invoked = %v, upsert calls = %d", err, calls)
+	}
+	entries := memoryLogEntries(t, &logs)
+	if len(entries) != 1 || entries[0]["level"] != "ERROR" || entries[0]["msg"] != "chat history storage failed" {
+		t.Fatalf("failure logs = %v", entries)
+	}
+}
+
+func TestChatHistoryMemoryProvider_SearchesVectorStoreAndAttributesContext(t *testing.T) {
+	calls := 0
+	provider := newProvider(t, &testCollection{
+		search: func(_ context.Context, query any, top int, _ *vectordata.SearchOptions) iter.Seq2[vectordata.SearchResult[record], error] {
+			calls++
+			if query != "requesting relevant history" || top != 2 {
+				t.Fatalf("search = (%v, %d)", query, top)
+			}
+			return searchResults(
+				record{"MessageId": "msg-1", "Content": "First stored message", "Role": string(message.RoleUser), "CreatedAt": "2023-01-01T00:00:00Z"},
+				record{"MessageId": "msg-2", "Content": "Second stored message", "Role": string(message.RoleUser), "CreatedAt": "2023-01-02T00:00:00Z"},
+			)
+		},
+	}, func(*agent.Session) *memory.State {
+		return &memory.State{StorageScope: memory.Scope{UserID: new("UID")}}
+	}, memory.Config{SearchTime: memory.BeforeInvoke, MaxResults: new(2), ContextPrompt: new("Here is the relevant chat history:\n")})
+	request := message.NewText("requesting relevant history")
+	messages, _, err := invokeProvider(provider, t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()))
+	if err != nil || calls != 1 || len(messages) != 2 {
+		t.Fatalf("Invoking = (%v, %v), search calls = %d", messages, err, calls)
+	}
+	if messages[0] != request || messages[0].Source.Type != message.SourceTypeExternal ||
+		messages[1].Source.Type != agent.SourceTypeContextProvider {
+		t.Fatalf("message sources = %v, %v", messages[0].Source, messages[1].Source)
+	}
+}
+
+func TestChatHistoryMemoryProvider_MessageInvokingMergesAttributedMemory(t *testing.T) {
+	provider := newProvider(t, &testCollection{
+		search: func(context.Context, any, int, *vectordata.SearchOptions) iter.Seq2[vectordata.SearchResult[record], error] {
+			return searchResults(record{
+				"MessageId": "msg-1", "Content": "Previous message",
+				"Role": string(message.RoleUser), "CreatedAt": "2023-01-01T00:00:00Z",
+			})
+		},
+	}, func(*agent.Session) *memory.State {
+		return &memory.State{StorageScope: memory.Scope{UserID: new("UID")}}
+	}, memory.Config{SearchTime: memory.BeforeInvoke})
+	request := message.NewText("What was discussed?")
+	messages, _, err := invokeProvider(provider, t.Context(), []*message.Message{request}, agent.WithSession(agenttest.CreateSession()))
+	if err != nil || len(messages) != 2 {
+		t.Fatalf("Invoking = (%v, %v)", messages, err)
+	}
+	if messages[0].String() != "What was discussed?" || !strings.Contains(messages[1].String(), "Previous message") ||
+		messages[1].Source.Type != agent.SourceTypeContextProvider {
+		t.Fatalf("merged messages = %v", messages)
 	}
 }
 
@@ -684,6 +792,172 @@ func TestChatHistoryMemoryProvider_ScopeFilters(t *testing.T) {
 	}
 }
 
+func TestChatHistoryMemoryProvider_SearchScopeCreatesCombinedFilter(t *testing.T) {
+	scope := memory.Scope{
+		ApplicationID: new("app1"), AgentID: new("agent1"), UserID: new("user1"), SessionID: new("session1"),
+	}
+	want := &vectordata.Filter{Operator: vectordata.And, Operands: []vectordata.Filter{
+		{Operator: vectordata.Equal, Property: "ApplicationId", Value: "app1"},
+		{Operator: vectordata.Equal, Property: "AgentId", Value: "agent1"},
+		{Operator: vectordata.Equal, Property: "UserId", Value: "user1"},
+		{Operator: vectordata.Equal, Property: "SessionId", Value: "session1"},
+	}}
+	calls := 0
+	provider := newProvider(t, &testCollection{
+		search: func(_ context.Context, query any, top int, options *vectordata.SearchOptions) iter.Seq2[vectordata.SearchResult[record], error] {
+			calls++
+			if query != "requesting relevant history" || top != 2 || !reflect.DeepEqual(options.Filter, want) {
+				t.Fatalf("search = (%v, %d, %#v), want filter %#v", query, top, options.Filter, want)
+			}
+			return searchResults()
+		},
+	}, func(*agent.Session) *memory.State {
+		return &memory.State{StorageScope: scope, SearchScope: &scope}
+	}, memory.Config{SearchTime: memory.BeforeInvoke, MaxResults: new(2), ContextPrompt: new("Here is the relevant chat history:\n")})
+	_, _, err := invokeProvider(provider, t.Context(), []*message.Message{message.NewText("requesting relevant history")},
+		agent.WithSession(agenttest.CreateSession()))
+	if err != nil || calls != 1 {
+		t.Fatalf("Invoking = %v, search calls = %d", err, calls)
+	}
+}
+
+func TestChatHistoryMemoryProvider_CombinedScopeFilterCompilesAndMatches(t *testing.T) {
+	scope := memory.Scope{
+		ApplicationID: new("app1"), AgentID: new("agent1"), UserID: new("user1"), SessionID: new("session1"),
+	}
+	var captured *vectordata.Filter
+	provider := newProvider(t, &testCollection{
+		search: func(_ context.Context, _ any, _ int, options *vectordata.SearchOptions) iter.Seq2[vectordata.SearchResult[record], error] {
+			captured = options.Filter
+			return searchResults()
+		},
+	}, func(*agent.Session) *memory.State {
+		return &memory.State{StorageScope: scope, SearchScope: &scope}
+	}, memory.Config{SearchTime: memory.BeforeInvoke, MaxResults: new(2), ContextPrompt: new("Here is the relevant chat history:\n")})
+	if _, _, err := invokeProvider(provider, t.Context(), []*message.Message{message.NewText("requesting relevant history")},
+		agent.WithSession(agenttest.CreateSession())); err != nil {
+		t.Fatal(err)
+	}
+	if captured == nil {
+		t.Fatal("search did not receive a scope filter")
+	}
+	predicate, err := providerservices.CompileFilter(captured, func(name string) (providerservices.FilterProperty, error) {
+		return providerservices.FilterProperty{
+			Type: reflect.TypeFor[string](),
+			Value: func(input any) (any, bool, error) {
+				value, ok := input.(record)[name]
+				return value, ok, nil
+			},
+		}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		session string
+		want    bool
+	}{
+		{session: "session1", want: true},
+		{session: "other-session", want: false},
+	} {
+		got, err := predicate(record{"ApplicationId": "app1", "AgentId": "agent1", "SessionId": tc.session, "UserId": "user1"})
+		if err != nil || got != tc.want {
+			t.Fatalf("session %q matched = (%v, %v), want %v", tc.session, got, err, tc.want)
+		}
+	}
+}
+
+func TestChatHistoryMemoryProvider_DefaultSearchFilterExcludesAttributedMessages(t *testing.T) {
+	var query any
+	provider := newProvider(t, &testCollection{
+		search: func(_ context.Context, input any, _ int, _ *vectordata.SearchOptions) iter.Seq2[vectordata.SearchResult[record], error] {
+			query = input
+			return searchResults()
+		},
+	}, func(*agent.Session) *memory.State {
+		return &memory.State{StorageScope: memory.Scope{UserID: new("UID")}}
+	}, memory.Config{SearchTime: memory.BeforeInvoke})
+	history := message.NewText("From history").WithSource(message.Source{Type: agent.SourceTypeHistoryProvider, ID: "HistorySource"})
+	history.Role = message.RoleSystem
+	contextMessage := message.NewText("From context provider").WithSource(message.Source{Type: agent.SourceTypeContextProvider, ID: "ContextSource"})
+	contextMessage.Role = message.RoleSystem
+	request := []*message.Message{message.NewText("External message"), history, contextMessage}
+	if _, _, err := invokeProvider(provider, t.Context(), request, agent.WithSession(agenttest.CreateSession())); err != nil {
+		t.Fatal(err)
+	}
+	if query != "External message" {
+		t.Fatalf("search query = %v, want External message", query)
+	}
+}
+
+func TestChatHistoryMemoryProvider_CustomSearchFilterIncludesHistory(t *testing.T) {
+	var query any
+	provider := newProvider(t, &testCollection{
+		search: func(_ context.Context, input any, _ int, _ *vectordata.SearchOptions) iter.Seq2[vectordata.SearchResult[record], error] {
+			query = input
+			return searchResults()
+		},
+	}, func(*agent.Session) *memory.State {
+		return &memory.State{StorageScope: memory.Scope{UserID: new("UID")}}
+	}, memory.Config{SearchTime: memory.BeforeInvoke, SearchInputMessageFilter: messagefilter.PassThrough})
+	history := message.NewText("From history").WithSource(message.Source{Type: agent.SourceTypeHistoryProvider, ID: "HistorySource"})
+	history.Role = message.RoleSystem
+	if _, _, err := invokeProvider(provider, t.Context(), []*message.Message{message.NewText("External message"), history},
+		agent.WithSession(agenttest.CreateSession())); err != nil {
+		t.Fatal(err)
+	}
+	if query != "External message\nFrom history" {
+		t.Fatalf("search query = %v, want external and history messages", query)
+	}
+}
+
+func TestChatHistoryMemoryProvider_MessageInvokingDefaultFilterExcludesHistory(t *testing.T) {
+	var query any
+	provider := newProvider(t, &testCollection{
+		search: func(_ context.Context, input any, _ int, _ *vectordata.SearchOptions) iter.Seq2[vectordata.SearchResult[record], error] {
+			query = input
+			return searchResults()
+		},
+	}, func(*agent.Session) *memory.State {
+		return &memory.State{StorageScope: memory.Scope{UserID: new("UID")}}
+	}, memory.Config{SearchTime: memory.BeforeInvoke})
+	history := message.NewText("From history").WithSource(message.Source{Type: agent.SourceTypeHistoryProvider, ID: "src"})
+	history.Role = message.RoleSystem
+	if _, _, err := invokeProvider(provider, t.Context(), []*message.Message{message.NewText("External message"), history},
+		agent.WithSession(agenttest.CreateSession())); err != nil {
+		t.Fatal(err)
+	}
+	if query != "External message" {
+		t.Fatalf("search query = %v, want External message", query)
+	}
+}
+
+func TestChatHistoryMemoryProvider_CustomStorageRequestFilterIncludesHistoryAndResponse(t *testing.T) {
+	var stored []record
+	provider := newProvider(t, &testCollection{
+		upsert: func(_ context.Context, records ...record) error {
+			stored = append(stored, records...)
+			return nil
+		},
+	}, func(*agent.Session) *memory.State {
+		return &memory.State{StorageScope: memory.Scope{UserID: new("UID")}}
+	}, memory.Config{StorageInputRequestMessageFilter: messagefilter.PassThrough})
+	history := message.NewText("From history").WithSource(message.Source{Type: agent.SourceTypeHistoryProvider, ID: "HistorySource"})
+	history.Role = message.RoleSystem
+	response := message.NewText("Response")
+	response.Role = message.RoleAssistant
+	storeMessages(t, provider, agenttest.CreateSession(),
+		[]*message.Message{message.NewText("External message"), history}, []*message.Message{response})
+	if len(stored) != 3 {
+		t.Fatalf("stored records = %v, want three messages", stored)
+	}
+	for i, want := range []string{"External message", "From history", "Response"} {
+		if stored[i]["Content"] != want {
+			t.Fatalf("stored message %d = %v, want %q", i, stored[i]["Content"], want)
+		}
+	}
+}
+
 func TestChatHistoryMemoryProvider_MessageFilters(t *testing.T) {
 	for _, custom := range []bool{false, true} {
 		t.Run(fmt.Sprintf("custom=%t", custom), func(t *testing.T) {
@@ -708,6 +982,8 @@ func TestChatHistoryMemoryProvider_MessageFilters(t *testing.T) {
 				message.NewText("context").WithSource(message.Source{Type: agent.SourceTypeContextProvider, ID: "context"}),
 			}
 			response := []*message.Message{message.NewText("reply")}
+			request[1].Role, request[2].Role = message.RoleSystem, message.RoleSystem
+			response[0].Role = message.RoleAssistant
 			original := slices.Clone(request)
 			if _, _, err := invokeProvider(provider, t.Context(), request); err != nil {
 				t.Fatal(err)
@@ -1500,6 +1776,141 @@ func TestChatHistoryMemoryProvider_LoggingRedaction(t *testing.T) {
 					}
 					if sensitive && redactions != 0 || !sensitive && custom && wantCount > 0 && redactions == 0 {
 						t.Fatalf("redactor calls = %d", redactions)
+					}
+				})
+			}
+		}
+	}
+}
+
+func memoryLogEntries(t *testing.T, logs *bytes.Buffer) []map[string]any {
+	t.Helper()
+	if logs.Len() == 0 {
+		return nil
+	}
+	var entries []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var entry map[string]any
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatal(err)
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func TestChatHistoryMemoryProvider_InvokedLogRedactionOptions(t *testing.T) {
+	for _, sensitive := range []bool{false, true} {
+		for _, requestFails := range []bool{false, true} {
+			for _, customRedactor := range []bool{false, true} {
+				t.Run(fmt.Sprintf("sensitive=%t/failure=%t/custom=%t", sensitive, requestFails, customRedactor), func(t *testing.T) {
+					var logs bytes.Buffer
+					config := memory.Config{
+						LogSensitiveData: sensitive,
+						Logger:           slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+					}
+					if customRedactor {
+						config.Redactor = func(string) string { return "***" }
+					}
+					calls := 0
+					provider := newProvider(t, &testCollection{
+						upsert: func(context.Context, ...record) error {
+							calls++
+							if requestFails {
+								return errors.New("Upsert failed")
+							}
+							return nil
+						},
+					}, func(*agent.Session) *memory.State {
+						return &memory.State{StorageScope: memory.Scope{UserID: new("user1")}}
+					}, config)
+					storeMessages(t, provider, agenttest.CreateSession(), []*message.Message{message.NewText("request text")}, nil)
+					if calls != 1 {
+						t.Fatalf("upsert calls = %d, want 1", calls)
+					}
+					entries := memoryLogEntries(t, &logs)
+					wantCount := 0
+					if requestFails {
+						wantCount = 1
+					}
+					if len(entries) != wantCount {
+						t.Fatalf("log entries = %v, want %d", entries, wantCount)
+					}
+					wantUser := "<redacted>"
+					if customRedactor {
+						wantUser = "***"
+					}
+					if sensitive {
+						wantUser = "user1"
+					}
+					for _, entry := range entries {
+						if entry["level"] != "ERROR" || entry["user_id"] != wantUser {
+							t.Fatalf("storage log = %v, want user %q", entry, wantUser)
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestChatHistoryMemoryProvider_InvokingLogRedactionOptions(t *testing.T) {
+	for _, sensitive := range []bool{false, true} {
+		for _, requestFails := range []bool{false, true} {
+			for _, customRedactor := range []bool{false, true} {
+				t.Run(fmt.Sprintf("sensitive=%t/failure=%t/custom=%t", sensitive, requestFails, customRedactor), func(t *testing.T) {
+					var logs bytes.Buffer
+					config := memory.Config{
+						SearchTime:       memory.BeforeInvoke,
+						LogSensitiveData: sensitive,
+						Logger:           slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+					}
+					if customRedactor {
+						config.Redactor = func(string) string { return "***" }
+					}
+					scope := memory.Scope{UserID: new("user1")}
+					calls := 0
+					provider := newProvider(t, &testCollection{
+						search: func(context.Context, any, int, *vectordata.SearchOptions) iter.Seq2[vectordata.SearchResult[record], error] {
+							calls++
+							if requestFails {
+								return func(yield func(vectordata.SearchResult[record], error) bool) {
+									yield(vectordata.SearchResult[record]{}, errors.New("Search failed"))
+								}
+							}
+							return searchResults()
+						},
+					}, func(*agent.Session) *memory.State {
+						return &memory.State{StorageScope: scope, SearchScope: &scope}
+					}, config)
+					if _, _, err := invokeProvider(provider, t.Context(), []*message.Message{message.NewText("requesting relevant history")},
+						agent.WithSession(agenttest.CreateSession())); err != nil {
+						t.Fatal(err)
+					}
+					if calls != 1 {
+						t.Fatalf("search calls = %d, want 1", calls)
+					}
+					entries := memoryLogEntries(t, &logs)
+					if len(entries) != 1 {
+						t.Fatalf("log entries = %v, want one completion or error", entries)
+					}
+					wantUser, wantLevel := "<redacted>", "INFO"
+					if customRedactor {
+						wantUser = "***"
+					}
+					if sensitive {
+						wantUser = "user1"
+					}
+					if requestFails {
+						wantLevel = "ERROR"
+					}
+					if entries[0]["level"] != wantLevel || entries[0]["user_id"] != wantUser {
+						t.Fatalf("search log = %v, want %s and user %q", entries[0], wantLevel, wantUser)
+					}
+					for _, key := range []string{"query", "context"} {
+						if _, ok := entries[0][key]; ok {
+							t.Fatalf("empty or failed search unexpectedly logged %s: %v", key, entries[0])
+						}
 					}
 				})
 			}

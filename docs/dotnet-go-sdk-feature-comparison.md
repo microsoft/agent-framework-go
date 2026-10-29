@@ -95,7 +95,7 @@ The `go-only` view returns the original baseline and a paged `go_only` object. I
 
 ## Extract the .NET Declaration Inventory
 
-The [mapping catalog](../_catalog/dotnet-go-sdk-symbol-mapping.json) contains public declarations from the three core MAF 1.22.0 packages at `net8.0` and 6,750 test method declarations from 45 upstream test assemblies. API package metadata retain version provenance under `dotnet`; test assemblies record source commits, target frameworks, and hashes under `dotnet.tests`. Public APIs from every provider integration or external dependency are not included; existing out-of-scope assessments are retained without extracted declaration metadata.
+The [mapping catalog](../_catalog/dotnet-go-sdk-symbol-mapping.json) contains public declarations from the three core MAF 1.22.0 packages and the explicitly selected `Microsoft.Agents.AI.CosmosNoSql` `1.22.0-preview.260918.1` package at `net8.0`, plus 6,750 test method declarations from 45 upstream test assemblies. API package metadata retain version provenance under `dotnet`; test assemblies record source commits, target frameworks, and hashes under `dotnet.tests`. Public APIs from every provider integration or external dependency are not included; existing out-of-scope assessments are retained without extracted declaration metadata.
 
 The [embedding package](../embedding/) ports the core embedding abstraction family from
 [Microsoft.Extensions.AI.Abstractions](https://github.com/dotnet/extensions/tree/b10f9c0a081b5dbb7755b8f5592e1d3c3f550a3a/src/Libraries/Microsoft.Extensions.AI.Abstractions/Embeddings),
@@ -173,9 +173,11 @@ and OpenAI .NET 2.14.0. Explicit zero dimensions and read-only shared options re
 intentional Go adaptations.
 
 [`foundryprovider.NewEmbeddingGenerator`](../provider/foundryprovider/embedding.go)
-accepts a Foundry project endpoint, Azure token credential, and embedding
-configuration. It derives the resource origin from that project URL, shares the
-Foundry provider's authenticated client setup, uses the resource
+accepts a Foundry project or resource endpoint and embedding configuration.
+Authentication follows [`foundryprovider.NewAgent`](../provider/foundryprovider/agent.go):
+use an Azure token credential, or a nil credential with `azure.WithAPIKey` in
+`OpenAIOptions` for API-key authentication. It derives the resource origin from
+the endpoint, shares the Foundry provider's authenticated client setup, uses the resource
 `/openai/v1/embeddings` route without an `api-version` query, and delegates
 generation to the OpenAI adapter. Per-request model and dimension
 options retain the OpenAI adapter's precedence and response conversion behavior.

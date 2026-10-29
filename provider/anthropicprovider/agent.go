@@ -53,6 +53,7 @@ type AgentConfig struct {
 	ToolAutoCall *toolautocall.Config
 
 	// Instructions are provided to Anthropic as system instructions for each run.
+	// Empty or whitespace-only instructions are ignored.
 	Instructions string
 
 	Model string
@@ -644,7 +645,12 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 	}
 	params.Model = cmp.Or(params.Model, a.config.Model)
 	params.MaxTokens = cmp.Or(params.MaxTokens, 4096)
-	instructions := slices.Collect(agent.AllOptions(opts, agent.WithInstructions))
+	var instructions []string
+	for instruction := range agent.AllOptions(opts, agent.WithInstructions) {
+		if instruction != "" {
+			instructions = append(instructions, instruction)
+		}
+	}
 	if len(instructions) > 0 {
 		params.System = append(params.System, anthropic.TextBlockParam{Text: strings.Join(instructions, "\n")})
 	}

@@ -228,6 +228,9 @@ func TestE2E_RunTextExecutesShellCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if response == nil || len(response.Messages) == 0 {
+		t.Fatal("response contains no messages")
+	}
 	if !strings.Contains(strings.ToLower(response.String()), "hello") {
 		t.Fatalf("response = %q, want it to contain hello", response.String())
 	}
@@ -276,6 +279,9 @@ func TestE2E_RunTextUsesLocalMCPServer(t *testing.T) {
 	).Collect()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if response == nil || len(response.Messages) == 0 {
+		t.Fatal("response contains no messages")
 	}
 	if strings.TrimSpace(response.String()) == "" {
 		t.Fatal("response is empty")

@@ -3,12 +3,67 @@
 package execution
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
 
+	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 )
+
+type jsonPortSerializable struct {
+	ID   int
+	Name string
+}
+
+func TestPortableMessageEnvelopeJSON_BuiltInType(t *testing.T) {
+	assertPortableEnvelopeJSON(t, "TestMessage")
+}
+
+func TestPortableMessageEnvelopeJSON_InternalType(t *testing.T) {
+	assertPortableEnvelopeJSON(t, message.NewText("Hello, world!"))
+}
+
+func TestPortableMessageEnvelopeJSON_CustomType(t *testing.T) {
+	assertPortableEnvelopeJSON(t, jsonPortSerializable{ID: 42, Name: "Test"})
+}
+
+func assertPortableEnvelopeJSON(t *testing.T, input any) {
+	t.Helper()
+	envelope, err := NewMessageEnvelope(input, reflect.TypeFor[any](), "Source1", "Target1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	portable := envelope.Portable()
+	data, err := json.Marshal(portable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result checkpoint.PortableMessageEnvelope
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.MessageType != portable.MessageType || result.TargetID != portable.TargetID || result.Message.TypeID != portable.Message.TypeID {
+		t.Fatalf("envelope metadata = %#v, want %#v", result, portable)
+	}
+	actual, ok := result.Message.As(reflect.TypeOf(input))
+	if !ok || !reflect.DeepEqual(actual, input) {
+		t.Fatalf("portable message = %#v, %t, want %#v", actual, ok, input)
+	}
+	reconstructed := NewMessageEnvelopeFromPortable(&result)
+	if reconstructed.MessageType() != envelope.MessageType() || reconstructed.TargetID != envelope.TargetID {
+		t.Fatalf("reconstructed envelope = %#v, want original declared type and target", reconstructed)
+	}
+	restored, ok := reconstructed.Message.(workflow.PortableValue)
+	if !ok {
+		t.Fatalf("reconstructed payload = %T, want PortableValue", reconstructed.Message)
+	}
+	actual, ok = restored.As(reflect.TypeOf(input))
+	if !ok || !reflect.DeepEqual(actual, input) {
+		t.Fatalf("reconstructed message = %#v, %t, want %#v", actual, ok, input)
+	}
+}
 
 func TestMessageEnvelopeCheckpointPreservesDifferingDeclaredType(t *testing.T) {
 	portable := &checkpoint.PortableMessageEnvelope{

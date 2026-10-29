@@ -61,9 +61,10 @@ does not replace caller clients, transports, redirect callbacks, or SDK retry
 behavior. Bespoke HTTP clients remain responsible for the SDK's documented
 same-origin contract.
 
-The feature mask is not added to OpenTelemetry. Foundry memory operations mark
-their capability but do not add a feature comment to the Projects client's
-requests; the accumulated bit can be emitted by a later eligible adapter request.
+The feature mask is not added to OpenTelemetry. Foundry memory and Cosmos
+chat-history operations mark their capabilities but do not add a feature comment
+to their native clients' requests; the accumulated bits can be emitted by a later
+eligible adapter request.
 Provider hooks mark memory participation even when there are no messages to
 search or store. Foundry streaming does not mark features until enumeration
 starts, and server-agent execution marks both the agent and chat-client bits
@@ -111,6 +112,7 @@ These switches do not configure OpenTelemetry or change service telemetry.
 | 54 | `openai` | OpenAI adapter invocation, including continuation and non-empty embedding requests |
 | 55 | `anthropic` | Anthropic adapter invocation |
 | 57 | `github_copilot` | GitHub Copilot adapter invocation |
+| 58 | `azure_cosmos` | Cosmos chat-history retrieval, persistence, count, or deletion |
 | 62 | `a2a` | A2A client adapter invocation |
 | 63 | `hosting.ag_ui` | AG-UI HTTP request handling |
 | 69 | `tools.shell` | Shell invocation, persistent initialization, or environment-provider operation |

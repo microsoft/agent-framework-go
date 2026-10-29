@@ -27,6 +27,148 @@ func expectedMessages(t *testing.T, expected ...*message.Message) func(context.C
 	}
 }
 
+func bypassPortRun(t *testing.T, stream bool, replies []*agent.ResponseUpdate, opts ...agent.Option) ([]*agent.ResponseUpdate, *agent.Response) {
+	t.Helper()
+	next := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			for _, update := range replies {
+				if !yield(update, nil) {
+					return
+				}
+			}
+		}
+	}
+	opts = append(opts, agent.Stream(stream))
+	var updates []*agent.ResponseUpdate
+	var response agent.Response
+	for update, err := range toolautocall.New(toolautocall.Config{}).Run(next, t.Context(), []*message.Message{message.NewText("Hello")}, opts...) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		updates = append(updates, update)
+		response.Update(update)
+	}
+	return updates, &response
+}
+
+func TestApprovalBypassing_GetResponseAsync_NoApprovalContent_PassesThroughUnchanged(t *testing.T) {
+	session := &agent.Session{}
+	_, response := bypassPortRun(t, false, []*agent.ResponseUpdate{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "Hello"}}}}, agent.WithSession(session))
+	if len(response.Messages) != 1 || response.Messages[0].String() != "Hello" || session.Count() != 0 {
+		t.Fatalf("response=%v, state count=%d", response, session.Count())
+	}
+}
+
+func TestApprovalBypassing_GetResponseAsync_PreExistingEmptyMessage_IsPreserved(t *testing.T) {
+	session := &agent.Session{}
+	_, response := bypassPortRun(t, false, []*agent.ResponseUpdate{
+		{Role: message.RoleAssistant, MessageID: "empty", Contents: message.Contents{}},
+		{Role: message.RoleAssistant, MessageID: "text", Contents: message.Contents{&message.TextContent{Text: "Hello"}}},
+	}, agent.WithSession(session))
+	if len(response.Messages) != 2 || len(response.Messages[0].Contents) != 0 || response.Messages[1].String() != "Hello" {
+		t.Fatalf("pre-existing empty message was not preserved: %v", response.Messages)
+	}
+}
+
+func TestApprovalBypassing_GetResponseAsync_PassesUsageThroughUnchanged(t *testing.T) {
+	session := &agent.Session{}
+	_, response := bypassPortRun(t, false, []*agent.ResponseUpdate{{Role: message.RoleAssistant, Contents: message.Contents{
+		&message.TextContent{Text: "Hello"},
+		&message.UsageContent{Details: message.UsageDetails{InputTokenCount: 11, OutputTokenCount: 7, TotalTokenCount: 18}},
+	}}}, agent.WithSession(session))
+	if got := response.Usage(); got.InputTokenCount != 11 || got.OutputTokenCount != 7 || got.TotalTokenCount != 18 {
+		t.Fatalf("usage=%+v", got)
+	}
+}
+
+func TestApprovalBypassing_GetResponseAsync_NoRunContext_PassesThroughWithoutBypassing(t *testing.T) {
+	request := &message.ToolApprovalRequestContent{RequestID: "req1", ToolCall: &message.FunctionCallContent{CallID: "call1", Name: "normalTool"}}
+	_, response := bypassPortRun(t, false, []*agent.ResponseUpdate{{Role: message.RoleAssistant, Contents: message.Contents{request}}})
+	if len(response.Messages) != 1 || len(response.Messages[0].Contents) != 1 {
+		t.Fatalf("response=%v", response.Messages)
+	}
+	if _, ok := response.Messages[0].Contents[0].(*message.ToolApprovalRequestContent); !ok {
+		t.Fatalf("approval content=%T", response.Messages[0].Contents[0])
+	}
+}
+
+func TestApprovalBypassing_GetResponseAsync_NoSession_PassesThroughWithoutBypassing(t *testing.T) {
+	request := &message.ToolApprovalRequestContent{RequestID: "req1", ToolCall: &message.FunctionCallContent{CallID: "call1", Name: "normalTool"}}
+	_, response := bypassPortRun(t, false, []*agent.ResponseUpdate{{Role: message.RoleAssistant, Contents: message.Contents{request}}}, agent.WithSession(nil))
+	if len(response.Messages) != 1 || len(response.Messages[0].Contents) != 1 {
+		t.Fatalf("response=%v", response.Messages)
+	}
+	if _, ok := response.Messages[0].Contents[0].(*message.ToolApprovalRequestContent); !ok {
+		t.Fatalf("approval content=%T", response.Messages[0].Contents[0])
+	}
+}
+
+func TestApprovalBypassing_GetStreamingResponseAsync_NoApprovalContent_PassesThroughUnchanged(t *testing.T) {
+	session := &agent.Session{}
+	updates, _ := bypassPortRun(t, true, []*agent.ResponseUpdate{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "Hello"}}}}, agent.WithSession(session))
+	if len(updates) != 1 || updates[0].Contents.Text() != "Hello" || session.Count() != 0 {
+		t.Fatalf("updates=%v, state count=%d", updates, session.Count())
+	}
+}
+
+func TestApprovalBypassing_GetStreamingResponseAsync_NoRunContext_PassesThroughWithoutBypassing(t *testing.T) {
+	request := &message.ToolApprovalRequestContent{RequestID: "req1", ToolCall: &message.FunctionCallContent{CallID: "call1", Name: "normalTool"}}
+	_, response := bypassPortRun(t, true, []*agent.ResponseUpdate{{Role: message.RoleAssistant, Contents: message.Contents{request}}})
+	found := false
+	for content := range response.Contents() {
+		if _, ok := content.(*message.ToolApprovalRequestContent); ok {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("sessionless stream bypassed an approval request")
+	}
+}
+
+func TestFunctionInvoking_SettledApprovalHistoryWithoutResponse(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, resultCallID := range []string{"approve_call_1", "different_call"} {
+			t.Run(fmt.Sprintf("stream=%v/result=%s", stream, resultCallID), func(t *testing.T) {
+				request := &message.ToolApprovalRequestContent{
+					RequestID: "ficc_approve_call_1",
+					ToolCall:  &message.FunctionCallContent{CallID: "approve_call_1", Name: "DoSomethingPrivileged"},
+				}
+				input := []*message.Message{
+					message.NewText("hello"),
+					{Role: message.RoleAssistant, Contents: message.Contents{request}},
+					{Role: message.RoleAssistant, Contents: message.Contents{&message.FunctionCallContent{
+						CallID: "approve_call_1", Name: "DoSomethingPrivileged", InformationalOnly: true,
+					}}},
+					{Role: message.RoleTool, Contents: message.Contents{&message.FunctionResultContent{
+						CallID: resultCallID, Result: "Tool call invocation rejected. Denied",
+					}}},
+					{Role: message.RoleUser, AuthorName: "agent1", Contents: message.Contents{&message.TextContent{Text: "agent1 final response"}}},
+				}
+				calls := 0
+				next := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return func(yield func(*agent.ResponseUpdate, error) bool) {
+						calls++
+						yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "agent2 response"}}}, nil)
+					}
+				}
+				response, err := agent.ResponseStream(toolautocall.New(toolautocall.Config{}).Run(
+					next, t.Context(), input, agent.WithSession(&agent.Session{}), agent.Stream(stream),
+				)).Collect()
+				if resultCallID == "different_call" {
+					if err == nil || calls != 0 {
+						t.Fatalf("unsettled request: response=%v, err=%v, provider calls=%d", response, err, calls)
+					}
+				} else if err != nil || calls != 1 || response.String() != "agent2 response" {
+					t.Fatalf("settled history: response=%v, err=%v, provider calls=%d", response, err, calls)
+				}
+				if len(input) != 5 || len(input[1].Contents) != 1 || input[1].Contents[0] != request || request.ToolCall.(*message.FunctionCallContent).InformationalOnly {
+					t.Fatal("processing mutated caller-owned approval history")
+				}
+			})
+		}
+	}
+}
+
 func TestFunctionInvoking_InvocationIdentityAfterApproval(t *testing.T) {
 	for _, tc := range []struct {
 		name         string

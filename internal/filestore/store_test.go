@@ -49,6 +49,272 @@ func storeOperations(store filestore.Store, name string) map[string]func(context
 	}
 }
 
+func TestFileStore_Constructor_EmptyRootDirectory_Throws(t *testing.T) {
+	if _, err := filestore.NewFileSystemStore(""); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("empty root error=%v", err)
+	}
+}
+
+func TestFileStore_Constructor_WhitespaceRootDirectory_Throws(t *testing.T) {
+	if _, err := filestore.NewFileSystemStore("   "); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("whitespace root error=%v", err)
+	}
+}
+
+func TestFileStore_WriteFileAsync_DotDotSegment_Throws(t *testing.T) {
+	store, _ := newStore(t)
+	if err := store.Write(t.Context(), "../escape.txt", "content"); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("traversal error=%v", err)
+	}
+}
+
+func TestFileStore_ReadFileAsync_AbsolutePath_Throws(t *testing.T) {
+	store, _ := newStore(t)
+	if _, err := store.Read(t.Context(), "/etc/passwd"); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("absolute path error=%v", err)
+	}
+}
+
+func TestFileStore_WriteFileAsync_DoubleDotsInFileName_Allowed(t *testing.T) {
+	store, _ := newStore(t)
+	if err := store.Write(t.Context(), "notes..md", "content"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Read(t.Context(), "notes..md"); err != nil || got != "content" {
+		t.Fatalf("read=%q, %v", got, err)
+	}
+}
+
+func TestFileStore_WriteFileAsync_TrailingSlash_Normalizes(t *testing.T) {
+	store, _ := newStore(t)
+	if err := store.Write(t.Context(), "subdir/", "content"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Read(t.Context(), "subdir"); err != nil || got != "content" {
+		t.Fatalf("read=%q, %v", got, err)
+	}
+}
+
+func TestFileStore_WriteAndReadAsync_RoundTrips(t *testing.T) {
+	store, _ := newStore(t)
+	if err := store.Write(t.Context(), "test.txt", "hello world"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.Read(t.Context(), "test.txt"); err != nil || got != "hello world" {
+		t.Fatalf("read=%q, %v", got, err)
+	}
+}
+
+func TestFileStore_WriteFileAsync_OverwritesExisting(t *testing.T) {
+	store, _ := newStore(t)
+	for _, content := range []string{"first", "second"} {
+		if err := store.Write(t.Context(), "test.txt", content); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := store.Read(t.Context(), "test.txt"); err != nil || got != "second" {
+		t.Fatalf("read=%q, %v", got, err)
+	}
+}
+
+func TestFileStore_ReadFileAsync_NonExistent_ReturnsNull(t *testing.T) {
+	store, _ := newStore(t)
+	if _, err := store.Read(t.Context(), "missing.txt"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing read error=%v", err)
+	}
+}
+
+func TestFileStore_DeleteFileAsync_ExistingFile_ReturnsTrue(t *testing.T) {
+	store, _ := newStore(t)
+	if err := store.Write(t.Context(), "delete-me.txt", "content"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(t.Context(), "delete-me.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Read(t.Context(), "delete-me.txt"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("deleted read error=%v", err)
+	}
+}
+
+func TestFileStore_DeleteFileAsync_NonExistent_ReturnsFalse(t *testing.T) {
+	store, _ := newStore(t)
+	if err := store.Delete(t.Context(), "nope.txt"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing delete error=%v", err)
+	}
+}
+
+func TestFileStore_ListFilesAsync_ReturnsDirectChildrenOnly(t *testing.T) {
+	store, _ := newStore(t)
+	for _, name := range []string{"root.txt", "sub/nested.txt"} {
+		if err := store.Write(t.Context(), name, "content"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got, err := store.ListChildren(t.Context(), ""); err != nil || !slices.Equal(got, []string{"root.txt"}) {
+		t.Fatalf("listing=%q, %v", got, err)
+	}
+}
+
+func TestFileStore_ListFilesAsync_SubDirectory_ReturnsChildren(t *testing.T) {
+	store, _ := newStore(t)
+	for _, name := range []string{"sub/a.txt", "sub/b.txt", "other.txt"} {
+		if err := store.Write(t.Context(), name, "content"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.ListChildren(t.Context(), "sub")
+	if err != nil || len(got) != 2 || !slices.Contains(got, "a.txt") || !slices.Contains(got, "b.txt") {
+		t.Fatalf("listing=%q, %v", got, err)
+	}
+}
+
+func TestFileStore_ListFilesAsync_NonExistentDirectory_ReturnsEmpty(t *testing.T) {
+	store, _ := newStore(t)
+	if got, err := store.ListChildren(t.Context(), "no-such-dir"); err != nil || len(got) != 0 {
+		t.Fatalf("listing=%q, %v", got, err)
+	}
+}
+
+func TestFileStore_CreateDirectoryAsync_CreatesOnDisk(t *testing.T) {
+	store, root := newStore(t)
+	if err := store.CreateDirectory(t.Context(), "new-dir"); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(filepath.Join(root, "new-dir")); err != nil || !info.IsDir() {
+		t.Fatalf("directory=%v, %v", info, err)
+	}
+}
+
+func TestFileStore_ListDirectoriesAsync_DotDotSegment_Throws(t *testing.T) {
+	store, _ := newStore(t)
+	if _, err := store.ListChildren(t.Context(), "../other"); !errors.Is(err, fs.ErrInvalid) {
+		t.Fatalf("directory traversal error=%v", err)
+	}
+}
+
+func fileStoreLink(t *testing.T, name, content string, directory, dangling bool) (*filestore.FileSystemStore, string, string) {
+	t.Helper()
+	store, root := newStore(t)
+	outside := t.TempDir()
+	target := filepath.Join(outside, "outside.txt")
+	if directory {
+		target = outside
+	} else if !dangling {
+		if err := os.WriteFile(target, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symbolic links unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	return store, root, target
+}
+
+func TestFileStore_ReadFileAsync_SymlinkedFile_Throws(t *testing.T) {
+	store, _, _ := fileStoreLink(t, "leak.txt", "SECRET_OUTSIDE_ROOT", false, false)
+	if _, err := store.Read(t.Context(), "leak.txt"); err == nil {
+		t.Fatal("reading an escaping file symlink succeeded")
+	}
+}
+
+func TestFileStore_WriteFileAsync_SymlinkedFile_Throws(t *testing.T) {
+	store, _, target := fileStoreLink(t, "overwrite.txt", "ORIGINAL_CONTENT", false, false)
+	if err := store.Write(t.Context(), "overwrite.txt", "EVIL_CONTENT"); err == nil {
+		t.Fatal("writing an escaping file symlink succeeded")
+	}
+	if got, err := os.ReadFile(target); err != nil || string(got) != "ORIGINAL_CONTENT" {
+		t.Fatalf("outside content=%q, %v", got, err)
+	}
+}
+
+func TestFileStore_DeleteFileAsync_SymlinkedFile_Throws(t *testing.T) {
+	store, _, target := fileStoreLink(t, "trap.txt", "DO_NOT_DELETE", false, false)
+	if err := store.Delete(t.Context(), "trap.txt"); err == nil {
+		t.Fatal("deleting an escaping file symlink succeeded")
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("outside file was removed: %v", err)
+	}
+}
+
+func TestFileStore_WriteFileAsync_DanglingSymlink_Throws(t *testing.T) {
+	store, _, target := fileStoreLink(t, "dangling.txt", "", false, true)
+	if err := store.Write(t.Context(), "dangling.txt", "CONTENT"); err == nil {
+		t.Fatal("writing an escaping dangling symlink succeeded")
+	}
+	if _, err := os.Stat(target); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("dangling target error=%v", err)
+	}
+}
+
+func TestFileStore_ListFilesAsync_SymlinkedDirectory_Throws(t *testing.T) {
+	store, _, target := fileStoreLink(t, "linked-dir", "", true, false)
+	if err := os.WriteFile(filepath.Join(target, "secret.txt"), []byte("SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ListChildren(t.Context(), "linked-dir"); err == nil {
+		t.Fatal("listing an escaping directory symlink succeeded")
+	}
+}
+
+func TestFileStore_ReadFileAsync_ThroughDirectorySymlink_Throws(t *testing.T) {
+	store, _, target := fileStoreLink(t, "linked-output", "", true, false)
+	if err := os.WriteFile(filepath.Join(target, "secret.txt"), []byte("DIR_SYMLINK_SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Read(t.Context(), "linked-output/secret.txt"); err == nil {
+		t.Fatal("reading through an escaping directory symlink succeeded")
+	}
+}
+
+func TestFileStore_WriteFileAsync_ThroughDirectorySymlink_Throws(t *testing.T) {
+	store, _, target := fileStoreLink(t, "linked-output", "", true, false)
+	if err := store.Write(t.Context(), "linked-output/created-by-agent.txt", "CONTENT"); err == nil {
+		t.Fatal("writing through an escaping directory symlink succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(target, "created-by-agent.txt")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("outside target error=%v", err)
+	}
+}
+
+func TestFileStore_DeleteFileAsync_ThroughDirectorySymlink_Throws(t *testing.T) {
+	store, _, target := fileStoreLink(t, "linked-output", "", true, false)
+	file := filepath.Join(target, "delete-me.txt")
+	if err := os.WriteFile(file, []byte("DO_NOT_DELETE"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Delete(t.Context(), "linked-output/delete-me.txt"); err == nil {
+		t.Fatal("deleting through an escaping directory symlink succeeded")
+	}
+	if _, err := os.Stat(file); err != nil {
+		t.Fatalf("outside file was removed: %v", err)
+	}
+}
+
+func TestFileStore_CreateDirectoryAsync_ThroughDirectorySymlink_Throws(t *testing.T) {
+	store, _, target := fileStoreLink(t, "linked-output", "", true, false)
+	if err := store.CreateDirectory(t.Context(), "linked-output/created-directory"); err == nil {
+		t.Fatal("creating through an escaping directory symlink succeeded")
+	}
+	if _, err := os.Stat(filepath.Join(target, "created-directory")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("outside directory error=%v", err)
+	}
+}
+
+func TestFileStore_ListFilesAsync_RootWithSymlinkedFile_ExcludesSymlink(t *testing.T) {
+	store, _, _ := fileStoreLink(t, "hidden-link.txt", "OUTSIDE", false, false)
+	if err := store.Write(t.Context(), "visible.txt", "VISIBLE"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := store.ListChildren(t.Context(), ""); err != nil || slices.Contains(got, "hidden-link.txt") || !slices.Contains(got, "visible.txt") {
+		t.Fatalf("root listing=%q, %v", got, err)
+	}
+}
+
 func TestNewFileSystemStore(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "new", "store")
 	store, err := filestore.NewFileSystemStore(root)

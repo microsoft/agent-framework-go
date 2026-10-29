@@ -768,6 +768,843 @@ func TestCompletionMarkerEvaluator_EmptyMarkerPanics(t *testing.T) {
 	}
 }
 
+func TestCompletionMarkerEvaluator_CustomTemplateHonored(t *testing.T) {
+	e := loop.NewCompletionMarkerEvaluator(loop.CompletionMarkerConfig{
+		Marker: "FINISHED", FeedbackMessageTemplate: new("Keep going and finish with {completion_marker} when done."),
+	})
+	got, err := e.Evaluate(t.Context(), contextWithResponse("still working"))
+	if err != nil || !got.ShouldReinvoke || got.Feedback != "Keep going and finish with FINISHED when done." {
+		t.Fatalf("evaluation = %+v, %v", got, err)
+	}
+}
+
+func TestCompletionMarkerEvaluator_DefaultDoesNotIncludeLastResponse(t *testing.T) {
+	e := loop.NewCompletionMarkerEvaluator(loop.CompletionMarkerConfig{Marker: "DONE"})
+	got, err := e.Evaluate(t.Context(), contextWithResponse("candidate name: NoteNest"))
+	want := "Continue working on the request. When you have fully completed the task, end your response with the marker 'DONE' to indicate completion."
+	if err != nil || !got.ShouldReinvoke || got.Feedback != want || strings.Contains(got.Feedback, "NoteNest") {
+		t.Fatalf("evaluation = %+v, %v, want feedback %q", got, err, want)
+	}
+}
+
+func TestCompletionMarkerEvaluator_MarkerPresentStops(t *testing.T) {
+	e := loop.NewCompletionMarkerEvaluator(loop.CompletionMarkerConfig{Marker: "DONE"})
+	got, err := e.Evaluate(t.Context(), contextWithResponse("all DONE here"))
+	if err != nil || got.ShouldReinvoke {
+		t.Fatalf("evaluation = %+v, %v", got, err)
+	}
+}
+
+func TestCompletionMarkerEvaluator_NilContext(t *testing.T) {
+	e := loop.NewCompletionMarkerEvaluator(loop.CompletionMarkerConfig{Marker: "DONE"})
+	if _, err := e.Evaluate(t.Context(), nil); err == nil {
+		t.Fatal("expected a nil-context error")
+	}
+}
+
+func TestDelegateEvaluator_NilContext(t *testing.T) {
+	e := loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) { return loop.Stop(), nil })
+	if _, err := e.Evaluate(t.Context(), nil); err == nil {
+		t.Fatal("expected a nil-context error")
+	}
+}
+
+func TestDelegateEvaluator_InvokesAndReturnsEvaluation(t *testing.T) {
+	invoked := false
+	want := loop.Continue("feedback")
+	e := loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) {
+		invoked = true
+		return want, nil
+	})
+	got, err := e.Evaluate(t.Context(), contextWithResponse("response"))
+	if err != nil || !invoked || got.ShouldReinvoke != want.ShouldReinvoke || got.Feedback != want.Feedback || !slices.Equal(got.Messages, want.Messages) {
+		t.Fatalf("invoked=%v, evaluation=%+v, err=%v", invoked, got, err)
+	}
+}
+
+func TestDelegateEvaluator_PassesSameLoopContext(t *testing.T) {
+	ctx := contextWithResponse("response")
+	var received *loop.Context
+	e := loop.EvaluatorFunc(func(_ context.Context, lc *loop.Context) (loop.Evaluation, error) {
+		received = lc
+		return loop.Stop(), nil
+	})
+	if _, err := e.Evaluate(t.Context(), ctx); err != nil || received != ctx {
+		t.Fatalf("received context = %p, want %p, err=%v", received, ctx, err)
+	}
+}
+
+func TestDelegateEvaluator_ForwardsCancellationContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var received context.Context
+	e := loop.EvaluatorFunc(func(ctx context.Context, _ *loop.Context) (loop.Evaluation, error) {
+		received = ctx
+		return loop.Stop(), nil
+	})
+	if _, err := e.Evaluate(ctx, contextWithResponse("response")); err != nil || received != ctx {
+		t.Fatalf("received cancellation context = %v, err=%v", received, err)
+	}
+}
+
+func TestLoopContext_FeedbackSettable(t *testing.T) {
+	ctx := contextWithResponse("response")
+	ctx.Feedback = []string{"first", ""}
+	if !slices.Equal(ctx.Feedback, []string{"first", ""}) {
+		t.Fatalf("feedback = %q", ctx.Feedback)
+	}
+}
+
+func TestLoopContext_PublicConstructionSupportsEvaluator(t *testing.T) {
+	ctx := &loop.Context{InitialMessages: []*message.Message{message.NewText("go")}, LastResponse: contextWithResponse("done").LastResponse}
+	e := loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		if ctx.LastResponse.String() == "done" {
+			return loop.Stop(), nil
+		}
+		return loop.Continue(""), nil
+	})
+	if got, err := e.Evaluate(t.Context(), ctx); err != nil || got.ShouldReinvoke {
+		t.Fatalf("evaluation = %+v, %v", got, err)
+	}
+}
+
+func TestLoopEvaluation_Stop(t *testing.T) {
+	if got := loop.Stop(); got.ShouldReinvoke || got.Feedback != "" {
+		t.Fatalf("stop = %+v", got)
+	}
+}
+
+func TestLoopEvaluation_ContinueWithoutFeedback(t *testing.T) {
+	if got := loop.Continue(""); !got.ShouldReinvoke || got.Feedback != "" {
+		t.Fatalf("continue = %+v", got)
+	}
+}
+
+func TestLoopEvaluation_WhitespaceFeedback(t *testing.T) {
+	for _, feedback := range []string{"", "   ", "\t\n"} {
+		t.Run(strconv.Quote(feedback), func(t *testing.T) {
+			if got := loop.Continue(feedback); !got.ShouldReinvoke || got.Feedback != "" {
+				t.Fatalf("continue = %+v", got)
+			}
+		})
+	}
+}
+
+func loopWhile(fn func(*loop.Context) bool) loop.Evaluator {
+	return loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		if fn(ctx) {
+			return loop.Continue(""), nil
+		}
+		return loop.Stop(), nil
+	})
+}
+
+func collectLoopPort(t *testing.T, capture *captureAgent, cfg loop.Config, prompt string, opts ...agent.Option) *agent.Response {
+	t.Helper()
+	run := capture.provider().Run
+	inner := func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			for update, err := range run(ctx, messages, options...) {
+				if update != nil {
+					cloned := *update
+					if cloned.MessageID == "" {
+						cloned.MessageID = "iteration-" + strconv.Itoa(capture.callCount)
+					}
+					update = &cloned
+				}
+				if !yield(update, err) {
+					return
+				}
+			}
+		}
+	}
+	if _, ok := agent.GetOption(opts, agent.WithSession); !ok {
+		opts = append(slices.Clone(opts), agent.WithSession(&agent.Session{}))
+	}
+	response, err := agent.ResponseStream(loop.New(cfg).Run(inner, t.Context(), []*message.Message{message.NewText(prompt)}, opts...)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return response
+}
+
+func TestLoopConstructor_ValidArguments(t *testing.T) {
+	if middleware := loop.New(loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(*loop.Context) bool { return false })}}); middleware == nil {
+		t.Fatal("valid constructor returned nil")
+	}
+}
+
+func TestLoopRun_PredicateAggregatesAllIterations(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates("iteration " + strconv.Itoa(i))
+	})
+	resp := collectLoopPort(t, c, loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(ctx *loop.Context) bool {
+		return ctx.LastResponse.String() != "iteration 3"
+	})}}, "go", agent.WithSession(&agent.Session{}))
+	if c.callCount != 3 || !slices.Equal(messageTexts(resp.Messages), []string{"iteration 1", "iteration 2", "iteration 3"}) {
+		t.Fatalf("calls=%d, transcript=%v", c.callCount, messageTexts(resp.Messages))
+	}
+}
+
+func TestLoopRun_TranscriptWithoutUsage(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates("iteration " + strconv.Itoa(i))
+	})
+	resp := collectLoopPort(t, c, loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(ctx *loop.Context) bool {
+		return ctx.LastResponse.String() != "iteration 3"
+	})}}, "go", agent.WithSession(&agent.Session{}))
+	if c.callCount != 3 || !slices.Equal(messageTexts(resp.Messages), []string{"iteration 1", "iteration 2", "iteration 3"}) {
+		t.Fatalf("calls=%d, transcript=%v", c.callCount, messageTexts(resp.Messages))
+	}
+	if usage := resp.Usage(); usage.InputTokenCount != 0 || usage.OutputTokenCount != 0 || usage.TotalTokenCount != 0 || len(usage.AdditionalCounts) != 0 {
+		t.Fatalf("unexpected usage: %+v", usage)
+	}
+}
+
+func TestLoopRun_LastResponseOnly(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates("iteration " + strconv.Itoa(i))
+	})
+	resp := collectLoopPort(t, c, loop.Config{
+		NonStreamingReturnsLastResponseOnly: true,
+		Evaluators: []loop.Evaluator{loopWhile(func(ctx *loop.Context) bool {
+			return ctx.LastResponse.String() != "iteration 3"
+		})},
+	}, "go", agent.WithSession(&agent.Session{}))
+	if c.callCount != 3 || len(resp.Messages) != 1 || resp.String() != "iteration 3" {
+		t.Fatalf("calls=%d, response=%v", c.callCount, messageTexts(resp.Messages))
+	}
+}
+
+func TestLoopRun_ContinueWithoutFeedback(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("ack") })
+	collectLoopPort(t, c, loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(ctx *loop.Context) bool {
+		return ctx.Iteration < 2
+	})}}, "original", agent.WithSession(&agent.Session{}))
+	if c.callCount != 2 || !slices.Equal(messageTexts(c.messagesPerCall[0]), []string{"original"}) || len(c.messagesPerCall[1]) != 0 {
+		t.Fatalf("calls=%d, inputs=%v", c.callCount, c.messagesPerCall)
+	}
+}
+
+func TestLoopRun_EvaluatorFeedbackInjectedVerbatim(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("ack") })
+	collectLoopPort(t, c, loop.Config{Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		if ctx.Iteration < 2 {
+			return loop.Continue("custom follow-up"), nil
+		}
+		return loop.Stop(), nil
+	})}}, "original", agent.WithSession(&agent.Session{}))
+	if c.callCount != 2 || !slices.Equal(messageTexts(c.messagesPerCall[1]), []string{"custom follow-up"}) {
+		t.Fatalf("calls=%d, next input=%v", c.callCount, c.messagesPerCall)
+	}
+}
+
+func TestLoopRun_ExplicitMessagesAndAlignedFeedback(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("ack") })
+	var feedback []string
+	collectLoopPort(t, c, loop.Config{Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		if ctx.Iteration < 2 {
+			sys := message.NewText("sys")
+			sys.Role = message.RoleSystem
+			return loop.ContinueWithMessages([]*message.Message{sys, message.NewText("explicit")}), nil
+		}
+		feedback = slices.Clone(ctx.Feedback)
+		return loop.Stop(), nil
+	})}}, "original", agent.WithSession(&agent.Session{}))
+	if c.callCount != 2 || !slices.Equal(messageTexts(c.messagesPerCall[1]), []string{"sys", "explicit"}) || c.messagesPerCall[1][0].Role != message.RoleSystem || !slices.Equal(feedback, []string{""}) {
+		t.Fatalf("calls=%d, feedback=%q, inputs=%v", c.callCount, feedback, c.messagesPerCall)
+	}
+}
+
+func TestLoopRun_GlobalCap(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("working") })
+	resp := collectLoopPort(t, c, loop.Config{MaxIterations: new(3), Evaluators: []loop.Evaluator{loopWhile(func(*loop.Context) bool { return true })}}, "go", agent.WithSession(&agent.Session{}))
+	if c.callCount != 3 || !slices.Equal(messageTexts(resp.Messages), []string{"working", "working", "working"}) {
+		t.Fatalf("calls=%d, response=%v", c.callCount, messageTexts(resp.Messages))
+	}
+}
+
+func TestLoopRun_PendingApprovalStops(t *testing.T) {
+	request := &message.ToolApprovalRequestContent{RequestID: "req1", ToolCall: &message.FunctionCallContent{CallID: "call1", Name: "MyTool"}}
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
+		return []*agent.ResponseUpdate{{Role: message.RoleAssistant, Contents: message.Contents{request}}}
+	})
+	resp := collectLoopPort(t, c, loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(*loop.Context) bool { return true })}}, "go", agent.WithSession(&agent.Session{}))
+	if c.callCount != 1 {
+		t.Fatalf("calls=%d, want 1", c.callCount)
+	}
+	found := false
+	for content := range resp.Contents() {
+		if _, ok := content.(*message.ToolApprovalRequestContent); ok {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("pending approval was lost")
+	}
+}
+
+func TestLoopRun_CreatesSessionWhenNoneSupplied(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("done") })
+	provider := c.provider()
+	created := 0
+	provider.CreateSession = func(context.Context, *agent.Session, ...agent.Option) error { created++; return nil }
+	a := agent.New(provider, agent.Config{Middlewares: []agent.Middleware{loop.New(loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(*loop.Context) bool { return false })}})}})
+	resp, err := a.RunText(t.Context(), "go").Collect()
+	if err != nil || resp.String() != "done" || created != 1 {
+		t.Fatalf("response=%v, created=%d, err=%v", resp, created, err)
+	}
+}
+
+func TestLoopRun_NonFreshLatestFeedback(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("partial") })
+	collectLoopPort(t, c, loop.Config{MaxIterations: new(2), Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) {
+		return loop.Continue("fix it"), nil
+	})}}, "original", agent.WithSession(&agent.Session{}))
+	if c.callCount != 2 || !slices.Equal(messageTexts(c.messagesPerCall[1]), []string{"fix it"}) {
+		t.Fatalf("calls=%d, inputs=%v", c.callCount, c.messagesPerCall)
+	}
+}
+
+func TestLoopRun_EmptyFeedbackDoesNotReuseStaleFeedback(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("partial") })
+	collectLoopPort(t, c, loop.Config{MaxIterations: new(3), Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		if ctx.Iteration == 1 {
+			return loop.Continue("feedback 1"), nil
+		}
+		return loop.Continue(""), nil
+	})}}, "original", agent.WithSession(&agent.Session{}))
+	if c.callCount != 3 || !slices.Equal(messageTexts(c.messagesPerCall[1]), []string{"feedback 1"}) || len(c.messagesPerCall[2]) != 0 {
+		t.Fatalf("calls=%d, inputs=%v", c.callCount, c.messagesPerCall)
+	}
+}
+
+func TestLoopRun_FeedbackSharedAcrossEvaluators(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("partial") })
+	var observed []int
+	collectLoopPort(t, c, loop.Config{MaxIterations: new(5), Evaluators: []loop.Evaluator{
+		loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+			if ctx.Iteration < 3 {
+				return loop.Continue("fb " + strconv.Itoa(ctx.Iteration)), nil
+			}
+			return loop.Stop(), nil
+		}),
+		loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+			observed = append(observed, len(ctx.Feedback))
+			return loop.Stop(), nil
+		}),
+	}}, "go", agent.WithSession(&agent.Session{}))
+	if c.callCount != 3 || !slices.Equal(observed, []int{2}) {
+		t.Fatalf("calls=%d, observed feedback lengths=%v", c.callCount, observed)
+	}
+}
+
+func TestLoopRun_ExplicitMessagesRecordEmptyFeedback(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("partial") })
+	var log []string
+	collectLoopPort(t, c, loop.Config{MaxIterations: new(5), Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		switch ctx.Iteration {
+		case 1:
+			return loop.Continue("needs work"), nil
+		case 2:
+			return loop.ContinueWithMessages([]*message.Message{message.NewText("explicit")}), nil
+		default:
+			log = slices.Clone(ctx.Feedback)
+			return loop.Stop(), nil
+		}
+	})}}, "go", agent.WithSession(&agent.Session{}))
+	if !slices.Equal(log, []string{"needs work", ""}) {
+		t.Fatalf("feedback log=%q", log)
+	}
+}
+
+func TestLoopRun_NonFreshReusesCreatedSession(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("x") })
+	provider := c.provider()
+	var created *agent.Session
+	provider.CreateSession = func(_ context.Context, s *agent.Session, _ ...agent.Option) error { created = s; return nil }
+	a := agent.New(provider, agent.Config{Middlewares: []agent.Middleware{loop.New(loop.Config{MaxIterations: new(3), Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) {
+		return loop.Continue("more"), nil
+	})}})}})
+	if _, err := a.RunText(t.Context(), "go").Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if c.callCount != 3 || created == nil || !slices.Equal(c.sessionsPerCall, []*agent.Session{created, created, created}) {
+		t.Fatalf("created=%p, calls=%d, sessions=%v", created, c.callCount, c.sessionsPerCall)
+	}
+}
+
+func TestLoopRun_FreshRebuildsInitialAndFeedback(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("partial") })
+	collectLoopPort(t, c, loop.Config{FreshContextPerIteration: true, MaxIterations: new(3), Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		return loop.Continue("fb " + strconv.Itoa(ctx.Iteration)), nil
+	})}}, "original task")
+	if c.callCount != 3 {
+		t.Fatalf("calls=%d", c.callCount)
+	}
+	for i := 1; i < 3; i++ {
+		got := messageTexts(c.messagesPerCall[i])
+		if len(got) != 2 || got[0] != "original task" || !strings.Contains(got[1], "## Feedback") || !strings.Contains(got[1], "fb 1") || i == 2 && !strings.Contains(got[1], "fb 2") {
+			t.Fatalf("iteration %d input=%q", i+1, got)
+		}
+	}
+}
+
+func TestLoopRun_FreshRecreatesSession(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("x") })
+	collectLoopPort(t, c, loop.Config{FreshContextPerIteration: true, MaxIterations: new(3), Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) {
+		return loop.Continue("more"), nil
+	})}}, "go")
+	if c.callCount != 3 || c.sessionsPerCall[0] == c.sessionsPerCall[1] || c.sessionsPerCall[1] == c.sessionsPerCall[2] {
+		t.Fatalf("calls=%d, sessions=%v", c.callCount, c.sessionsPerCall)
+	}
+}
+
+func TestLoopRun_FreshExplicitMessagesRecreateSession(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("x") })
+	collectLoopPort(t, c, loop.Config{FreshContextPerIteration: true, MaxIterations: new(3), Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) {
+		return loop.ContinueWithMessages([]*message.Message{message.NewText("explicit")}), nil
+	})}}, "go")
+	if c.callCount != 3 || c.sessionsPerCall[0] == c.sessionsPerCall[1] || c.sessionsPerCall[1] == c.sessionsPerCall[2] {
+		t.Fatalf("calls=%d, sessions=%v", c.callCount, c.sessionsPerCall)
+	}
+	for _, input := range c.messagesPerCall[1:] {
+		if !slices.Equal(messageTexts(input), []string{"explicit"}) {
+			t.Fatalf("explicit input=%v", input)
+		}
+	}
+}
+
+func TestLoopRun_CallerSessionDoesNotTriggerCallback(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("x") })
+	var observed []*agent.Session
+	collectLoopPort(t, c, loop.Config{MaxIterations: new(3), SessionCreatedCallback: func(_ context.Context, s *agent.Session) error {
+		observed = append(observed, s)
+		return nil
+	}, Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) {
+		return loop.Continue("more"), nil
+	})}}, "go", agent.WithSession(&agent.Session{}))
+	if c.callCount != 3 || len(observed) != 0 {
+		t.Fatalf("calls=%d, callbacks=%v", c.callCount, observed)
+	}
+}
+
+func TestLoopRun_FirstReinvokeShortCircuitsEvaluators(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("ack") })
+	first, second := 0, 0
+	collectLoopPort(t, c, loop.Config{Evaluators: []loop.Evaluator{
+		loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+			first++
+			if ctx.Iteration < 2 {
+				return loop.Continue("from first"), nil
+			}
+			return loop.Stop(), nil
+		}),
+		loop.EvaluatorFunc(func(context.Context, *loop.Context) (loop.Evaluation, error) { second++; return loop.Stop(), nil }),
+	}}, "go", agent.WithSession(&agent.Session{}))
+	if c.callCount != 2 || first != 2 || second != 1 || !slices.Equal(messageTexts(c.messagesPerCall[1]), []string{"from first"}) {
+		t.Fatalf("calls=%d, first=%d, second=%d, inputs=%v", c.callCount, first, second, c.messagesPerCall)
+	}
+}
+
+func TestLoopRun_LaterEvaluatorCanContinue(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("ack") })
+	collectLoopPort(t, c, loop.Config{Evaluators: []loop.Evaluator{
+		loopWhile(func(*loop.Context) bool { return false }),
+		loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+			if ctx.Iteration < 2 {
+				return loop.Continue("from second"), nil
+			}
+			return loop.Stop(), nil
+		}),
+	}}, "go", agent.WithSession(&agent.Session{}))
+	if c.callCount != 2 || !slices.Equal(messageTexts(c.messagesPerCall[1]), []string{"from second"}) {
+		t.Fatalf("calls=%d, inputs=%v", c.callCount, c.messagesPerCall)
+	}
+}
+
+func TestLoopRun_AllEvaluatorsStop(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("done") })
+	collectLoopPort(t, c, loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(*loop.Context) bool { return false }), loopWhile(func(*loop.Context) bool { return false })}}, "go", agent.WithSession(&agent.Session{}))
+	if c.callCount != 1 {
+		t.Fatalf("calls=%d, want 1", c.callCount)
+	}
+}
+
+func TestLoopRun_AggregatesFeedbackAndResponses(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("ack") })
+	resp := collectLoopPort(t, c, loop.Config{OnBehalfOfAuthorName: "loop", Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		if ctx.Iteration < 2 {
+			return loop.Continue("fix it"), nil
+		}
+		return loop.Stop(), nil
+	})}}, "original", agent.WithSession(&agent.Session{}))
+	if !slices.Equal(messageTexts(resp.Messages), []string{"ack", "fix it", "ack"}) || resp.Messages[1].Role != message.RoleUser || resp.Messages[1].AuthorName != "loop" || c.messagesPerCall[1][0].AuthorName != "loop" {
+		t.Fatalf("response=%v, feedback=%+v", messageTexts(resp.Messages), resp.Messages)
+	}
+}
+
+func TestLoopRun_ExplicitAuthorPreserved(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("ack") })
+	resp := collectLoopPort(t, c, loop.Config{OnBehalfOfAuthorName: "loop", Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		if ctx.Iteration < 2 {
+			explicit := message.NewText("explicit")
+			explicit.AuthorName = "evaluator"
+			return loop.ContinueWithMessages([]*message.Message{explicit}), nil
+		}
+		return loop.Stop(), nil
+	})}}, "original", agent.WithSession(&agent.Session{}))
+	if !slices.Equal(messageTexts(resp.Messages), []string{"ack", "explicit", "ack"}) || resp.Messages[1].AuthorName != "evaluator" {
+		t.Fatalf("response=%v", resp.Messages)
+	}
+}
+
+func TestLoopRun_FreshSurfacesOnlyAggregatedFeedback(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("ack") })
+	resp := collectLoopPort(t, c, loop.Config{FreshContextPerIteration: true, OnBehalfOfAuthorName: "loop", Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		if ctx.Iteration < 2 {
+			return loop.Continue("fix it"), nil
+		}
+		return loop.Stop(), nil
+	})}}, "original")
+	if len(resp.Messages) != 3 || resp.Messages[1].AuthorName != "loop" || !strings.Contains(resp.Messages[1].String(), "fix it") {
+		t.Fatalf("response=%v", resp.Messages)
+	}
+	if slices.Contains(messageTexts(resp.Messages), "original") || !slices.Equal(messageTexts(c.messagesPerCall[1]), []string{"original", resp.Messages[1].String()}) {
+		t.Fatalf("response=%v, next input=%v", messageTexts(resp.Messages), messageTexts(c.messagesPerCall[1]))
+	}
+}
+
+func TestLoopRun_ExcludedFeedbackStillSentToAgent(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("ack") })
+	resp := collectLoopPort(t, c, loop.Config{ExcludeOnBehalfOfMessages: true, Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		if ctx.Iteration < 2 {
+			return loop.Continue("fix it"), nil
+		}
+		return loop.Stop(), nil
+	})}}, "original", agent.WithSession(&agent.Session{}))
+	if !slices.Equal(messageTexts(resp.Messages), []string{"ack", "ack"}) || !slices.Equal(messageTexts(c.messagesPerCall[1]), []string{"fix it"}) {
+		t.Fatalf("response=%v, inputs=%v", messageTexts(resp.Messages), c.messagesPerCall)
+	}
+}
+
+func loopUsageForCall(call int) message.UsageDetails {
+	input := []int64{2, 11, 29}
+	output := []int64{3, 5, 7}
+	return message.UsageDetails{InputTokenCount: input[call-1], OutputTokenCount: output[call-1], TotalTokenCount: input[call-1] + output[call-1]}
+}
+
+func assertLoopUsage(t *testing.T, response *agent.Response, input, output, total int64) {
+	t.Helper()
+	got := response.Usage()
+	if got.InputTokenCount != input || got.OutputTokenCount != output || got.TotalTokenCount != total {
+		t.Fatalf("usage=%+v, want input=%d output=%d total=%d", got, input, output, total)
+	}
+}
+
+func TestLoopRun_AggregatesUsageAcrossIterations(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		u := textUpdates("iteration " + strconv.Itoa(i))
+		u[0].Contents = append(u[0].Contents, &message.UsageContent{Details: message.UsageDetails{InputTokenCount: int64(i * 10), OutputTokenCount: int64(i), TotalTokenCount: int64(i * 11)}})
+		return u
+	})
+	resp := collectLoopPort(t, c, loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(ctx *loop.Context) bool { return ctx.Iteration < 3 })}}, "go")
+	if c.callCount != 3 {
+		t.Fatalf("calls=%d", c.callCount)
+	}
+	assertLoopUsage(t, resp, 60, 6, 66)
+}
+
+func TestLoopRun_GlobalCapAggregatesUsage(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		u := textUpdates("iteration " + strconv.Itoa(i))
+		u[0].Contents = append(u[0].Contents, &message.UsageContent{Details: loopUsageForCall(i)})
+		return u
+	})
+	resp := collectLoopPort(t, c, loop.Config{MaxIterations: new(3), Evaluators: []loop.Evaluator{loopWhile(func(*loop.Context) bool { return true })}}, "go")
+	if c.callCount != 3 {
+		t.Fatalf("calls=%d", c.callCount)
+	}
+	assertLoopUsage(t, resp, 42, 15, 57)
+}
+
+func TestLoopRun_LaterApprovalPreservesUsage(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		u := textUpdates("iteration " + strconv.Itoa(i))
+		if i == 3 {
+			u[0].Contents = message.Contents{&message.ToolApprovalRequestContent{RequestID: "req1", ToolCall: &message.FunctionCallContent{CallID: "call1", Name: "MyTool"}}}
+		}
+		u[0].Contents = append(u[0].Contents, &message.UsageContent{Details: loopUsageForCall(i)})
+		return u
+	})
+	resp := collectLoopPort(t, c, loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(*loop.Context) bool { return true })}}, "go")
+	if c.callCount != 3 {
+		t.Fatalf("calls=%d", c.callCount)
+	}
+	found := false
+	for content := range resp.Contents() {
+		if _, ok := content.(*message.ToolApprovalRequestContent); ok {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("pending approval was lost")
+	}
+	assertLoopUsage(t, resp, 42, 15, 57)
+}
+
+func TestLoopRun_SkipsIterationsWithoutUsage(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		u := textUpdates("iteration " + strconv.Itoa(i))
+		if i != 2 {
+			u[0].Contents = append(u[0].Contents, &message.UsageContent{Details: message.UsageDetails{InputTokenCount: 7, TotalTokenCount: 7}})
+		}
+		return u
+	})
+	resp := collectLoopPort(t, c, loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(ctx *loop.Context) bool { return ctx.Iteration < 3 })}}, "go")
+	if c.callCount != 3 {
+		t.Fatalf("calls=%d", c.callCount)
+	}
+	assertLoopUsage(t, resp, 14, 0, 14)
+}
+
+func TestLoopRun_UsageAggregationDoesNotMutateInnerUsage(t *testing.T) {
+	var inner []*message.UsageContent
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		usage := &message.UsageContent{Details: message.UsageDetails{InputTokenCount: 10, OutputTokenCount: 5, TotalTokenCount: 15}}
+		inner = append(inner, usage)
+		u := textUpdates("iteration " + strconv.Itoa(i))
+		u[0].Contents = append(u[0].Contents, usage)
+		return u
+	})
+	resp := collectLoopPort(t, c, loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(ctx *loop.Context) bool { return ctx.Iteration < 3 })}}, "go")
+	aggregate := resp.Usage()
+	aggregate.InputTokenCount = 0
+	for _, usage := range inner {
+		if usage.Details.InputTokenCount != 10 || usage.Details.OutputTokenCount != 5 || usage.Details.TotalTokenCount != 15 {
+			t.Fatalf("inner usage was mutated: %+v", usage.Details)
+		}
+	}
+}
+
+func TestLoopRun_AggregatesAllProviderCounters(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		u := textUpdates("iteration " + strconv.Itoa(i))
+		u[0].Contents = append(u[0].Contents, &message.UsageContent{Details: message.UsageDetails{
+			InputTokenCount: 100, CachedInputTokenCount: 3, ReasoningTokenCount: 11, AdditionalCounts: map[string]int64{"cost": 2},
+		}})
+		return u
+	})
+	resp := collectLoopPort(t, c, loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(ctx *loop.Context) bool { return ctx.Iteration < 3 })}}, "go")
+	usage := resp.Usage()
+	if c.callCount != 3 || usage.InputTokenCount != 300 || usage.CachedInputTokenCount != 9 || usage.ReasoningTokenCount != 33 || usage.AdditionalCounts["cost"] != 6 {
+		t.Fatalf("calls=%d, usage=%+v", c.callCount, usage)
+	}
+}
+
+func TestLoopStreaming_UsageFromEveryIteration(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		return append(textUpdates("chunk "+strconv.Itoa(i)), &agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.UsageContent{Details: loopUsageForCall(i)}}})
+	})
+	var response agent.Response
+	cfg := loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(ctx *loop.Context) bool { return ctx.Iteration < 3 })}}
+	for update, err := range loop.New(cfg).Run(c.provider().Run, t.Context(), []*message.Message{message.NewText("go")}, agent.WithSession(&agent.Session{}), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Update(update)
+	}
+	if c.callCount != 3 {
+		t.Fatalf("calls=%d", c.callCount)
+	}
+	assertLoopUsage(t, &response, 42, 15, 57)
+}
+
+func TestLoopStreaming_StreamsEveryIteration(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates("chunk " + strconv.Itoa(i))
+	})
+	var texts []string
+	cfg := loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(ctx *loop.Context) bool { return ctx.Iteration < 3 })}}
+	for update, err := range loop.New(cfg).Run(c.provider().Run, t.Context(), []*message.Message{message.NewText("go")}, agent.WithSession(&agent.Session{}), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		texts = append(texts, update.Contents.Text())
+	}
+	if c.callCount != 3 || !slices.Equal(texts, []string{"chunk 1", "chunk 2", "chunk 3"}) {
+		t.Fatalf("calls=%d, texts=%q", c.callCount, texts)
+	}
+}
+
+func TestLoopStreaming_GlobalCap(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates("chunk " + strconv.Itoa(i))
+	})
+	cfg := loop.Config{MaxIterations: new(4), Evaluators: []loop.Evaluator{loopWhile(func(*loop.Context) bool { return true })}}
+	for _, err := range loop.New(cfg).Run(c.provider().Run, t.Context(), []*message.Message{message.NewText("go")}, agent.WithSession(&agent.Session{}), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c.callCount != 4 {
+		t.Fatalf("calls=%d, want 4", c.callCount)
+	}
+}
+
+func TestLoopStreaming_ContinueWithoutFeedback(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("ack") })
+	cfg := loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(ctx *loop.Context) bool { return ctx.Iteration < 2 })}}
+	for _, err := range loop.New(cfg).Run(c.provider().Run, t.Context(), []*message.Message{message.NewText("original")}, agent.WithSession(&agent.Session{}), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c.callCount != 2 || !slices.Equal(messageTexts(c.messagesPerCall[0]), []string{"original"}) || len(c.messagesPerCall[1]) != 0 {
+		t.Fatalf("calls=%d, inputs=%v", c.callCount, c.messagesPerCall)
+	}
+}
+
+func TestLoopStreaming_PendingApprovalStops(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
+		return []*agent.ResponseUpdate{{Role: message.RoleAssistant, Contents: message.Contents{&message.ToolApprovalRequestContent{RequestID: "req1", ToolCall: &message.FunctionCallContent{CallID: "call1", Name: "MyTool"}}}}}
+	})
+	cfg := loop.Config{Evaluators: []loop.Evaluator{loopWhile(func(*loop.Context) bool { return true })}}
+	for _, err := range loop.New(cfg).Run(c.provider().Run, t.Context(), []*message.Message{message.NewText("go")}, agent.WithSession(&agent.Session{}), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if c.callCount != 1 {
+		t.Fatalf("calls=%d, want 1", c.callCount)
+	}
+}
+
+func TestLoopStreaming_ExcludedFeedbackStillSent(t *testing.T) {
+	c := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate { return textUpdates("ack") })
+	cfg := loop.Config{ExcludeOnBehalfOfMessages: true, Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		if ctx.Iteration < 2 {
+			return loop.Continue("fix it"), nil
+		}
+		return loop.Stop(), nil
+	})}}
+	var texts []string
+	for update, err := range loop.New(cfg).Run(c.provider().Run, t.Context(), []*message.Message{message.NewText("original")}, agent.WithSession(&agent.Session{}), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		texts = append(texts, update.Contents.Text())
+	}
+	if !slices.Equal(texts, []string{"ack", "ack"}) || !slices.Equal(messageTexts(c.messagesPerCall[1]), []string{"fix it"}) {
+		t.Fatalf("texts=%q, inputs=%v", texts, c.messagesPerCall)
+	}
+}
+
+func TestLoopRun_LastResponseOnlyStillAggregatesUsage(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		u := textUpdates("iteration " + strconv.Itoa(i))
+		u[0].Contents = append(u[0].Contents, &message.UsageContent{Details: loopUsageForCall(i)})
+		return u
+	})
+	response := collectLoopPort(t, c, loop.Config{
+		NonStreamingReturnsLastResponseOnly: true,
+		Evaluators: []loop.Evaluator{loopWhile(func(ctx *loop.Context) bool {
+			return ctx.Iteration < 3
+		})},
+	}, "go")
+	if c.callCount != 3 || len(response.Messages) != 1 || response.String() != "iteration 3" {
+		t.Fatalf("calls=%d, messages=%v", c.callCount, response.Messages)
+	}
+	assertLoopUsage(t, response, 42, 15, 57)
+}
+
+func TestLoopStreaming_SurfacesFeedbackBeforeReinvocationWithIDs(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		u := textUpdates("ack")
+		u[0].ResponseID, u[0].AgentID = "resp-"+strconv.Itoa(i), "agent-"+strconv.Itoa(i)
+		return u
+	})
+	cfg := loop.Config{OnBehalfOfAuthorName: "loop", Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		if ctx.Iteration < 2 {
+			return loop.Continue("fix it"), nil
+		}
+		return loop.Stop(), nil
+	})}}
+	var updates []*agent.ResponseUpdate
+	for update, err := range loop.New(cfg).Run(c.provider().Run, t.Context(), []*message.Message{message.NewText("original")}, agent.WithSession(&agent.Session{}), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		updates = append(updates, update)
+	}
+	if len(updates) != 3 || updates[0].Contents.Text() != "ack" || updates[1].Contents.Text() != "fix it" || updates[2].Contents.Text() != "ack" {
+		t.Fatalf("updates=%v", updates)
+	}
+	feedback := updates[1]
+	if feedback.Role != message.RoleUser || feedback.AuthorName != "loop" || feedback.ResponseID != "resp-2" || feedback.AgentID != "" || feedback.MessageID == "" {
+		t.Fatalf("feedback update=%+v", feedback)
+	}
+}
+
+func TestLoopStreaming_ExplicitMessagesGenerateMessageIDAndInheritResponseID(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		u := textUpdates("ack")
+		u[0].ResponseID, u[0].AgentID = "resp-"+strconv.Itoa(i), "agent-"+strconv.Itoa(i)
+		return u
+	})
+	cfg := loop.Config{Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		if ctx.Iteration < 2 {
+			msg := message.NewText("explicit")
+			msg.AuthorName = "evaluator"
+			return loop.ContinueWithMessages([]*message.Message{msg}), nil
+		}
+		return loop.Stop(), nil
+	})}}
+	var updates []*agent.ResponseUpdate
+	for update, err := range loop.New(cfg).Run(c.provider().Run, t.Context(), []*message.Message{message.NewText("original")}, agent.WithSession(&agent.Session{}), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		updates = append(updates, update)
+	}
+	if len(updates) != 3 || updates[0].Contents.Text() != "ack" || updates[1].Contents.Text() != "explicit" || updates[2].Contents.Text() != "ack" {
+		t.Fatalf("updates=%v", updates)
+	}
+	feedback := updates[1]
+	if feedback.AuthorName != "evaluator" || feedback.MessageID == "" || feedback.ResponseID != "resp-2" || feedback.AgentID != "" {
+		t.Fatalf("explicit update=%+v", feedback)
+	}
+}
+
+func TestLoopStreaming_EmptyInnerIterationGeneratesFeedbackResponseID(t *testing.T) {
+	c := newCaptureAgent(func(i int, _ []*message.Message) []*agent.ResponseUpdate {
+		if i < 2 {
+			return textUpdates("ack")
+		}
+		return nil
+	})
+	cfg := loop.Config{OnBehalfOfAuthorName: "loop", Evaluators: []loop.Evaluator{loop.EvaluatorFunc(func(_ context.Context, ctx *loop.Context) (loop.Evaluation, error) {
+		if ctx.Iteration < 2 {
+			return loop.Continue("fix it"), nil
+		}
+		return loop.Stop(), nil
+	})}}
+	var updates []*agent.ResponseUpdate
+	for update, err := range loop.New(cfg).Run(c.provider().Run, t.Context(), []*message.Message{message.NewText("original")}, agent.WithSession(&agent.Session{}), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		updates = append(updates, update)
+	}
+	if len(updates) != 2 || updates[0].Contents.Text() != "ack" || updates[1].Contents.Text() != "fix it" {
+		t.Fatalf("updates=%v", updates)
+	}
+	feedback := updates[1]
+	if feedback.AuthorName != "loop" || feedback.ResponseID == "" || feedback.AgentID != "" || feedback.MessageID == "" {
+		t.Fatalf("feedback update=%+v", feedback)
+	}
+}
+
 type captureAgent struct {
 	run             func(call int, messages []*message.Message) []*agent.ResponseUpdate
 	callCount       int

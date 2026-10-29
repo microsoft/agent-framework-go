@@ -81,6 +81,84 @@ func TestIsolationKeyTaskStoreCreateScopesIdentifiers(t *testing.T) {
 	}
 }
 
+func TestIsolationKeyTaskStoreGetUnscopesContextID(t *testing.T) {
+	ctx := isolationContext(t.Context(), "", "owner")
+	inner := taskstore.NewInMemory(&taskstore.InMemoryStoreConfig{Authenticator: a2asrv.NewTaskStoreAuthenticator()})
+	store := a2aprovider.NewIsolationKeyScopedTaskStore(inner, isolationConfig("alice"))
+	if _, err := store.Create(ctx, &a2a.Task{ID: "task-001", ContextID: "ctx-1"}); err != nil {
+		t.Fatal(err)
+	}
+	result, err := store.Get(ctx, "task-001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || result.Task == nil || result.Task.ContextID != "ctx-1" {
+		t.Fatalf("result = %#v, want task with unscoped context ID ctx-1", result)
+	}
+}
+
+func TestIsolationKeyTaskStoreDifferentTenantsUseDifferentIDs(t *testing.T) {
+	ctx := isolationContext(t.Context(), "", "owner")
+	inner := taskstore.NewInMemory(&taskstore.InMemoryStoreConfig{Authenticator: a2asrv.NewTaskStoreAuthenticator()})
+	alice := a2aprovider.NewIsolationKeyScopedTaskStore(inner, isolationConfig("alice"))
+	bob := a2aprovider.NewIsolationKeyScopedTaskStore(inner, isolationConfig("bob"))
+	if _, err := alice.Create(ctx, &a2a.Task{ID: "task-001", ContextID: "ctx-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := alice.Get(ctx, "task-001"); err != nil || result == nil {
+		t.Fatalf("Alice Get = %#v, %v, want stored task", result, err)
+	}
+	if result, err := bob.Get(ctx, "task-001"); !errors.Is(err, a2a.ErrTaskNotFound) || result != nil {
+		t.Fatalf("Bob Get = %#v, %v, want missing task", result, err)
+	}
+}
+
+func TestIsolationKeyTaskStoreUnfilteredListExcludesOtherTenants(t *testing.T) {
+	ctx := isolationContext(t.Context(), "", "owner")
+	inner := taskstore.NewInMemory(&taskstore.InMemoryStoreConfig{Authenticator: a2asrv.NewTaskStoreAuthenticator()})
+	alice := a2aprovider.NewIsolationKeyScopedTaskStore(inner, isolationConfig("alice"))
+	bob := a2aprovider.NewIsolationKeyScopedTaskStore(inner, isolationConfig("bob"))
+	if _, err := alice.Create(ctx, &a2a.Task{ID: "alice-task", ContextID: "ctx-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bob.Create(ctx, &a2a.Task{ID: "bob-task", ContextID: "ctx-2"}); err != nil {
+		t.Fatal(err)
+	}
+	response, err := bob.List(ctx, &a2a.ListTasksRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response == nil || len(response.Tasks) != 1 || response.Tasks[0].ID != "bob-task" ||
+		response.Tasks[0].ContextID != "ctx-2" || response.PageSize != 1 {
+		t.Fatalf("response = %#v, want only bob-task in ctx-2 and page size 1", response)
+	}
+}
+
+func TestIsolationKeyTaskStoreFilteredListReturnsOwnTasks(t *testing.T) {
+	ctx := isolationContext(t.Context(), "", "owner")
+	inner := taskstore.NewInMemory(&taskstore.InMemoryStoreConfig{Authenticator: a2asrv.NewTaskStoreAuthenticator()})
+	alice := a2aprovider.NewIsolationKeyScopedTaskStore(inner, isolationConfig("alice"))
+	bob := a2aprovider.NewIsolationKeyScopedTaskStore(inner, isolationConfig("bob"))
+	if _, err := alice.Create(ctx, &a2a.Task{ID: "task-001", ContextID: "ctx-1"}); err != nil {
+		t.Fatal(err)
+	}
+	response, err := alice.List(ctx, &a2a.ListTasksRequest{ContextID: "ctx-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response == nil || len(response.Tasks) != 1 ||
+		response.Tasks[0].ContextID != "ctx-1" {
+		t.Fatalf("response = %#v, want one task in ctx-1", response)
+	}
+	bobResponse, err := bob.List(ctx, &a2a.ListTasksRequest{ContextID: "ctx-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bobResponse == nil || len(bobResponse.Tasks) != 0 {
+		t.Fatalf("Bob response = %#v, want no tasks for the same bare context ID", bobResponse)
+	}
+}
+
 func TestIsolationKeyTaskStoreListScopesContextFilter(t *testing.T) {
 	var got string
 	var calls int
