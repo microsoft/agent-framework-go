@@ -4796,7 +4796,7 @@
         "Constructor_NullPredicate_Throws": "agent/skills.TestFilteringSource_NilPredicatePanics",
         "GetSkillsAsync_EmptySource_ReturnsEmptyAsync": "agent/skills.TestProvider_Filter_EmptySourceReturnsEmptyContext",
         "GetSkillsAsync_PartialFilter_ReturnsMatchingSkillsOnlyAsync": "agent/skills.TestProvider_Filter_ReturnsOnlyMatchingSkills",
-        "GetSkillsAsync_PassesContextToPredicateAsync": "agent/skills.TestProvider_FilterWithContextReceivesInvocationSession",
+        "GetSkillsAsync_PassesContextToPredicateAsync": "agent/skills.TestFilteringSource_PassesContextToPredicate",
         "GetSkillsAsync_PredicateExcludesAll_ReturnsEmptyAsync": "agent/skills.TestProvider_Filter_ExcludingAllReturnsEmptyContext",
         "GetSkillsAsync_PredicateIncludesAll_ReturnsAllSkillsAsync": "agent/skills.TestProvider_Filter_IncludingAllPreservesBothSkills",
         "GetSkillsAsync_PreservesOrderAsync": "agent/skills.TestProvider_Filter_PreservesMatchingOrder"

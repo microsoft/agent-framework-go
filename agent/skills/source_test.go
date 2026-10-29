@@ -313,6 +313,30 @@ func TestCachingSource_PanicDoesNotPoisonCache(t *testing.T) {
 	}
 }
 
+func TestFilteringSource_PassesContextToPredicate(t *testing.T) {
+	skill := mustInlineSkill(skills.Frontmatter{Name: "skill-a", Description: "A"}, "Instructions A.", nil, nil)
+	expected := skills.SourceContext{Agent: agenttest.New(nil), Session: agenttest.CreateSession()}
+	var actual skills.SourceContext
+	var actualSkill *skills.Skill
+	source := skills.NewFilteringSource(skills.NewInMemorySource(skill),
+		func(_ context.Context, skill *skills.Skill, sourceContext skills.SourceContext) bool {
+			actualSkill = skill
+			actual = sourceContext
+			return true
+		}, nil)
+
+	result, err := source.Skills(t.Context(), expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != 1 || result[0] != actualSkill || result[0] != skill {
+		t.Fatalf("filtered skills = %v, predicate skill = %p, want original skill %p", result, actualSkill, skill)
+	}
+	if actual != expected {
+		t.Fatalf("predicate source context = %#v, want %#v", actual, expected)
+	}
+}
+
 func TestFilteringSource_RunsOutsideCacheWithoutChangingItsList(t *testing.T) {
 	first := mustInlineSkill(skills.Frontmatter{Name: "first", Description: "First"}, "First.", nil, nil)
 	second := mustInlineSkill(skills.Frontmatter{Name: "second", Description: "Second"}, "Second.", nil, nil)
