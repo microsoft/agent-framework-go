@@ -1,23 +1,29 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// This sample demonstrates an advanced scenario: combining file-based, code-defined,
-// and struct-based skills in a single agent using explicit source composition.
+// This sample combines file-based and code-defined skills using reusable sources.
+// Discovery is cached, while each session chooses which skills are visible.
 
 package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
 	"github.com/microsoft/agent-framework-go/examples/02-agents/skills/internal/skillhelpers"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 )
+
+const enabledSkillsKey = "mixedSkills.enabled"
 
 const volumeConverterInstructions = `Use this skill when the user asks to convert between gallons and liters.
 
@@ -70,7 +76,13 @@ var volumeConverterSkill = &skills.Skill{
 		{
 			Name:        "convert-volume",
 			Description: "Multiplies a value by a conversion factor and returns the result as JSON. Pass value and factor as two positional string arguments: [\"<value>\", \"<factor>\"].",
-			Run: func(_ context.Context, _ *skills.Skill, args []string) (any, error) {
+			Run: func(_ context.Context, _ *skills.Skill, rawScriptArguments json.RawMessage) (any, error) {
+				var args []string
+				if len(rawScriptArguments) != 0 {
+					if err := json.Unmarshal(rawScriptArguments, &args); err != nil {
+						return nil, err
+					}
+				}
 				value, err := skillhelpers.NumberArg(args, 0)
 				if err != nil {
 					return nil, err
@@ -106,7 +118,13 @@ var temperatureConverterSkill = skills.Skill{
 		{
 			Name:        "convert-temperature",
 			Description: "Converts a temperature value from one scale to another. Pass value, source scale, and target scale as three positional string arguments: [\"<value>\", \"<from>\", \"<to>\"].",
-			Run: func(_ context.Context, _ *skills.Skill, args []string) (any, error) {
+			Run: func(_ context.Context, _ *skills.Skill, rawScriptArguments json.RawMessage) (any, error) {
+				var args []string
+				if len(rawScriptArguments) != 0 {
+					if err := json.Unmarshal(rawScriptArguments, &args); err != nil {
+						return nil, err
+					}
+				}
 				value, err := skillhelpers.NumberArg(args, 0)
 				if err != nil {
 					return nil, err
@@ -149,43 +167,91 @@ var deployment = demo.FoundryModel
 
 var logger = demo.NewLogger(
 	"Mixed Skills",
-	"Combining file-based, code-defined, and struct-based Agent Skills with explicit source composition.",
+	"Composing cached skill sources with per-session filtering. Reads are auto-approved; scripts require approval.",
 	"Model", deployment,
 )
 
 func main() {
+	if err := run(context.Background()); err != nil {
+		demo.Panic(err)
+	}
+}
+
+func newSkillsProvider(fileSource skills.Source) *skills.ContextProvider {
+	aggregate := skills.NewAggregatingSource(
+		skills.NewInMemorySource(volumeConverterSkill, &temperatureConverterSkill),
+		fileSource,
+	)
+	cached := skills.NewCachingSource(aggregate, skills.CachingSourceConfig{})
+	filtered := skills.NewFilteringSource(cached, func(_ context.Context, skill *skills.Skill, sourceContext skills.SourceContext) bool {
+		var enabled []string
+		if _, err := sourceContext.Session.Get(enabledSkillsKey, &enabled); err != nil {
+			panic(fmt.Errorf("read enabled skills: %w", err))
+		}
+		return slices.Contains(enabled, skill.Frontmatter.Name)
+	}, nil)
+	deduplicated := skills.NewDeduplicatingSource(filtered, nil)
+	return skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources:     []skills.Source{deduplicated},
+		OwnsSources: true,
+		// The source pipeline already performs caching and deduplication.
+		DisableCaching:             true,
+		DisableSourceDeduplication: true,
+	})
+}
+
+func run(ctx context.Context) (err error) {
 	token := demo.FoundryTokenCredential()
 
 	skillsRoot, err := os.OpenRoot("skills")
 	if err != nil {
-		demo.Panic(err)
+		return err
 	}
-	defer func() { _ = skillsRoot.Close() }()
+	defer func() { err = errors.Join(err, skillsRoot.Close()) }()
+	skillsProvider := newSkillsProvider(
+		fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: skillhelpers.RunSubprocessScript}, skillsRoot.FS()),
+	)
+	defer func() { err = errors.Join(err, skillsProvider.Close()) }()
 
-	skillsProvider := skills.NewContextProvider(skills.ContextProviderOptions{
-		Skills: []*skills.Skill{volumeConverterSkill, &temperatureConverterSkill},
-		Sources: []skills.Source{
-			fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: skillhelpers.RunSubprocessScript}, skillsRoot.FS()),
-		},
-	})
-
-	agent := foundryprovider.NewAgent(
+	a := foundryprovider.NewAgent(
 		demo.FoundryProjectEndpoint,
 		token,
 		foundryprovider.ModelDeployment(deployment),
 		foundryprovider.AgentConfig{
 			Instructions: "You are a helpful assistant that can convert units, volumes, and temperatures.",
 			Config: agent.Config{
-				Name:             "MultiConverterAgent",
-				Middlewares:      []agent.Middleware{logger},
+				Name: "MultiConverterAgent",
+				Middlewares: []agent.Middleware{logger, toolapproval.New(toolapproval.Config{
+					AutoApprovalRules: []toolapproval.AutoApprovalRule{skills.ReadOnlyToolsAutoApprovalRule},
+				})},
 				ContextProviders: []agent.ContextProvider{skillsProvider},
 			},
 		},
 	)
 
-	response, err := agent.RunText(
-		context.Background(),
-		"I need three conversions: How many kilometers is a marathon (26.2 miles)? How many liters is a 5-gallon bucket? What is 98.6 Fahrenheit in Celsius?",
-	).Collect()
-	demo.Response(response, err)
+	for _, example := range []struct {
+		enabled []string
+		prompt  string
+	}{
+		{
+			enabled: []string{"unit-converter", "volume-converter"},
+			prompt:  "How many kilometers is a marathon (26.2 miles)? How many liters is a 5-gallon bucket?",
+		},
+		{
+			enabled: []string{"unit-converter", "volume-converter", "temperature-converter"},
+			prompt:  "How many kilometers is a marathon (26.2 miles)? How many liters is a 5-gallon bucket? What is 98.6 Fahrenheit in Celsius?",
+		},
+	} {
+		session, err := a.CreateSession(ctx)
+		if err != nil {
+			return err
+		}
+		session.Set(enabledSkillsKey, example.enabled)
+		response, err := skillhelpers.RunWithApprovals(ctx, a, session, example.prompt, demo.UserInputRequest)
+		if err != nil {
+			return err
+		}
+		demo.Response(response, nil)
+	}
+	return nil
 }

@@ -4,6 +4,7 @@ package skillhelpers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -18,10 +19,16 @@ const rootFSPropertyKey = "fsskills.rootFS"
 
 // RunSubprocessScript materializes a file-backed skill to a temp directory and executes a script from it.
 //
-// The args slice contains positional CLI-style string tokens exactly as sent by the LLM
-// (for example ["--value", "26.2", "--factor", "1.60934"]). They are passed verbatim
-// as subprocess arguments.
-func RunSubprocessScript(ctx context.Context, skill *skills.Skill, script *skills.Script, args []string) (any, error) {
+// Arguments must be a JSON array of positional CLI-style string tokens
+// (for example ["--value", "26.2", "--factor", "1.60934"]). Decoded strings are
+// passed verbatim as subprocess arguments.
+func RunSubprocessScript(ctx context.Context, skill *skills.Skill, script *skills.Script, rawScriptArguments json.RawMessage) (any, error) {
+	var args []string
+	if len(rawScriptArguments) != 0 {
+		if err := json.Unmarshal(rawScriptArguments, &args); err != nil {
+			return nil, err
+		}
+	}
 	tempDir, err := os.MkdirTemp("", "agent-framework-go-skill-")
 	if err != nil {
 		return nil, err

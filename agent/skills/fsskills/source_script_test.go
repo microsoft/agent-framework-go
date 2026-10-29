@@ -4,6 +4,8 @@ package fsskills_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,15 +18,24 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
 )
 
+func scriptJSONArguments(t *testing.T, arguments []string) json.RawMessage {
+	t.Helper()
+	data, err := json.Marshal(arguments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func TestFileSource_WithScriptFiles_DiscoversScripts(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "my-skill", "A test skill", "Body.")
 	createRelativeFile(t, filepath.Join(root, "my-skill"), "scripts/convert.py", "print('hello')")
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 		return nil, nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,11 +58,11 @@ func TestFileSource_WithMultipleScriptExtensions_DiscoversAll(t *testing.T) {
 	for _, fileName := range []string{"scripts/run.py", "scripts/run.sh", "scripts/run.js", "scripts/run.ps1", "scripts/run.cs", "scripts/run.csx"} {
 		createRelativeFile(t, skillDir, fileName, "echo")
 	}
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 		return nil, nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,11 +87,11 @@ func TestFileSource_NonScriptExtensionsAreNotDiscovered(t *testing.T) {
 	createRelativeFile(t, skillDir, "scripts/data.txt", "text data")
 	createRelativeFile(t, skillDir, "scripts/config.json", "{}")
 	createRelativeFile(t, skillDir, "scripts/notes.md", "# Notes")
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 		return nil, nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +108,7 @@ func TestFileSource_NoScriptFiles_ReturnsEmptyScripts(t *testing.T) {
 	createSkillDir(t, root, "no-scripts", "No scripts skill", "Body.")
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,11 +126,11 @@ func TestFileSource_ScriptsInAnyDirectory_AreDiscovered(t *testing.T) {
 	skillDir := filepath.Join(root, "root-scripts")
 	createRelativeFile(t, skillDir, "convert.py", "print('root')")
 	createRelativeFile(t, skillDir, "tools/helper.sh", "echo 'helper'")
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 		return nil, nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +153,13 @@ func TestFileSource_WithRunner_ScriptsCanRun(t *testing.T) {
 	createSkillDir(t, root, "exec-skill", "Executor test", "Body.")
 	createRelativeFile(t, filepath.Join(root, "exec-skill"), "scripts/test.py", "print('ok')")
 	executorCalled := false
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, skill *skills.Skill, script *skills.Script, arguments []string) (any, error) {
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, skill *skills.Skill, script *skills.Script, rawScriptArguments json.RawMessage) (any, error) {
+		var arguments []string
+		if len(rawScriptArguments) != 0 {
+			if err := json.Unmarshal(rawScriptArguments, &arguments); err != nil {
+				return nil, err
+			}
+		}
 		executorCalled = true
 		if skill.Frontmatter.Name != "exec-skill" {
 			t.Fatalf("expected exec-skill, got %q", skill.Frontmatter.Name)
@@ -161,7 +178,7 @@ func TestFileSource_WithRunner_ScriptsCanRun(t *testing.T) {
 		return "executed", nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,6 +197,139 @@ func TestFileSource_WithRunner_ScriptsCanRun(t *testing.T) {
 	}
 }
 
+func TestFileSource_RunnerReceivesObjectArguments(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "args-skill", "Args test", "Body.")
+	createRelativeFile(t, filepath.Join(root, "args-skill"), "scripts/test.py", "print('ok')")
+	var captured json.RawMessage
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, arguments json.RawMessage) (any, error) {
+			captured = arguments
+			return "done", nil
+		},
+	}, os.DirFS(root))
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || len(loaded[0].Scripts) != 1 {
+		t.Fatalf("discovered scripts = %#v", loaded)
+	}
+	if _, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], json.RawMessage(`{"value":26.2,"factor":1.60934}`)); err != nil {
+		t.Fatal(err)
+	}
+	var arguments map[string]float64
+	if err := json.Unmarshal(captured, &arguments); err != nil {
+		t.Fatal(err)
+	}
+	if arguments["value"] != 26.2 || arguments["factor"] != 1.60934 {
+		t.Fatalf("runner object arguments = %v", arguments)
+	}
+}
+
+func TestFileScript_ForwardsCallContextToRunner(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "my-skill", "A skill", "Content")
+	createRelativeFile(t, filepath.Join(root, "my-skill"), "scripts/test.sh", "echo ok")
+	type servicesKey struct{}
+	services := &struct{ Name string }{Name: "services"}
+	callContext := context.WithValue(t.Context(), servicesKey{}, services)
+	var captured any
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(ctx context.Context, _ *skills.Skill, _ *skills.Script, _ json.RawMessage) (any, error) {
+			captured = ctx.Value(servicesKey{})
+			return "done", nil
+		},
+	}, os.DirFS(root))
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || len(loaded[0].Scripts) != 1 {
+		t.Fatalf("discovered scripts = %#v", loaded)
+	}
+	if _, err := loaded[0].Scripts[0].Run(callContext, loaded[0], nil); err != nil {
+		t.Fatal(err)
+	}
+	if captured != services {
+		t.Fatalf("runner services = %v, want the caller's context value", captured)
+	}
+}
+
+func TestFileSource_WithJSONRunner_PreservesArgumentsAndMetadata(t *testing.T) {
+	filesystem := fstest.MapFS{
+		"json-skill/SKILL.md": &fstest.MapFile{Data: []byte("---\nname: json-skill\ndescription: JSON skill\n---\nBody.")},
+		"json-skill/run.py":   &fstest.MapFile{Data: []byte("print('ok')")},
+	}
+	var observed json.RawMessage
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(_ context.Context, owner *skills.Skill, script *skills.Script, arguments json.RawMessage) (any, error) {
+			observed = arguments
+			if owner.Frontmatter.Name != "json-skill" || script.Name != "run.py" || script.ParametersSchema == "" {
+				t.Errorf("runner metadata = skill %q, script %#v", owner.Frontmatter.Name, script)
+			}
+			scriptFS, ok := script.AdditionalProperties["fsskills.scriptFS"].(fs.FS)
+			if !ok {
+				t.Fatal("runner script has no backing filesystem")
+			}
+			if data, err := fs.ReadFile(scriptFS, script.Name); err != nil || string(data) != "print('ok')" {
+				t.Fatalf("runner script data = (%q, %v)", data, err)
+			}
+			return "executed", nil
+		},
+	}, filesystem)
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || len(loaded[0].Scripts) != 1 || loaded[0].Scripts[0].Run == nil {
+		t.Fatalf("discovered JSON scripts = %#v", loaded)
+	}
+	arguments := json.RawMessage(`{"value":9007199254740993}`)
+	got, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], arguments)
+	if err != nil || got != "executed" || string(observed) != string(arguments) {
+		t.Fatalf("JSON runner = (%v, %v), arguments = %s", got, err, observed)
+	}
+}
+
+func TestFileSource_JSONRunner_RevalidatesPathAndOwner(t *testing.T) {
+	filesystem := fstest.MapFS{
+		"json-skill/SKILL.md": &fstest.MapFile{Data: []byte("---\nname: json-skill\ndescription: JSON skill\n---\nBody.")},
+		"json-skill/run.py":   &fstest.MapFile{Data: []byte("print('ok')")},
+	}
+	calls := 0
+	failure := errors.New("runner failure")
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
+			calls++
+			return nil, failure
+		},
+	}, filesystem)
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || len(loaded[0].Scripts) != 1 {
+		t.Fatalf("discovered skills = %#v", loaded)
+	}
+	script := loaded[0].Scripts[0]
+	if _, err := script.Run(t.Context(), loaded[0], nil); !errors.Is(err, failure) {
+		t.Fatalf("runner failure = %v, want original error", err)
+	}
+	for _, owner := range []*skills.Skill{nil, {Frontmatter: skills.Frontmatter{Name: "other", Description: "Other"}}} {
+		if _, err := script.Run(t.Context(), owner, nil); err == nil {
+			t.Fatal("JSON runner accepted an owner without a backing filesystem")
+		}
+	}
+	delete(filesystem, "json-skill/run.py")
+	if _, err := script.Run(t.Context(), loaded[0], nil); err == nil {
+		t.Fatal("JSON runner accepted a script removed after discovery")
+	}
+	if calls != 1 {
+		t.Fatalf("runner calls = %d, want 1 before invalid owner/path checks", calls)
+	}
+}
+
 func TestFileSource_ScriptExecution_RevalidatesParentDirectoriesBeforeRun(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, filepath.Join(root, "trusted"), "exec-skill", "Executor test", "Body.")
@@ -188,12 +338,12 @@ func TestFileSource_ScriptExecution_RevalidatesParentDirectoriesBeforeRun(t *tes
 	createRelativeFile(t, filepath.Join(root, "outside", "trusted", "exec-skill"), "scripts/test.py", "print('outside')")
 
 	runnerCalled := false
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ []string) (any, error) {
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ json.RawMessage) (any, error) {
 		runnerCalled = true
 		return "executed", nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,7 +367,7 @@ func TestFileSource_ScriptExecution_RevalidatesParentDirectoriesBeforeRun(t *tes
 
 func TestFileSource_ScriptExecution_FailsWithoutLinkInspection(t *testing.T) {
 	runnerCalled := false
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ []string) (any, error) {
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ json.RawMessage) (any, error) {
 		runnerCalled = true
 		return "executed", nil
 	}}, fsWithoutLinkInspection{fstest.MapFS{
@@ -225,7 +375,7 @@ func TestFileSource_ScriptExecution_FailsWithoutLinkInspection(t *testing.T) {
 		"exec-skill/scripts/test.py": {Data: []byte("print('test')")},
 	}})
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -254,7 +404,7 @@ func TestFileSource_ScriptsWithNoRunner_ReturnsErrorOnRun(t *testing.T) {
 	createRelativeFile(t, filepath.Join(root, "no-runner-skill"), "scripts/run.sh", "echo 'hello'")
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,12 +454,12 @@ func TestFileSource_CustomScriptExtensions_OnlyDiscoversMatching(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			source := fsskills.NewSourceOptions(fsskills.SourceOptions{
 				AllowedScriptExtensions: tt.extensions,
-				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 					return nil, nil
 				},
 			}, os.DirFS(root))
 
-			loaded, err := source.Skills(t.Context())
+			loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -333,17 +483,23 @@ func TestFileSource_ExecutorReceivesArguments(t *testing.T) {
 	createSkillDir(t, root, "args-skill", "Args test", "Body.")
 	createRelativeFile(t, filepath.Join(root, "args-skill"), "scripts/test.py", "print('ok')")
 	var captured []string
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, arguments []string) (any, error) {
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, rawScriptArguments json.RawMessage) (any, error) {
+		var arguments []string
+		if len(rawScriptArguments) != 0 {
+			if err := json.Unmarshal(rawScriptArguments, &arguments); err != nil {
+				return nil, err
+			}
+		}
 		captured = arguments
 		return "done", nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	arguments := []string{"--value", "26.2", "--factor", "1.60934"}
-	if _, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], arguments); err != nil {
+	if _, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], scriptJSONArguments(t, arguments)); err != nil {
 		t.Fatal(err)
 	}
 	if len(captured) != 4 || captured[0] != "--value" || captured[1] != "26.2" || captured[2] != "--factor" || captured[3] != "1.60934" {
@@ -369,12 +525,12 @@ func TestFileSource_ScriptAtConfigurableDepth_DiscoversWithSearchDepth(t *testin
 		t.Run(tt.name, func(t *testing.T) {
 			source := fsskills.NewSourceOptions(fsskills.SourceOptions{
 				SearchDepth: tt.depth,
-				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 					return nil, nil
 				},
 			}, os.DirFS(root))
 
-			loaded, err := source.Skills(t.Context())
+			loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -400,12 +556,12 @@ func TestFileSource_ScriptsInMultipleSubdirectories_AllDiscovered(t *testing.T) 
 	createRelativeFile(t, skillDir, "scripts/run.py", "print('scripts')")
 	createRelativeFile(t, skillDir, "f2/run.py", "print('f2')")
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 			return nil, nil
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,12 +608,12 @@ func TestFileSource_ScriptAtSkillRoot_Discovered(t *testing.T) {
 	createSkillDir(t, root, "root-script-skill", "Root script", "Body.")
 	createRelativeFile(t, filepath.Join(root, "root-script-skill"), "run.py", "print('hello')")
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 			return nil, nil
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -520,12 +676,12 @@ func TestFileSource_ScriptFilter_IncludesOnlyMatchingScripts(t *testing.T) {
 					}
 					return tt.filter(ctx)
 				},
-				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 					return nil, nil
 				},
 			}, os.DirFS(root))
 
-			loaded, err := source.Skills(t.Context())
+			loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -553,12 +709,12 @@ func TestFileSource_SymlinkedScript_IsSkipped(t *testing.T) {
 	}
 	createSymlink(t, filepath.Join(root, "script-link-skill", "scripts", "run.py"), outsideScript)
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 			return nil, nil
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -575,12 +731,12 @@ func TestFileScript_RunWithNonFileSkill_ReturnsError(t *testing.T) {
 	createSkillDir(t, root, "script-owner", "Script owner", "Body.")
 	createRelativeFile(t, filepath.Join(root, "script-owner"), "scripts/run.py", "print('ok')")
 	runnerCalled := false
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 		runnerCalled = true
 		return "result", nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -638,7 +794,7 @@ func TestFileScript_HasDefaultParametersSchema(t *testing.T) {
 	createRelativeFile(t, filepath.Join(root, "schema-skill"), "scripts/convert.py", "print('hello')")
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -656,12 +812,12 @@ func TestFileSkill_WithScripts_ContentIncludesAvailableScriptsBlock(t *testing.T
 	createRelativeFile(t, filepath.Join(root, "schema-content-skill"), "deploy.sh", "echo deploy")
 	const originalRawContent = "---\nname: schema-content-skill\ndescription: A test skill\n---\nInstructions here."
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 			return nil, nil
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,12 +853,12 @@ func TestFileSkill_WithScripts_ContentStartsWithOriginalSkillMd(t *testing.T) {
 	createSkillDir(t, root, "original-content-skill", "A test skill", "Original instructions.")
 	createRelativeFile(t, filepath.Join(root, "original-content-skill"), "run.py", "print('run')")
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 			return nil, nil
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -726,7 +882,7 @@ func TestFileSkill_WithoutScripts_ContentIncludesEmptyAvailableScriptsBlock(t *t
 	createSkillDir(t, root, "no-script-content-skill", "A test skill", "Instructions here.")
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -744,12 +900,12 @@ func TestFileSkill_ScriptContent_IncludesDefaultArraySchema(t *testing.T) {
 	createSkillDir(t, root, "schema-inline-skill", "A test skill", "Body.")
 	createRelativeFile(t, filepath.Join(root, "schema-inline-skill"), "scripts/search.py", "print('search')")
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 			return nil, nil
 		},
 	}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -783,10 +939,10 @@ func TestFileSource_CaseSensitiveFS_KeepsDistinctlyCasedFiles(t *testing.T) {
 		"case-skill/run.py":    {Data: []byte("B")},
 	}
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) { return nil, nil },
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) { return nil, nil },
 	}, fsys)
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -812,13 +968,13 @@ func TestFileSource_Runner_ReceivesScriptMetadata(t *testing.T) {
 	var gotSchema string
 	var gotFS any
 	var hasFSKey bool
-	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, _ *skills.Skill, script *skills.Script, _ []string) (any, error) {
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: func(_ context.Context, _ *skills.Skill, script *skills.Script, _ json.RawMessage) (any, error) {
 		gotSchema = script.ParametersSchema
 		gotFS, hasFSKey = script.AdditionalProperties["fsskills.scriptFS"]
 		return "ok", nil
 	}}, os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -836,7 +992,7 @@ func TestFileSource_Runner_ReceivesScriptMetadata(t *testing.T) {
 func TestFileScript_Run_DelegatesToRunner(t *testing.T) {
 	called := false
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 			called = true
 			return "executed", nil
 		},
@@ -861,7 +1017,13 @@ func TestFileScript_Run_DelegatesToRunner(t *testing.T) {
 func TestFileScript_Run_ForwardsStringArray(t *testing.T) {
 	var captured []string
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, arguments []string) (any, error) {
+		ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, rawScriptArguments json.RawMessage) (any, error) {
+			var arguments []string
+			if len(rawScriptArguments) != 0 {
+				if err := json.Unmarshal(rawScriptArguments, &arguments); err != nil {
+					return nil, err
+				}
+			}
 			captured = arguments
 			return "done", nil
 		},
@@ -875,7 +1037,7 @@ func TestFileScript_Run_ForwardsStringArray(t *testing.T) {
 	}
 	args := []string{"arg1", "arg2", "arg3"}
 
-	if _, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], args); err != nil {
+	if _, err := loaded[0].Scripts[0].Run(t.Context(), loaded[0], scriptJSONArguments(t, args)); err != nil {
 		t.Fatal(err)
 	}
 	if captured == nil || !slices.Equal(captured, args) {
@@ -946,7 +1108,7 @@ func TestFileSource_RunScript_RejectsReplacedSymlinkWithoutCallingRunner(t *test
 	}
 	called := false
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
-		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 			called = true
 			return nil, nil
 		},

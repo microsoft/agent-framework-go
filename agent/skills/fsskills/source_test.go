@@ -25,7 +25,7 @@ type fsWithoutLinkInspection struct {
 func TestFileSource_EmptyPaths_ReturnsEmptyList(t *testing.T) {
 	source := fsskills.NewSource()
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestFileSource_NonExistentPath_ReturnsEmptyList(t *testing.T) {
 	root := t.TempDir()
 	source := fsskills.NewSource(os.DirFS(filepath.Join(root, "does-not-exist")))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestFileSource_NoResourceFiles_ReturnsEmptyResources(t *testing.T) {
 	createSkillDir(t, root, "no-resources", "A skill", "No resources here.")
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestFileSkill_WithoutResources_ContentIncludesEmptyAvailableResourcesBlock(
 	createSkillDir(t, root, "no-resource-content", "A skill", "No resources here.")
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestFileSkill_WithResources_ContentIncludesAvailableResourcesBlock(t *testi
 	const originalRawContent = "---\nname: resource-content\ndescription: A skill\n---\nUse these resources."
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestFileSource_NestedSkillDirectory_DiscoveredWithinDepthLimit(t *testing.T
 	createSkillDir(t, filepath.Join(root, "level1"), "nested-skill", "Nested", "Nested body.")
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestFileSource_RootSkillFileWithNestedSkillFile_DoesNotAbortDiscovery(t *te
 	}
 
 	source := fsskills.NewSource(os.DirFS(root))
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestFileSource_SymlinkedSkillFile_IsSkipped(t *testing.T) {
 	createSymlink(t, filepath.Join(skillDir, "SKILL.md"), outsideSkillFile)
 
 	source := fsskills.NewSource(os.DirFS(root))
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestFileSource_SymlinkedSkillFile_DoesNotAbortNestedDiscovery(t *testing.T)
 	createSkillDir(t, filepath.Dir(nestedSkillDir), "nested-skill", "Nested", "Nested body.")
 
 	source := fsskills.NewSource(os.DirFS(root))
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestFileSource_ConfiguredRootSymlink_StillDiscoversSkills(t *testing.T) {
 	createSymlink(t, linkedRoot, realRoot)
 
 	source := fsskills.NewSource(os.DirFS(linkedRoot))
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -252,7 +252,7 @@ func TestFileSource_NestedSkillFileUnderSkillRoot_NotDiscoveredAsIndependentSkil
 	}
 
 	source := fsskills.NewSource(os.DirFS(root))
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -270,7 +270,7 @@ func TestFileSource_SkillBeyondMaxDepth_NotDiscovered(t *testing.T) {
 	createSkillDir(t, filepath.Join(root, "l1"), "within-depth-skill", "Within depth", "Body.")
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,7 +296,7 @@ func TestFileSource_SearchDepth_DoesNotAffectSkillDirectoryDiscovery(t *testing.
 	// not widen skill-directory discovery, which is bounded independently. Even
 	// a large SearchDepth leaves the deeply-nested skill directory undiscovered.
 	deep := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: new(4)}, os.DirFS(root))
-	loaded, err := deep.Skills(t.Context())
+	loaded, err := deep.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,7 +320,7 @@ func TestFileSource_ReadResource_ValidResource_ReturnsContent(t *testing.T) {
 	}
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +356,7 @@ func TestFileSource_ReadResource_RevalidatesParentDirectoriesBeforeUse(t *testin
 	createSkillDirWithResource(t, filepath.Join(root, "outside", "trusted"), "read-skill", "A skill", "See docs.", "references/doc.md", "outside content")
 
 	source := fsskills.NewSource(os.DirFS(root))
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -381,7 +381,7 @@ func TestFileSource_ReadResource_FailsWithoutLinkInspection(t *testing.T) {
 		"read-skill/references/doc.md": {Data: []byte("content")},
 	}})
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -408,7 +408,7 @@ func TestFileSource_MetadataWithQuotedValues_ParsedCorrectly(t *testing.T) {
 	}, "\n"))
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -437,7 +437,7 @@ func TestFileSource_BlockScalarDescription_ParsesMultilineValue(t *testing.T) {
 	}, "\n"))
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -462,7 +462,7 @@ func TestFileSource_FoldedScalarDescription_ParsesMultilineValue(t *testing.T) {
 	}, "\n"))
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -489,7 +489,7 @@ func TestFileSource_FoldedScalarDescription_PreservesParagraphBreaks(t *testing.
 	}, "\n"))
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,7 +537,7 @@ func TestFileSource_ScalarDescriptionWithChompingIndicator_ParsesValue(t *testin
 			}, "\n"))
 			source := fsskills.NewSource(os.DirFS(root))
 
-			loaded, err := source.Skills(t.Context())
+			loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -568,7 +568,7 @@ func TestFileSource_ParsesOptionalFrontmatterFields(t *testing.T) {
 	}, "\n"))
 
 	source := fsskills.NewSource(os.DirFS(root))
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -604,7 +604,7 @@ func TestFileSource_NoOptionalFields_DefaultZeroValues(t *testing.T) {
 	createSkillDir(t, root, "basic-skill", "A basic skill", "Body.")
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +636,7 @@ func TestFileSource_QuotedFrontmatterPropertyNames_AreParsed(t *testing.T) {
 	}, "\n"))
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -697,7 +697,7 @@ func TestFileSource_AmbiguousFrontmatter_IsRejected(t *testing.T) {
 			createSkillDirRaw(t, root, "ambiguous-skill", strings.Join(lines, "\n"))
 
 			source := fsskills.NewSource(os.DirFS(root))
-			loaded, err := source.Skills(t.Context())
+			loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -721,7 +721,7 @@ func TestFileSource_IndentedValueOnNextLine_IsParsed(t *testing.T) {
 	}, "\n"))
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -796,7 +796,7 @@ func TestFileSource_IndentedBlockScalarOnNextLine_IsFolded(t *testing.T) {
 			createSkillDirRaw(t, root, skillName, strings.Join(lines, tt.newline))
 
 			source := fsskills.NewSource(os.DirFS(root))
-			loaded, err := source.Skills(t.Context())
+			loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -824,7 +824,7 @@ func TestFileSource_EmptyOptionalScalar_RemainsZeroValue(t *testing.T) {
 	}, "\n"))
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -853,7 +853,7 @@ func TestFileSource_DuplicateMetadata_KeepsFirstValue(t *testing.T) {
 	}, "\n"))
 	source := fsskills.NewSource(os.DirFS(root))
 
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -888,7 +888,7 @@ func TestFileSource_ResourcesInSubdirectory_DiscoveredWithDefaultDepth(t *testin
 	}
 
 	source := fsskills.NewSource(os.DirFS(root))
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -958,7 +958,7 @@ func TestFileSource_ResourceFilter_IncludesOnlyMatchingFiles(t *testing.T) {
 					return tt.filter(ctx)
 				},
 			}, os.DirFS(root))
-			loaded, err := source.Skills(t.Context())
+			loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -994,7 +994,7 @@ func TestFileSource_SearchDepth1_DoesNotDiscoverSubdirectoryResources(t *testing
 	}
 
 	source := fsskills.NewSourceOptions(fsskills.SourceOptions{SearchDepth: new(1)}, os.DirFS(root))
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1019,7 +1019,7 @@ func TestFileSource_NoDuplicateResourcesFromSamePath(t *testing.T) {
 	}
 
 	source := fsskills.NewSource(os.DirFS(root))
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1042,7 +1042,7 @@ func TestFileSource_SymlinkedResource_IsSkipped(t *testing.T) {
 	createSymlink(t, filepath.Join(root, "resource-link-skill", "references", "secret.md"), outsideResource)
 
 	source := fsskills.NewSource(os.DirFS(root))
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1127,7 +1127,7 @@ func TestFileSource_MetadataWithBlankLineCRLF_KeepsAllKeys(t *testing.T) {
 	}, "\r\n"))
 
 	source := fsskills.NewSource(os.DirFS(root))
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1153,7 +1153,7 @@ func TestFileSource_MetadataWithBlankLine_KeepsAllKeys(t *testing.T) {
 	}, "\n"))
 
 	source := fsskills.NewSource(os.DirFS(root))
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1171,7 +1171,7 @@ func rawSkillSource(name, content string, opts fsskills.SourceOptions) *fsskills
 
 func loadFileSkills(t *testing.T, source *fsskills.Source) []*skills.Skill {
 	t.Helper()
-	loaded, err := source.Skills(t.Context())
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
 	if err != nil {
 		t.Fatal(err)
 	}

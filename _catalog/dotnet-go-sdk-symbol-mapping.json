@@ -4393,7 +4393,7 @@
         "ToolModeChange_DoesNotInjectNotificationAsync": "agent/harness/agentmode.TestToolModeChange_DoesNotInjectNotification"
       },
       "Microsoft.Agents.AI.UnitTests.AgentSkills.AgentClassSkillTests": {
-        "AgentClassSkill_InvalidFrontmatter_ThrowsArgumentException": null,
+        "AgentClassSkill_InvalidFrontmatter_ThrowsArgumentException": "agent/skills.TestFrontmatter_InvalidUppercaseNameIsRejected",
         "AgentInMemorySkillsSource_ReturnsAllSkillsAsync": "agent/skills.TestInMemorySource_CodeDefinedSkills_ReturnsAll",
         "AttributedFullSkill_IncludesContentWithSchema_AndCachesMembersAsync": null,
         "ConcurrentAccess_ToReflectedResourcesScriptsAndContent_InvokesDiscoveryOnceAsync": null,
@@ -4443,7 +4443,7 @@
         "Content_WithoutResourcesOrScripts_EmitsSelfClosingPeersAsync": "agent/skills/fsskills.TestFileSkill_NoResourcesOrScripts_EmitsBothEmptyPeers",
         "ParametersSchema_ReturnsExpectedArraySchema": "agent/skills/fsskills.TestFileScript_HasDefaultParametersSchema",
         "RunAsync_ForwardsJsonArrayArgumentsToRunnerAsync": "agent/skills/fsskills.TestFileScript_Run_ForwardsStringArray",
-        "RunAsync_ForwardsServiceProviderToRunnerAsync": null,
+        "RunAsync_ForwardsServiceProviderToRunnerAsync": "agent/skills/fsskills.TestFileScript_ForwardsCallContextToRunner",
         "RunAsync_NoRunner_ThrowsInvalidOperationExceptionAsync": "agent/skills/fsskills.TestFileScript_Run_WithoutRunnerReturnsError",
         "RunAsync_RunnerReceivesCorrectArgumentsAsync": null,
         "RunAsync_SkillIsNotAgentFileSkill_ThrowsInvalidOperationExceptionAsync": "agent/skills/fsskills.TestFileScript_RunWithNonFileSkill_ReturnsError",
@@ -4454,7 +4454,7 @@
         "Constructor_NullExecutor_DoesNotThrow": "agent/skills/fsskills.TestFileSource_NullRunner_DoesNotPanic",
         "GetSkillsAsync_CustomScriptExtensions_OnlyDiscoversMatchingAsync": "agent/skills/fsskills.TestFileSource_CustomScriptExtensions_OnlyDiscoversMatching",
         "GetSkillsAsync_DeepScript_DiscoveredWithHigherDepthAsync": "agent/skills/fsskills.TestFileSource_ScriptAtConfigurableDepth_DiscoversWithSearchDepth",
-        "GetSkillsAsync_ExecutorReceivesArgumentsAsync": null,
+        "GetSkillsAsync_ExecutorReceivesArgumentsAsync": "agent/skills/fsskills.TestFileSource_RunnerReceivesObjectArguments",
         "GetSkillsAsync_NoScriptFiles_ReturnsEmptyScriptsAsync": "agent/skills/fsskills.TestFileSource_NoScriptFiles_ReturnsEmptyScripts",
         "GetSkillsAsync_NonScriptExtensionsAreNotDiscoveredAsync": "agent/skills/fsskills.TestFileSource_NonScriptExtensionsAreNotDiscovered",
         "GetSkillsAsync_ScriptFilter_ExcludesFilteredScriptsAsync": "agent/skills/fsskills.TestFileSource_ScriptFilter_IncludesOnlyMatchingScripts",
@@ -4576,16 +4576,16 @@
         "Scripts_WhenNoneAdded_ReturnsNullAsync": "agent/skills.TestProvidedInlineSkill_WithoutAddedScripts_ReturnsNotFound"
       },
       "Microsoft.Agents.AI.UnitTests.AgentSkills.AgentSkillFrontmatterValidatorTests": {
-        "Compatibility_ExceedsMaxLength_ThrowsArgumentException": null,
-        "Compatibility_Null_Succeeds": null,
-        "Compatibility_WithinMaxLength_Succeeds": null,
-        "Constructor_CompatibilityExceedsMaxLength_ThrowsArgumentException": null,
-        "Constructor_DescriptionExceedsMaxLength_ThrowsArgumentException": null,
-        "Constructor_InvalidName_ThrowsArgumentException": null,
-        "Constructor_NameExceedsMaxLength_ThrowsArgumentException": null,
-        "Constructor_NullOrWhitespaceDescription_ThrowsArgumentException": null,
-        "Constructor_NullOrWhitespaceName_ThrowsArgumentException": null,
-        "Constructor_WithCompatibility_SetsValue": null,
+        "Compatibility_ExceedsMaxLength_ThrowsArgumentException": "agent/skills.TestFrontmatter_CompatibilityAssignmentRejectsLongValue",
+        "Compatibility_Null_Succeeds": "agent/skills.TestFrontmatter_CompatibilityAssignmentAcceptsAbsentValue",
+        "Compatibility_WithinMaxLength_Succeeds": "agent/skills.TestFrontmatter_CompatibilityAssignmentAcceptsMaxLength",
+        "Constructor_CompatibilityExceedsMaxLength_ThrowsArgumentException": "agent/skills.TestFrontmatter_ConstructionRejectsLongCompatibility",
+        "Constructor_DescriptionExceedsMaxLength_ThrowsArgumentException": "agent/skills.TestFrontmatter_ConstructionRejectsLongDescription",
+        "Constructor_InvalidName_ThrowsArgumentException": "agent/skills.TestFrontmatter_ConstructionRejectsInvalidName",
+        "Constructor_NameExceedsMaxLength_ThrowsArgumentException": "agent/skills.TestFrontmatter_ConstructionRejectsLongName",
+        "Constructor_NullOrWhitespaceDescription_ThrowsArgumentException": "agent/skills.TestFrontmatter_ConstructionRejectsBlankDescription",
+        "Constructor_NullOrWhitespaceName_ThrowsArgumentException": "agent/skills.TestFrontmatter_ConstructionRejectsBlankName",
+        "Constructor_WithCompatibility_SetsValue": "agent/skills.TestFrontmatter_ConstructionSetsCompatibility",
         "ValidateCompatibility_ExceedsMaxLength_ReturnsFalse": "agent/skills.TestValidateCompatibility_ExceedsMaxLength_ReturnsError",
         "ValidateCompatibility_Null_ReturnsTrue": "agent/skills.TestValidateCompatibility_Unset_ReturnsNil",
         "ValidateCompatibility_WithinMaxLength_ReturnsTrue": "agent/skills.TestValidateCompatibility_WithinMaxLength_ReturnsNil",
@@ -4629,7 +4629,7 @@
         "Build_WithCachingEnabled_CachesSkillsAsync": "agent/skills.TestProvider_BuildWithCaching_CallsSourceOnce",
         "Build_WithFileSkillsButNoExecutor_ThrowsInvalidOperationException": null,
         "Builder_UseFileScriptRunnerAfterUseFileSkills_RunnerIsUsedAsync": null,
-        "Builder_UseFileSkillWithOptionsResourceFilter_FiltersResourcesAsync": null,
+        "Builder_UseFileSkillWithOptionsResourceFilter_FiltersResourcesAsync": "agent/skills.TestProvider_FileSourceOptionsFilterResourceExtensions",
         "Builder_UseFileSkillWithOptions_DiscoverSkillsAsync": "agent/skills.TestProvider_FromFileSourceWithOptions_DiscoversSkills",
         "Builder_UseFileSkillsWithOptions_DiscoverMultipleSkillsAsync": "agent/skills.TestProvider_FromFileSourceWithMultipleFileSystems_DiscoversMultipleSkills",
         "Constructor_ClassSkillsEnumerable_ProvidesSkillsAsync": "agent/skills.TestProvider_CodeDefinedSkillSlice_ProvidesBothSkills",
@@ -4644,10 +4644,10 @@
         "Constructor_PromptWithoutSkillsPlaceholder_ThrowsArgumentException": "agent/skills.TestProvider_CustomPromptTemplate_MissingSkillsPlaceholderPanics",
         "Constructor_SingleDirectory_DiscoverFileSkillsAsync": "agent/skills.TestProvider_SingleFileDirectory_ProvidesSkillsAndLoadTool",
         "Constructor_WithMultiplePaths_LoadsFromAllAsync": "agent/skills.TestProvider_MultiplePaths",
-        "Dispose_BuilderBuiltProvider_DisposesSourcePipeline": null,
-        "Dispose_DefaultOwnership_DoesNotDisposeProvidedSource": null,
-        "Dispose_WhenOwningProvidedSource_DisposesSource": null,
-        "Dispose_WhenOwningProvidedSource_IsIdempotent": null,
+        "Dispose_BuilderBuiltProvider_DisposesSourcePipeline": "agent/skills.TestProvider_ConfiguredPipelineClosesOwnedSource",
+        "Dispose_DefaultOwnership_DoesNotDisposeProvidedSource": "agent/skills.TestProvider_Close_DefaultOwnershipDoesNotCloseSources",
+        "Dispose_WhenOwningProvidedSource_DisposesSource": "agent/skills.TestProvider_Close_OwnedSourcesClosedOnce",
+        "Dispose_WhenOwningProvidedSource_IsIdempotent": "agent/skills.TestProvider_Close_OwnedSourceCloseIsIdempotent",
         "InvokingCoreAsync_CustomPromptTemplate_UsesCustomTemplateAsync": "agent/skills.TestProvider_CustomPromptTemplate",
         "InvokingCoreAsync_CustomTemplateWithLegacyPlaceholders_RendersThemLiterallyAsync": "agent/skills.TestProvider_FileSource_LegacyPlaceholdersRemainLiteral",
         "InvokingCoreAsync_DisableAllApprovals_NoToolsWrappedAsync": "agent/skills.TestProvider_DisableAllApprovals_UnwrapsAllTools",
@@ -4657,8 +4657,8 @@
         "InvokingCoreAsync_MultipleInvocations_SourceIsCalledOnceWhenCachedAsync": "agent/skills.TestProvider_CachedInvocations_ReturnToolsAndLoadSourceOnce",
         "InvokingCoreAsync_NoSkills_ReturnsInputContextUnchangedAsync": "agent/skills.TestProvider_EmptyFileSource_PreservesInputInstructions",
         "InvokingCoreAsync_NullInputInstructions_SetsInstructionsAsync": "agent/skills.TestDiscovery_ValidSkill",
-        "InvokingCoreAsync_NullSession_PassesNullSessionToSourceContextAsync": null,
-        "InvokingCoreAsync_PassesAgentAndSessionToSourceContextAsync": null,
+        "InvokingCoreAsync_NullSession_PassesNullSessionToSourceContextAsync": "agent/skills.TestProvider_SourceReceivesNilSessionWithoutSessionOption",
+        "InvokingCoreAsync_PassesAgentAndSessionToSourceContextAsync": "agent/skills.TestProvider_SourceReceivesRunAgentAndSession",
         "InvokingCoreAsync_PreservesExistingInputToolsAsync": "agent/skills.TestProvider_FileSkills_PreservesExistingInputTools",
         "InvokingCoreAsync_SkillNamesAreXmlEscapedAsync": "agent/skills.TestProvider_SkillNamesAreXmlEscaped",
         "InvokingCoreAsync_SkillsListIsSortedByNameAsync": "agent/skills.TestProvider_SkillsListIsSortedByName",
@@ -4675,21 +4675,21 @@
         "ReadSkillResource_EmptyResourceName_ReturnsErrorAsync": "agent/skills.TestProvider_ReadResource_EmptyResourceNameReturnsError",
         "ReadSkillResource_EmptySkillName_ReturnsErrorAsync": "agent/skills.TestProvider_ReadResource_EmptySkillNameReturnsError",
         "ReadSkillResource_ResourceNotFound_ReturnsErrorAsync": "agent/skills.TestProvider_SkillMemberLookupErrors",
-        "ReadSkillResource_ResourceThrows_PropagatesExceptionAsync": null,
+        "ReadSkillResource_ResourceThrows_PropagatesExceptionAsync": "agent/skills.TestProvider_ReadResourcePropagatesReaderError",
         "ReadSkillResource_ReturnsResourceContentAsync": "agent/skills.TestProvider_ReadInlineResource_ReturnsContent",
         "ReadSkillResource_SkillNotFound_ReturnsErrorAsync": "agent/skills.TestProvider_ReadResource_MissingSkillReturnsError",
         "RunSkillScript_EmptyScriptName_ReturnsErrorAsync": "agent/skills.TestProvider_RunScript_EmptyScriptNameReturnsError",
         "RunSkillScript_EmptySkillName_ReturnsErrorAsync": "agent/skills.TestProvider_RunScript_EmptySkillNameReturnsError",
-        "RunSkillScript_ForwardsJsonArgumentsAndServiceProviderToRunnerAsync": null,
+        "RunSkillScript_ForwardsJsonArgumentsAndServiceProviderToRunnerAsync": "agent/skills.TestProvider_RunScriptForwardsJSONAndCallContext",
         "RunSkillScript_ScriptNotFound_ReturnsErrorAsync": "agent/skills.TestProvider_RunScript_MissingScriptReturnsError",
         "RunSkillScript_ScriptThrows_IncludesDetailsWhenEnabledAsync": "agent/skills.TestProvider_RunSkillScript_IncludesDetailsWhenEnabled",
         "RunSkillScript_ScriptThrows_PropagatesExceptionByDefaultAsync": "agent/skills.TestProvider_RunSkillScript_PropagatesErrorByDefault",
         "RunSkillScript_SkillNotFound_ReturnsErrorAsync": "agent/skills.TestProvider_RunScript_MissingSkillReturnsError"
       },
       "Microsoft.Agents.AI.UnitTests.AgentSkills.CachingAgentSkillsSourceTests": {
-        "Dispose_DisposesInnerSource": null,
-        "Dispose_IsIdempotentAsync": null,
-        "GetSkillsAsync_AfterDispose_ThrowsObjectDisposedExceptionAsync": null,
+        "Dispose_DisposesInnerSource": "agent/skills.TestProvider_Cache_CloseDisposesInnerSource",
+        "Dispose_IsIdempotentAsync": "agent/skills.TestProvider_Cache_CloseIsIdempotentAfterLoad",
+        "GetSkillsAsync_AfterDispose_ThrowsObjectDisposedExceptionAsync": "agent/skills.TestProvider_Cache_LoadAfterCloseReturnsClosedError",
         "GetSkillsAsync_AllCallersCancel_InnerSourceIsCancelledAsync": "agent/skills.TestProvider_Cache_AllCallersCancel_CancelsSource",
         "GetSkillsAsync_CancelledCaller_DoesNotPoisonSubsequentCallAsync": "agent/skills.TestProvider_Cache_CanceledFetchDoesNotPoisonNextCall",
         "GetSkillsAsync_ConcurrentInvocations_CallsInnerSourceOnceAsync": "agent/skills.TestProvider_Cache_ConcurrentInvocations_LoadOnceAndShareTools",
@@ -4793,10 +4793,10 @@
       },
       "Microsoft.Agents.AI.UnitTests.AgentSkills.FilteringAgentSkillsSourceTests": {
         "Constructor_NullInnerSource_Throws": "agent/skills.TestProvider_Filter_NilSourcePanics",
-        "Constructor_NullPredicate_Throws": null,
+        "Constructor_NullPredicate_Throws": "agent/skills.TestFilteringSource_NilPredicatePanics",
         "GetSkillsAsync_EmptySource_ReturnsEmptyAsync": "agent/skills.TestProvider_Filter_EmptySourceReturnsEmptyContext",
         "GetSkillsAsync_PartialFilter_ReturnsMatchingSkillsOnlyAsync": "agent/skills.TestProvider_Filter_ReturnsOnlyMatchingSkills",
-        "GetSkillsAsync_PassesContextToPredicateAsync": null,
+        "GetSkillsAsync_PassesContextToPredicateAsync": "agent/skills.TestProvider_FilterWithContextReceivesInvocationSession",
         "GetSkillsAsync_PredicateExcludesAll_ReturnsEmptyAsync": "agent/skills.TestProvider_Filter_ExcludingAllReturnsEmptyContext",
         "GetSkillsAsync_PredicateIncludesAll_ReturnsAllSkillsAsync": "agent/skills.TestProvider_Filter_IncludingAllPreservesBothSkills",
         "GetSkillsAsync_PreservesOrderAsync": "agent/skills.TestProvider_Filter_PreservesMatchingOrder"
@@ -9322,7 +9322,7 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "found, _ := source.Skills(ctx); fsskills.FSFromSkill(found[0])",
+          "go": "found, _ := source.Skills(ctx, sourceContext); fsskills.FSFromSkill(found[0])",
           "go_symbols": [
             "agent/skills.Skill",
             "agent/skills/fsskills.FSFromSkill",
@@ -9403,7 +9403,7 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "found, _ := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: runner}, root).Skills(ctx); _ = found[0].Scripts",
+          "go": "found, _ := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: runner}, root).Skills(ctx, sourceContext); _ = found[0].Scripts",
           "go_symbols": [
             "agent/skills.Script",
             "agent/skills/fsskills.SourceOptions.ScriptRunner"
@@ -9426,13 +9426,13 @@
         },
         "methods": {
           "RunAsync(AgentSkill, JsonElement?, IServiceProvider, CancellationToken) -> Task<object>": {
-            "go": "script.Run(ctx, skill, []string{\"--help\"})",
+            "go": "script.Run(ctx, skill, json.RawMessage(`[\"--help\"]`))",
             "go_symbols": [
               "agent/skills.Script.Run",
               "agent/skills/fsskills.SourceOptions.ScriptRunner"
             ],
             "status": "adapted",
-            "note": "For the advertised file-script string-array schema, call Run with context, the owning file-backed Skill, and []string. Execution requires the configured runner; dependencies are captured rather than passed through IServiceProvider."
+            "note": "Run forwards raw JSON to the configured ScriptRunner after revalidating the file owner and path. Runner metadata includes the backing filesystem; application dependencies are captured instead of passed through IServiceProvider."
           }
         }
       },
@@ -9446,7 +9446,7 @@
             "agent/skills.ScriptRunner"
           ],
           "status": "adapted",
-          "note": "Public delegate becomes a named function type over shared Skill/Script values, positional []string arguments, and context.Context. Dependencies are captured; the C# declaration is not a runner class with public methods."
+          "note": "Public delegate becomes ScriptRunner over shared Skill/Script values, raw JSON arguments, and context.Context. Dependencies are captured; the C# declaration is not a runner class with public methods."
         },
         "methods": {
           "BeginInvoke(AgentFileSkill, AgentFileSkillScript, JsonElement?, IServiceProvider, CancellationToken, AsyncCallback, object) -> IAsyncResult": {
@@ -9464,10 +9464,11 @@
           "Invoke(AgentFileSkill, AgentFileSkillScript, JsonElement?, IServiceProvider, CancellationToken) -> Task<object>": {
             "go": "runner(ctx, skill, script, arguments)",
             "go_symbols": [
-              "agent/skills.ScriptRunner"
+              "agent/skills.ScriptRunner",
+              "agent/skills/fsskills.SourceOptions.ScriptRunner"
             ],
-            "status": "partial",
-            "note": "Go invokes ScriptRunner directly and returns (any, error); it accepts positional []string arguments, not arbitrary raw JSON, and has no IServiceProvider parameter."
+            "status": "adapted",
+            "note": "Invoke ScriptRunner with json.RawMessage arguments, context, the owning skill, and script metadata. It returns (any, error); application dependencies are captured by the callback."
           }
         },
         "constructors": {
@@ -9494,7 +9495,7 @@
         },
         "methods": {
           "GetSkillsAsync(AgentSkillsSourceContext, CancellationToken) -> Task<IList<AgentSkill>>": {
-            "go": "source.Skills(ctx)",
+            "go": "source.Skills(ctx, sourceContext)",
             "go_symbols": [
               "agent/skills/fsskills.Source.Skills"
             ],
@@ -9658,7 +9659,7 @@
         },
         "methods": {
           "GetSkillsAsync(AgentSkillsSourceContext, CancellationToken) -> Task<IList<AgentSkill>>": {
-            "go": "source.Skills(ctx)",
+            "go": "source.Skills(ctx, sourceContext)",
             "go_symbols": [
               "agent/skills.Source.Skills",
               "agent/skills.NewInMemorySource"
@@ -9719,14 +9720,14 @@
             "note": "Append a Resource whose Read callback returns the captured value. Name and Description are fields; captured reference values are not automatically copied."
           },
           "AddScript(string, Delegate, string, JsonSerializerOptions) -> AgentInlineSkill": {
-            "go": "skill.Scripts = append(skill.Scripts, skills.Script{Name: \"echo\", ParametersSchema: `{\"type\":\"array\",\"items\":{\"type\":\"string\"}}`, Run: func(_ context.Context, _ *skills.Skill, args []string) (any, error) { return args, nil }})",
+            "go": "skill.Scripts = append(skill.Scripts, skills.Script{Name: \"echo\", ParametersSchema: `{\"type\":\"array\",\"items\":{\"type\":\"string\"}}`, Run: func(_ context.Context, _ *skills.Skill, args json.RawMessage) (any, error) { return args, nil }})",
             "go_symbols": [
               "agent/skills.Skill.Scripts",
               "agent/skills.Script.Run",
               "agent/skills.Script.ParametersSchema"
             ],
-            "status": "partial",
-            "note": "Register Script callbacks and schema explicitly. The built-in Go skill tool passes []string arguments, while inline .NET scripts default to named JSON-object arguments and support a custom JsonElement marshaler."
+            "status": "adapted",
+            "note": "Append a Script with an explicit JSON Run callback and argument schema. The callback decodes named arguments into a Go input type or supplies custom decoding; there is no reflected delegate binding or JsonSerializerOptions field."
           },
           "GetContentAsync(CancellationToken) -> ValueTask<string>": {
             "go": "skill.GetContent(ctx)",
@@ -10989,7 +10990,7 @@
               "agent/skills.Frontmatter.Compatibility"
             ],
             "status": "partial",
-            "note": "Validate checks compatibility as part of the entire frontmatter and returns an error; earlier name/description failures take precedence. The 500-length limit counts UTF-8 bytes in Go, not UTF-16 code units, so non-ASCII inputs can be rejected earlier."
+            "note": "Validate checks compatibility as part of the entire frontmatter and returns an error; earlier name/description failures take precedence. The 500-length limit counts UTF-16 code units."
           },
           "ValidateDescription(string, out string) -> bool": {
             "go": "frontmatter.Validate()",
@@ -10998,7 +10999,7 @@
               "agent/skills.Frontmatter.Description"
             ],
             "status": "partial",
-            "note": "Validate also checks name and compatibility rather than exposing an independent description validator. The 1024-length limit counts UTF-8 bytes in Go, not UTF-16 code units, so non-ASCII inputs can be rejected earlier."
+            "note": "Validate also checks name and compatibility rather than exposing an independent description validator. The 1024-length limit counts UTF-16 code units."
           },
           "ValidateName(string, out string) -> bool": {
             "go": "frontmatter.Validate()",
@@ -11098,7 +11099,7 @@
             "agent/skills.Script"
           ],
           "status": "adapted",
-          "note": "Abstract script becomes metadata and a Run callback on a Go struct; argument-shape limitations are recorded on RunAsync."
+          "note": "Abstract script becomes metadata and one Run callback on a Go struct. The callback accepts arbitrary JSON arguments and returns a Go value/error."
         },
         "properties": {
           "Description": {
@@ -11122,12 +11123,12 @@
         },
         "methods": {
           "RunAsync(AgentSkill, JsonElement?, IServiceProvider, CancellationToken) -> Task<object>": {
-            "go": "script.Run(ctx, skill, []string{\"hello\"})",
+            "go": "script.Run(ctx, skill, arguments)",
             "go_symbols": [
               "agent/skills.Script.Run"
             ],
-            "status": "partial",
-            "note": "Go Run accepts positional []string arguments, not arbitrary JsonElement values such as objects. It receives context and the owning Skill; dependencies are captured rather than passed through IServiceProvider."
+            "status": "adapted",
+            "note": "Run accepts arbitrary json.RawMessage values, including objects, and receives context and the owning Skill. The callback decodes or custom-marshals its input and captures dependencies instead of using IServiceProvider."
           }
         }
       },
@@ -11169,11 +11170,12 @@
           "go": "skills.NewContextProvider(skills.ContextProviderOptions{})",
           "go_symbols": [
             "agent/skills.NewContextProvider",
+            "agent/skills.ContextProvider",
             "agent.ContextProvider",
             "agent/skills.ContextProviderOptions"
           ],
           "status": "adapted",
-          "note": "A factory returns the shared context-provider interface with integrated source aggregation, caching, and deduplication rather than a concrete provider class."
+          "note": "A concrete ContextProvider implements agent.ContextProvider by composing AggregatingSource, CachingSource, FilteringSource, and DeduplicatingSource. Tools and instructions are assembled per invocation; leaf-source ownership is opt-in through OwnsSources."
         },
         "properties": {
           "AllToolsAutoApprovalRule": {
@@ -11193,10 +11195,13 @@
         },
         "methods": {
           "Dispose() -> void": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "note": "Go ContextProvider and skills.Source expose no disposal contract; the factory does not take ownership of sources or close their resources."
+            "go": "provider.Close()",
+            "go_symbols": [
+              "agent/skills.ContextProvider.Close",
+              "agent/skills.ContextProviderOptions.OwnsSources"
+            ],
+            "status": "adapted",
+            "note": "Close is idempotent and closes sources implementing io.Closer only when OwnsSources is true. Borrowed sources remain caller-owned, and cleanup errors are returned."
           }
         },
         "constructors": {
@@ -11207,16 +11212,17 @@
               "agent/skills.ContextProviderOptions.Skills"
             ],
             "status": "adapted",
-            "note": "Supply the skill slice in value options; provider-integrated caching and first-name-wins deduplication replace constructor-created source decorators."
+            "note": "Supply the skill slice in value options. The provider composes reusable source decorators with caching and first-name-wins deduplication enabled by default."
           },
           "AgentSkillsProvider(AgentSkillsSource, AgentSkillsProviderOptions, ILoggerFactory, bool)": {
-            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, Logger: logger})",
+            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, Logger: logger, OwnsSources: ownsSource})",
             "go_symbols": [
               "agent/skills.NewContextProvider",
-              "agent/skills.ContextProviderOptions.Sources"
+              "agent/skills.ContextProviderOptions.Sources",
+              "agent/skills.ContextProviderOptions.OwnsSources"
             ],
             "status": "adapted",
-            "note": "Factory returns agent.ContextProvider; sources and logging move into options. Source cleanup remains caller-owned rather than controlled by an ownsSource argument."
+            "note": "The constructor returns *skills.ContextProvider with Close. Sources, logging, and the ownership flag move into constructor options; source ownership defaults to false."
           },
           "AgentSkillsProvider(IEnumerable<AgentSkill>, AgentSkillsProviderOptions, ILoggerFactory)": {
             "go": "skills.NewContextProvider(skills.ContextProviderOptions{Skills: registeredSkills, Logger: logger})",
@@ -11237,7 +11243,7 @@
               "agent/skills.ContextProviderOptions.Sources"
             ],
             "status": "adapted",
-            "note": "Compose file discovery over fs.FS roots with a skills provider; file options hold the runner/logger and provider options hold runtime settings. Go runners accept positional string arguments, not arbitrary JSON."
+            "note": "Compose file discovery over fs.FS roots with a skills provider; file options hold the raw-JSON ScriptRunner and logger, while provider options hold runtime settings."
           },
           "AgentSkillsProvider(string, AgentFileSkillScriptRunner, AgentFileSkillsSourceOptions, AgentSkillsProviderOptions, ILoggerFactory)": {
             "go": "source := fsskills.NewSourceOptions(fileOptions, filesystem); skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, Logger: logger})",
@@ -11248,7 +11254,7 @@
               "agent/skills.ContextProviderOptions.Sources"
             ],
             "status": "adapted",
-            "note": "Create a file source from one fs.FS root and register it in provider options; runner/discovery settings and provider settings are configured separately, with positional string runner arguments."
+            "note": "Create a file source from one fs.FS root and register it in provider options; runner/discovery settings and provider settings are configured separately. File runners receive raw JSON and may decode positional string arrays."
           }
         },
         "constants": {
@@ -11283,17 +11289,18 @@
             "agent/skills/fsskills.NewSourceOptions"
           ],
           "status": "adapted",
-          "note": "Compose source factories and value options instead of a fluent builder; caching, filtering, and deduplication are integrated provider settings."
+          "note": "Use source factories and value options instead of a fluent builder. NewContextProvider composes the reusable aggregate, cache, filter, and deduplication sources."
         },
         "methods": {
           "Build() -> AgentSkillsProvider": {
-            "go": "skills.NewContextProvider(options)",
+            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: sources, OwnsSources: true})",
             "go_symbols": [
               "agent/skills.NewContextProvider",
-              "agent/skills.ContextProviderOptions"
+              "agent/skills.ContextProviderOptions",
+              "agent/skills.ContextProviderOptions.OwnsSources"
             ],
             "status": "adapted",
-            "note": "Construct directly from value options. Source order is retained, but Go caches the built instructions/tools after filtering; the .NET builder caches the source list before filtering. Source cleanup stays with the caller in Go."
+            "note": "Construct from value options. The source pipeline aggregates, optionally caches, filters, then deduplicates; tools and instructions are assembled per invocation. OwnsSources=true transfers leaf-source cleanup to the concrete provider's Close."
           },
           "DisableCaching() -> AgentSkillsProviderBuilder": {
             "go": "skills.ContextProviderOptions{DisableCaching: true}",
@@ -11317,7 +11324,7 @@
               "agent/skills/fsskills.SourceOptions.ScriptRunner"
             ],
             "status": "adapted",
-            "note": "Set a runner on each filesystem source rather than a builder-wide fallback. Go allows nil during discovery and reports an error if a discovered script is executed without a runner."
+            "note": "Set a raw-JSON ScriptRunner on each filesystem source rather than a builder-wide fallback. Nil runners permit discovery but fail explicitly on execution."
           },
           "UseFileSkill(string, AgentFileSkillsSourceOptions, AgentFileSkillScriptRunner) -> AgentSkillsProviderBuilder": {
             "go": "source := fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: runner}, root); options.Sources = append(options.Sources, source)",
@@ -11340,13 +11347,14 @@
             "note": "Pass filesystem roots to NewSourceOptions and register the result in source order. The root slice is copied, not the filesystems; a nil runner permits discovery but not successful script execution."
           },
           "UseFilter(Func<AgentSkill, AgentSkillsSourceContext, bool>) -> AgentSkillsProviderBuilder": {
-            "go": "skills.ContextProviderOptions{DisableCaching: true, SkillFilter: func(skill *skills.Skill) bool { return skill.Frontmatter.Name == \"writing\" }}",
+            "go": "skills.ContextProviderOptions{SkillFilter: filter}",
             "go_symbols": [
               "agent/skills.ContextProviderOptions.SkillFilter",
-              "agent/skills.ContextProviderOptions.DisableCaching"
+              "agent/skills.SourceContext.Session",
+              "agent.AgentFromContext"
             ],
-            "status": "partial",
-            "note": "SkillFilter receives only *Skill, not agent/session context, and is evaluated while building cached provider context. DisableCaching restores per-invocation evaluation but does not add the missing context parameter."
+            "status": "adapted",
+            "note": "SkillFilter receives context.Context, the skill, and explicit SourceContext agent/session identity. It runs after source caching on every invocation and before deduplication."
           },
           "UseLoggerFactory(ILoggerFactory) -> AgentSkillsProviderBuilder": {
             "go": "source := fsskills.NewSourceOptions(fsskills.SourceOptions{Logger: logger}, root); skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, Logger: logger})",
@@ -11405,7 +11413,7 @@
               "agent/skills.ContextProviderOptions.Sources"
             ],
             "status": "adapted",
-            "note": "Append the Source directly. NewContextProvider copies the source collection, retains the source objects, and does not close them; cleanup remains caller-owned."
+            "note": "Append the Source directly. NewContextProvider copies the registration slice and retains the source objects. Set OwnsSources to transfer cleanup of sources implementing io.Closer to the provider."
           },
           "UseSource(Func<ILoggerFactory, AgentSkillsSource>) -> AgentSkillsProviderBuilder": {
             "go": "source := factory(logger); skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, Logger: logger})",
@@ -11414,7 +11422,7 @@
               "agent/skills.NewContextProvider"
             ],
             "status": "adapted",
-            "note": "Evaluate the source factory explicitly using caller-owned dependencies before NewContextProvider, then register its result. Go has no deferred logger-factory callback or automatic source disposal."
+            "note": "Evaluate the source factory explicitly using captured dependencies before NewContextProvider, then register its result. Go has no deferred logger-factory callback; OwnsSources optionally transfers source cleanup to the provider."
           }
         },
         "constructors": {
@@ -11490,22 +11498,32 @@
             "agent/skills.Source"
           ],
           "status": "adapted",
-          "note": "Abstract disposable source becomes the Skills interface; the Go interface exposes neither disposal nor a source-context object. The session-context gap is recorded on GetSkillsAsync."
+          "note": "Abstract source becomes the Skills interface with an explicit SourceContext argument. Sources may additionally implement io.Closer; the provider borrows them by default or closes them when OwnsSources is set."
         },
         "methods": {
           "Dispose() -> void": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "note": "Go Source only defines Skills(context.Context); there is no source disposal interface or automatic decorator-chain cleanup."
+            "go": "var source skills.Source; if closer, ok := source.(io.Closer); ok { closer.Close() }",
+            "go_symbols": [
+              "agent/skills.Source",
+              "agent/skills.AggregatingSource.Close",
+              "agent/skills.CachingSource.Close",
+              "agent/skills.FilteringSource.Close",
+              "agent/skills.DeduplicatingSource.Close",
+              "agent/skills.ContextProviderOptions.OwnsSources"
+            ],
+            "status": "adapted",
+            "note": "Source cleanup uses optional io.Closer rather than requiring it on every Source. Reusable aggregate/cache/filter/deduplication sources own and idempotently close their inner closers. A provider closes registered leaf sources only with OwnsSources."
           },
           "GetSkillsAsync(AgentSkillsSourceContext, CancellationToken) -> Task<IList<AgentSkill>>": {
-            "go": "source.Skills(ctx)",
+            "go": "source.Skills(ctx, sourceContext)",
             "go_symbols": [
-              "agent/skills.Source.Skills"
+              "agent/skills.Source.Skills",
+              "agent/skills.SourceContext",
+              "agent/skills.SourceContext.Session",
+              "agent/skills.SourceContext.Agent"
             ],
-            "status": "partial",
-            "note": "Skill enumeration corresponds, but the Go skills provider does not supply the invoking session to Source.Skills; .NET supplies it in AgentSkillsSourceContext."
+            "status": "adapted",
+            "note": "The provider passes cancellation through context.Context and initiating agent/session identity through the explicit SourceContext argument."
           }
         }
       },
@@ -11513,35 +11531,35 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "agent.AgentFromContext(ctx)",
+          "go": "skills.SourceContext{Agent: a, Session: session}",
           "go_symbols": [
-            "agent.AgentFromContext",
-            "agent/skills.Source.Skills"
+            "agent/skills.SourceContext"
           ],
-          "status": "partial",
-          "note": "Source.Skills receives context.Context and can read the initiating agent during Agent.Run, but receives no explicit agent/session context and cannot retrieve the run's session."
+          "status": "adapted",
+          "note": "SourceContext is a Go value with Agent and Session fields, passed explicitly to sources and filters on every invocation. Cancellation uses a separate context.Context."
         },
         "properties": {
           "Agent": {
             "go_symbols": [
-              "agent.AgentFromContext",
-              "agent/skills.Source.Skills"
+              "agent/skills.SourceContext.Agent"
             ],
-            "status": "adapted",
-            "note": "A source called by the skills provider during Agent.Run can obtain agent identity from its context.Context. Direct Skills calls need not contain an agent."
+            "status": "mapped"
           },
           "Session": {
-            "go_symbols": [],
-            "status": "unmapped",
-            "note": "The built-in skills provider calls Source.Skills(ctx) without passing InvokingContext.Options. No session-from-context accessor or session-bearing skills-source argument was found; the run session is not supplied to sources."
+            "go_symbols": [
+              "agent/skills.SourceContext.Session"
+            ],
+            "status": "mapped"
           }
         },
         "constructors": {
           "AgentSkillsSourceContext(AIAgent, AgentSession)": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "note": "Go has no source-context constructor binding an agent and optional session; the built-in provider passes only context.Context to Source.Skills."
+            "go": "skills.SourceContext{Agent: a, Session: session}",
+            "go_symbols": [
+              "agent/skills.SourceContext"
+            ],
+            "status": "adapted",
+            "note": "Use a value literal rather than a constructor. Session may be nil; Agent is supplied during Agent.Run and may be nil for direct provider/source calls."
           }
         }
       },
@@ -11549,37 +11567,31 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{first, second}})",
+          "go": "skills.NewAggregatingSource(first, second)",
           "go_symbols": [
-            "agent/skills.ContextProviderOptions.Sources",
-            "agent/skills.NewContextProvider"
+            "agent/skills.AggregatingSource",
+            "agent/skills.NewAggregatingSource"
           ],
-          "status": "adapted",
-          "note": "Aggregation is integrated into provider context loading: sources load sequentially in slice order and the first error aborts loading. This is not a standalone Source decorator, and Go does not dispose the supplied sources."
+          "status": "mapped"
         },
         "methods": {
           "GetSkillsAsync(AgentSkillsSourceContext, CancellationToken) -> Task<IList<AgentSkill>>": {
-            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: sources, DisableCaching: true, DisableSourceDeduplication: true}).Invoking(ctx, invoking)",
+            "go": "source.Skills(ctx, sourceContext)",
             "go_symbols": [
-              "agent/skills.NewContextProvider",
-              "agent/skills.ContextProviderOptions.Sources",
-              "agent.ContextProvider.Invoking"
+              "agent/skills.AggregatingSource.Skills"
             ],
-            "status": "partial",
-            "note": "The provider loads sources sequentially in registration order; disabling caching and deduplication preserves repeated aggregation. Its public result is context messages/options, not an aggregated skill list or agent/session-bearing source call."
+            "status": "mapped"
           }
         },
         "constructors": {
           "AggregatingAgentSkillsSource(IEnumerable<AgentSkillsSource>)": {
-            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: sources, DisableCaching: true, DisableSourceDeduplication: true})",
+            "go": "skills.NewAggregatingSource(sources...)",
             "go_symbols": [
-              "agent/skills.NewContextProvider",
-              "agent/skills.ContextProviderOptions.Sources",
-              "agent/skills.ContextProviderOptions.DisableSourceDeduplication",
-              "agent/skills.ContextProviderOptions.DisableCaching"
+              "agent/skills.NewAggregatingSource",
+              "agent/skills.AggregatingSource.Close"
             ],
-            "status": "partial",
-            "note": "Source aggregation is integrated into a context provider, not a reusable Source decorator returning a skill list or owning/disposal-managing its child sources."
+            "status": "adapted",
+            "note": "The variadic constructor copies the registration slice. Close owns children implementing io.Closer, remains idempotent and preserves cleanup errors."
           }
         }
       },
@@ -11856,37 +11868,32 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})",
+          "go": "skills.NewCachingSource(source, skills.CachingSourceConfig{})",
           "go_symbols": [
-            "agent/skills.NewContextProvider",
-            "agent/skills.ContextProviderOptions.DisableCaching"
+            "agent/skills.CachingSource",
+            "agent/skills.NewCachingSource"
           ],
-          "status": "partial",
-          "note": "Go defaults to one non-expiring provider-wide cache of post-filter instructions/tools and retries failed loads. There is no isolation-key selector or refresh interval, and no standalone caching Source wrapper."
+          "status": "mapped"
         },
         "methods": {
           "GetSkillsAsync(AgentSkillsSourceContext, CancellationToken) -> Task<IList<AgentSkill>>": {
-            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}}).Invoking(ctx, invoking)",
+            "go": "source.Skills(ctx, sourceContext)",
             "go_symbols": [
-              "agent/skills.NewContextProvider",
-              "agent.ContextProvider.Invoking",
-              "agent/skills.ContextProviderOptions.RefreshInterval",
-              "agent/skills.ContextProviderOptions.CacheIsolationKeySelector"
+              "agent/skills.CachingSource.Skills"
             ],
-            "status": "partial",
-            "note": "Go caches the assembled provider context with per-key single-fetch coordination and optional expiry; it does not expose a reusable caching source that returns cached skill lists."
+            "status": "mapped"
           }
         },
         "constructors": {
           "CachingAgentSkillsSource(AgentSkillsSource, CachingAgentSkillsSourceOptions)": {
-            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, RefreshInterval: interval, CacheIsolationKeySelector: selector})",
+            "go": "skills.NewCachingSource(source, skills.CachingSourceConfig{RefreshInterval: interval, CacheIsolationKeySelector: selector})",
             "go_symbols": [
-              "agent/skills.NewContextProvider",
-              "agent/skills.ContextProviderOptions.RefreshInterval",
-              "agent/skills.ContextProviderOptions.CacheIsolationKeySelector"
+              "agent/skills.NewCachingSource",
+              "agent/skills.CachingSourceConfig",
+              "agent/skills.CachingSource.Close"
             ],
-            "status": "partial",
-            "note": "Configure provider-level context caching instead of wrapping a Source; cache selectors receive Go invocation context and the result cannot be reused as a source decorator."
+            "status": "adapted",
+            "note": "Configuration is passed by value and captured at construction. The cache owns the inner source's optional io.Closer contract; Close is idempotent. Cancellation and source failures are not cached."
           }
         }
       },
@@ -11894,36 +11901,36 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "skills.ContextProviderOptions{}",
+          "go": "skills.CachingSourceConfig{}",
           "go_symbols": [
-            "agent/skills.ContextProviderOptions"
+            "agent/skills.CachingSourceConfig"
           ],
           "status": "adapted",
-          "note": "Go configures caching directly on ContextProviderOptions rather than a separate decorator-options type."
+          "note": "CachingSourceConfig is a value captured at construction rather than a mutable options object."
         },
         "properties": {
           "CacheIsolationKeySelector": {
             "go_symbols": [
-              "agent/skills.ContextProviderOptions.CacheIsolationKeySelector"
+              "agent/skills.CachingSourceConfig.CacheIsolationKeySelector"
             ],
             "status": "adapted",
-            "note": "Go's selector receives the invocation context and InvokingContext instead of an AgentSkillsSourceContext."
+            "note": "The selector receives context.Context and explicit SourceContext agent/session values."
           },
           "RefreshInterval": {
             "go_symbols": [
-              "agent/skills.ContextProviderOptions.RefreshInterval"
+              "agent/skills.CachingSourceConfig.RefreshInterval"
             ],
             "status": "mapped"
           }
         },
         "constructors": {
           "CachingAgentSkillsSourceOptions()": {
-            "go": "skills.ContextProviderOptions{}",
+            "go": "skills.CachingSourceConfig{}",
             "go_symbols": [
-              "agent/skills.ContextProviderOptions"
+              "agent/skills.CachingSourceConfig"
             ],
             "status": "adapted",
-            "note": "Go has no separate decorator-options constructor; caching fields are set on the zero-value ContextProviderOptions."
+            "note": "Use a zero-value config literal; nil refresh interval means the result never expires."
           }
         }
       },
@@ -13143,36 +13150,31 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{first, second}})",
+          "go": "skills.NewDeduplicatingSource(source, nil)",
           "go_symbols": [
-            "agent/skills.ContextProviderOptions.DisableSourceDeduplication",
-            "agent/skills.NewContextProvider"
+            "agent/skills.DeduplicatingSource",
+            "agent/skills.NewDeduplicatingSource"
           ],
-          "status": "adapted",
-          "note": "Provider loading removes later duplicate names after validation/filtering, retaining the first occurrence. Deduplication is enabled by default; setting DisableSourceDeduplication=true opts out. There is no standalone source decorator."
+          "status": "mapped"
         },
         "methods": {
           "GetSkillsAsync(AgentSkillsSourceContext, CancellationToken) -> Task<IList<AgentSkill>>": {
-            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, DisableCaching: true}).Invoking(ctx, invoking)",
+            "go": "source.Skills(ctx, sourceContext)",
             "go_symbols": [
-              "agent/skills.NewContextProvider",
-              "agent/skills.ContextProviderOptions.DisableSourceDeduplication",
-              "agent.ContextProvider.Invoking"
+              "agent/skills.DeduplicatingSource.Skills"
             ],
-            "status": "partial",
-            "note": "Provider loading removes later case-insensitive name duplicates by default and logs them, but returns assembled context rather than a deduplicated skill list from a reusable source."
+            "status": "mapped"
           }
         },
         "constructors": {
           "DeduplicatingAgentSkillsSource(AgentSkillsSource, ILoggerFactory)": {
-            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, DisableCaching: true, Logger: logger})",
+            "go": "skills.NewDeduplicatingSource(source, logger)",
             "go_symbols": [
-              "agent/skills.NewContextProvider",
-              "agent/skills.ContextProviderOptions.DisableSourceDeduplication",
-              "agent/skills.ContextProviderOptions.Logger"
+              "agent/skills.NewDeduplicatingSource",
+              "agent/skills.DeduplicatingSource.Close"
             ],
-            "status": "partial",
-            "note": "Default provider-level first-name-wins deduplication replaces the decorator; no independent deduplicating Source or owned-source disposal is exposed."
+            "status": "adapted",
+            "note": "An optional slog.Logger replaces ILoggerFactory; nil discards diagnostics. Close idempotently releases the wrapped source's optional io.Closer contract."
           }
         }
       },
@@ -13283,7 +13285,7 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "skills.SourceFunc(func(ctx context.Context) ([]*skills.Skill, error) { return inner.Skills(ctx) })",
+          "go": "skills.SourceFunc(func(ctx context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) { return inner.Skills(ctx, sourceContext) })",
           "go_symbols": [
             "agent/skills.Source",
             "agent/skills.SourceFunc"
@@ -13293,13 +13295,13 @@
         },
         "methods": {
           "GetSkillsAsync(AgentSkillsSourceContext, CancellationToken) -> Task<IList<AgentSkill>>": {
-            "go": "inner.Skills(ctx)",
+            "go": "inner.Skills(ctx, sourceContext)",
             "go_symbols": [
               "agent/skills.Source.Skills",
               "agent/skills.SourceFunc.Skills"
             ],
             "status": "adapted",
-            "note": "Forward to inner.Skills(ctx) through the function adapter or wrapper. Context carries cancellation and optional agent identity, but the built-in provider does not supply a separate session argument."
+            "note": "Forward context.Context and SourceContext to inner.Skills through the function adapter or wrapper. The provider supplies the current agent/session values."
           }
         }
       },
@@ -14443,38 +14445,31 @@
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
         "mapping": {
-          "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, DisableCaching: true, SkillFilter: func(skill *skills.Skill) bool { return skill.Frontmatter.Name == \"writing\" }})",
+          "go": "skills.NewFilteringSource(source, filter, nil)",
           "go_symbols": [
-            "agent/skills.ContextProviderOptions.SkillFilter",
-            "agent/skills.ContextProviderOptions.DisableCaching",
-            "agent/skills.NewContextProvider"
+            "agent/skills.FilteringSource",
+            "agent/skills.NewFilteringSource"
           ],
-          "status": "partial",
-          "note": "Provider-level SkillFilter has no invocation-context parameter. Its result is included in the default provider cache, unlike the .NET builder's filter outside the source cache; disable caching when reevaluation is required."
+          "status": "mapped"
         },
         "methods": {
           "GetSkillsAsync(AgentSkillsSourceContext, CancellationToken) -> Task<IList<AgentSkill>>": {
-            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, SkillFilter: filter, DisableCaching: true}).Invoking(ctx, invoking)",
+            "go": "source.Skills(ctx, sourceContext)",
             "go_symbols": [
-              "agent/skills.NewContextProvider",
-              "agent/skills.ContextProviderOptions.SkillFilter",
-              "agent/skills.ContextProviderOptions.DisableCaching",
-              "agent.ContextProvider.Invoking"
+              "agent/skills.FilteringSource.Skills"
             ],
-            "status": "partial",
-            "note": "Filtering runs during provider context assembly, not through a list-returning source decorator. The predicate receives only a skill, without the .NET agent/session source context."
+            "status": "mapped"
           }
         },
         "constructors": {
           "FilteringAgentSkillsSource(AgentSkillsSource, Func<AgentSkill, AgentSkillsSourceContext, bool>, ILoggerFactory)": {
-            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, SkillFilter: filter, DisableCaching: true, Logger: logger})",
+            "go": "skills.NewFilteringSource(source, filter, logger)",
             "go_symbols": [
-              "agent/skills.NewContextProvider",
-              "agent/skills.ContextProviderOptions.SkillFilter",
-              "agent/skills.ContextProviderOptions.DisableCaching"
+              "agent/skills.NewFilteringSource",
+              "agent/skills.FilteringSource.Close"
             ],
-            "status": "partial",
-            "note": "A provider option replaces the decorator; DisableCaching reevaluates the filter each invocation, but the Go predicate lacks agent/session arguments and cannot produce a standalone filtered Source."
+            "status": "adapted",
+            "note": "The predicate receives context.Context, the skill, and SourceContext. An optional slog.Logger replaces ILoggerFactory; Close idempotently releases the wrapped source's optional io.Closer contract."
           }
         }
       },

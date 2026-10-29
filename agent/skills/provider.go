@@ -5,13 +5,16 @@ package skills
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -87,13 +90,19 @@ type ContextProviderOptions struct {
 
 	// SkillFilter optionally filters skills loaded from inline skills and sources.
 	// Returning true keeps a skill; returning false excludes it.
-	SkillFilter func(*Skill) bool
+	// It receives the current agent/session context and is evaluated on every
+	// invocation after source caching and before deduplication.
+	SkillFilter func(context.Context, *Skill, SourceContext) bool
 
 	// Skills provides in-memory skills to register with the provider.
 	Skills []*Skill
 
 	// Sources provides external skill sources to register with the provider.
 	Sources []Source
+
+	// OwnsSources transfers responsibility for closing sources that implement
+	// [io.Closer] to the provider. The default is false.
+	OwnsSources bool
 
 	// SkillsInstructionPrompt is a custom system prompt template.
 	// When nil, a default template is used.
@@ -125,13 +134,14 @@ type ContextProviderOptions struct {
 	// scripts because raw error messages may contain prompt-injection content.
 	IncludeDetailedErrors bool
 
-	// DisableCaching rebuilds instructions and tools for every invocation.
+	// DisableCaching reloads sources on every invocation. Instructions and
+	// tools are always assembled per invocation, after filtering.
 	DisableCaching bool
 
 	// CacheIsolationKeySelector selects the cache bucket for an invocation.
 	// A nil selector, or a nil key returned by the selector, uses the shared
 	// cache bucket. Keys should be stable and low-cardinality.
-	CacheIsolationKeySelector func(context.Context, agent.InvokingContext) *string
+	CacheIsolationKeySelector func(context.Context, SourceContext) *string
 
 	// RefreshInterval controls how long a cached result remains fresh. A nil
 	// interval never expires the cache. A zero or negative interval refreshes
@@ -182,19 +192,17 @@ type providedSkillSet struct {
 	byName map[string]providedSkill
 }
 
-type providerState struct {
-	sources []Source
-	options ContextProviderOptions
-	logger  *slog.Logger
+// ContextProvider supplies skill instructions and tools to an agent. Create it
+// with [NewContextProvider] and call [ContextProvider.Close] when finished.
+type ContextProvider struct {
+	source   Source
+	options  ContextProviderOptions
+	logger   *slog.Logger
+	provider agent.ContextProvider
 
-	mu     sync.Mutex
-	caches map[string]*providerCache
-}
-
-type providerCache struct {
-	cached    *providerContext
-	refreshed time.Time
-	loading   chan struct{}
+	closeOnce sync.Once
+	closeErr  error
+	closed    atomic.Bool
 }
 
 type providerContext struct {
@@ -204,7 +212,8 @@ type providerContext struct {
 }
 
 // NewContextProvider creates a skills context provider from the configured in-memory skills and sources.
-func NewContextProvider(opts ContextProviderOptions) agent.ContextProvider {
+// Sources are borrowed unless opts.OwnsSources is true.
+func NewContextProvider(opts ContextProviderOptions) *ContextProvider {
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
 	}
@@ -214,17 +223,71 @@ func NewContextProvider(opts ContextProviderOptions) agent.ContextProvider {
 		}
 	}
 
-	state := &providerState{
-		sources: newProviderSources(opts.Skills, opts.Sources),
+	sources := newProviderSources(opts.Skills, opts.Sources)
+	for i, source := range sources {
+		sources[i] = &providerSource{source: source, index: i, logger: opts.Logger, owns: opts.OwnsSources}
+	}
+	var pipeline Source = NewAggregatingSource(sources...)
+	if !opts.DisableCaching {
+		pipeline = NewCachingSource(pipeline, CachingSourceConfig{
+			CacheIsolationKeySelector: opts.CacheIsolationKeySelector,
+			RefreshInterval:           opts.RefreshInterval,
+		})
+	}
+	if opts.SkillFilter != nil {
+		pipeline = NewFilteringSource(pipeline, opts.SkillFilter, opts.Logger)
+	}
+	if !opts.DisableSourceDeduplication {
+		pipeline = NewDeduplicatingSource(pipeline, opts.Logger)
+	}
+	state := &ContextProvider{
+		source:  pipeline,
 		options: opts,
 		logger:  opts.Logger,
-		caches:  make(map[string]*providerCache),
 	}
 
-	return agent.NewContextProvider(agent.ContextProviderConfig{
+	state.provider = agent.NewContextProvider(agent.ContextProviderConfig{
 		SourceID: cmp.Or(opts.SourceID, "skills"),
 		Provide:  state.provide,
 	})
+	return state
+}
+
+// Invoking adds skill instructions and tools for the current agent and session.
+func (p *ContextProvider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	if err := p.checkOpen(); err != nil {
+		return nil, nil, err
+	}
+	return p.provider.Invoking(ctx, invoking)
+}
+
+// Invoked completes a skills-provider invocation without retaining conversation history.
+func (p *ContextProvider) Invoked(ctx context.Context, invoked agent.InvokedContext) error {
+	if err := p.checkOpen(); err != nil {
+		return err
+	}
+	return p.provider.Invoked(ctx, invoked)
+}
+
+// Close prevents subsequent invocations and tool calls and releases owned
+// sources implementing [io.Closer]. It is idempotent, including on an error.
+// Do not overlap Close with invocations or tool calls; it does not cancel
+// operations already in flight.
+func (p *ContextProvider) Close() error {
+	p.closeOnce.Do(func() {
+		p.closed.Store(true)
+		if closer, ok := p.source.(io.Closer); ok {
+			p.closeErr = closer.Close()
+		}
+	})
+	return p.closeErr
+}
+
+func (p *ContextProvider) checkOpen() error {
+	if p.closed.Load() {
+		return errors.New("skills: provider is closed")
+	}
+	return nil
 }
 
 // NewInMemorySource creates a skills source backed by the provided in-memory skills.
@@ -263,100 +326,27 @@ func newSkillSliceSource(skills ...*Skill) *skillSliceSource {
 	return &skillSliceSource{skills: cloned}
 }
 
-func (s *skillSliceSource) Skills(context.Context) ([]*Skill, error) {
+func (s *skillSliceSource) Skills(_ context.Context, sourceContext SourceContext) ([]*Skill, error) {
 	telemetry.MarkUsed(telemetry.FeatureInMemorySkillsSource)
 	return s.skills, nil
 }
 
-func (p *providerState) provide(ctx context.Context, invoking agent.InvokingContext) (outMessages []*message.Message, outOptions []agent.Option, err error) {
-	telemetry.MarkUsed(telemetry.FeatureSkillsProvider)
-	if p.options.DisableCaching {
-		result, err := p.buildContextSafely(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-		outMessages, outOptions = providedContext(result)
-		return outMessages, outOptions, nil
-	}
-
-	cacheKey := ""
-	if p.options.CacheIsolationKeySelector != nil {
-		if selected := p.options.CacheIsolationKeySelector(ctx, invoking); selected != nil {
-			cacheKey = "key:" + *selected
-		}
-	}
-
-	for {
-		p.mu.Lock()
-		cache := p.caches[cacheKey]
-		if cache == nil {
-			cache = &providerCache{}
-			p.caches[cacheKey] = cache
-		}
-		if cache.cached != nil && p.cacheIsFresh(cache) {
-			cached := *cache.cached
-			p.mu.Unlock()
-			outMessages, outOptions = providedContext(cached)
-			return outMessages, outOptions, nil
-		}
-		if cache.loading != nil {
-			loading := cache.loading
-			p.mu.Unlock()
-			if err := ctx.Err(); err != nil {
-				return nil, nil, err
-			}
-			select {
-			case <-loading:
-			case <-ctx.Done():
-				return nil, nil, ctx.Err()
-			}
-
-			// The cache owner normally clears loading before waking waiters.
-			// Clear a matching completed load defensively so every retry goes
-			// through the same owner path and panic recovery below.
-			p.mu.Lock()
-			if cache.loading == loading {
-				cache.loading = nil
-			}
-			p.mu.Unlock()
-			continue
-		}
-		loading := make(chan struct{})
-		cache.loading = loading
-		p.mu.Unlock()
-
-		result, err := p.buildContextSafely(ctx)
-		p.mu.Lock()
-		if err == nil {
-			cached := result
-			cache.cached = &cached
-			cache.refreshed = time.Now()
-		}
-		cache.loading = nil
-		close(loading)
-		p.mu.Unlock()
-		if err != nil {
-			return nil, nil, err
-		}
-		outMessages, outOptions = providedContext(result)
-		return outMessages, outOptions, nil
-	}
-}
-
-func (p *providerState) cacheIsFresh(cache *providerCache) bool {
-	if p.options.RefreshInterval == nil {
-		return true
-	}
-	return time.Since(cache.refreshed) < *p.options.RefreshInterval
-}
-
-func (p *providerState) buildContextSafely(ctx context.Context) (result providerContext, err error) {
+func (p *ContextProvider) provide(ctx context.Context, invoking agent.InvokingContext) (outMessages []*message.Message, outOptions []agent.Option, err error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			outMessages, outOptions = nil, nil
 			err = fmt.Errorf("building skills context panicked: %v", recovered)
 		}
 	}()
-	return p.buildContext(ctx)
+	session, _ := agent.GetOption(invoking.Options, agent.WithSession)
+	a, _ := agent.AgentFromContext(ctx)
+	sourceContext := SourceContext{Agent: a, Session: session}
+	skills, err := p.source.Skills(ctx, sourceContext)
+	if err != nil {
+		return nil, nil, err
+	}
+	outMessages, outOptions = providedContext(p.contextForSkills(skills))
+	return outMessages, outOptions, nil
 }
 
 func providedContext(result providerContext) ([]*message.Message, []agent.Option) {
@@ -372,15 +362,11 @@ func providedContext(result providerContext) ([]*message.Message, []agent.Option
 	return outMessages, outOptions
 }
 
-func (p *providerState) buildContext(ctx context.Context) (providerContext, error) {
-	skills, err := p.loadSkills(ctx)
-	if err != nil {
-		return providerContext{}, err
-	}
+func (p *ContextProvider) contextForSkills(skills []*Skill) providerContext {
 	if len(skills) == 0 {
-		return providerContext{}, nil
+		return providerContext{}
 	}
-
+	telemetry.MarkUsed(telemetry.FeatureSkillsProvider)
 	indexed := indexSkills(skills)
 	out := providerContext{
 		Options: toolOptions(p.buildTools(indexed)),
@@ -391,7 +377,7 @@ func (p *providerState) buildContext(ctx context.Context) (providerContext, erro
 		out.Instructions = instructions
 	}
 
-	return out, nil
+	return out
 }
 
 func toolOptions(tools []tool.Tool) []agent.Option {
@@ -405,51 +391,40 @@ func toolOptions(tools []tool.Tool) []agent.Option {
 	return options
 }
 
-func (p *providerState) loadSkills(ctx context.Context) ([]*Skill, error) {
-	loaded := make([]*Skill, 0)
-	for sourceIndex, source := range p.sources {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		sourceSkills, err := source.Skills(ctx)
-		if err != nil {
-			return nil, err
-		}
-		for skillIndex, skill := range sourceSkills {
-			if skill == nil {
-				p.logger.Warn("Skipping nil skill returned by source", "sourceIndex", sourceIndex, "skillIndex", skillIndex)
-				continue
-			}
-			if err := skill.Frontmatter.Validate(); err != nil {
-				p.logger.Warn("Skipping skill with invalid frontmatter", "sourceIndex", sourceIndex, "skillIndex", skillIndex, "error", err)
-				continue
-			}
-			if p.options.SkillFilter != nil && !p.options.SkillFilter(skill) {
-				p.logger.Debug("Skill excluded by filter predicate", "skillName", skill.Frontmatter.Name, "sourceIndex", sourceIndex, "skillIndex", skillIndex)
-				continue
-			}
-			loaded = append(loaded, skill)
-		}
-	}
-	if p.options.DisableSourceDeduplication {
-		return loaded, nil
-	}
-	return deduplicateSkillsByName(loaded, p.logger), nil
+type providerSource struct {
+	source Source
+	index  int
+	logger *slog.Logger
+	owns   bool
 }
 
-func deduplicateSkillsByName(skills []*Skill, logger *slog.Logger) []*Skill {
-	seen := make(map[string]struct{}, len(skills))
-	deduplicated := skills[:0]
-	for _, skill := range skills {
-		resolvedKey := strings.ToLower(skill.Frontmatter.Name)
-		if _, ok := seen[resolvedKey]; ok {
-			logger.Warn("Duplicate skill name: subsequent skill skipped in favor of first occurrence", "skillName", skill.Frontmatter.Name)
+func (s *providerSource) Skills(ctx context.Context, sourceContext SourceContext) ([]*Skill, error) {
+	skills, err := s.source.Skills(ctx, sourceContext)
+	if err != nil {
+		return nil, err
+	}
+	loaded := make([]*Skill, 0)
+	for skillIndex, skill := range skills {
+		if skill == nil {
+			s.logger.Warn("Skipping nil skill returned by source", "sourceIndex", s.index, "skillIndex", skillIndex)
 			continue
 		}
-		seen[resolvedKey] = struct{}{}
-		deduplicated = append(deduplicated, skill)
+		if err := skill.Frontmatter.Validate(); err != nil {
+			s.logger.Warn("Skipping skill with invalid frontmatter", "sourceIndex", s.index, "skillIndex", skillIndex, "error", err)
+			continue
+		}
+		loaded = append(loaded, skill)
 	}
-	return deduplicated
+	return loaded, nil
+}
+
+func (s *providerSource) Close() error {
+	if s.owns {
+		if closer, ok := s.source.(io.Closer); ok {
+			return closer.Close()
+		}
+	}
+	return nil
 }
 
 func indexSkills(skills []*Skill) providedSkillSet {
@@ -460,7 +435,7 @@ func indexSkills(skills []*Skill) providedSkillSet {
 	return providedSkillSet{byName: indexed}
 }
 
-func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
+func (p *ContextProvider) buildTools(skills providedSkillSet) []tool.Tool {
 	loadSkillTool := functool.MustNew(
 		functool.Config{
 			Name:        loadSkillToolName,
@@ -470,6 +445,9 @@ func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
 			SkillName string `json:"skillName" jsonschema:"The name of the skill to load"`
 		},
 		) (string, error) {
+			if err := p.checkOpen(); err != nil {
+				return "", err
+			}
 			return p.loadSkill(callCtx, skills, in.SkillName)
 		},
 	)
@@ -483,24 +461,14 @@ func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
 			ResourceName string `json:"resourceName" jsonschema:"The exact resource name to read"`
 		},
 		) (any, error) {
-			return p.readSkillResource(callCtx, skills, in.SkillName, in.ResourceName), nil
+			if err := p.checkOpen(); err != nil {
+				return nil, err
+			}
+			return p.readSkillResource(callCtx, skills, in.SkillName, in.ResourceName)
 		},
 	)
 
-	runScript := functool.MustNew(
-		functool.Config{
-			Name:        runSkillScriptToolName,
-			Description: "Runs a script associated with a skill.",
-		},
-		func(callCtx context.Context, in struct {
-			SkillName  string   `json:"skillName" jsonschema:"The name of the skill"`
-			ScriptName string   `json:"scriptName" jsonschema:"The exact script name to run"`
-			Arguments  []string `json:"arguments,omitempty" jsonschema:"Positional CLI-style string arguments for the script, e.g. [\"--value\",\"26.2\",\"--factor\",\"1.60934\"]"`
-		},
-		) (any, error) {
-			return p.runSkillScript(callCtx, skills, in.SkillName, in.ScriptName, in.Arguments)
-		},
-	)
+	runScript := newSkillScriptTool(p, skills)
 
 	if !p.options.DisableLoadSkillApproval {
 		loadSkillTool = tool.ApprovalRequiredFunc(loadSkillTool)
@@ -515,55 +483,55 @@ func (p *providerState) buildTools(skills providedSkillSet) []tool.Tool {
 	return []tool.Tool{loadSkillTool, readSkillResourceTool, runScript}
 }
 
-func (p *providerState) loadSkill(ctx context.Context, skills providedSkillSet, skillName string) (string, error) {
+func (p *ContextProvider) loadSkill(ctx context.Context, skills providedSkillSet, skillName string) (string, error) {
 	resolved, lookupError := skills.resolveSkill(skillName)
 	if lookupError != "" {
 		return lookupError, nil
 	}
 	p.logger.Info("Loading skill", "skillName", resolved.skill.Frontmatter.Name)
 	if resolved.skill.GetContent == nil {
-		p.logger.Error("Failed to load skill content", "skillName", skillName, "error", errors.New("skill content loader is nil"))
-		return fmt.Sprintf("Error: Failed to load skill '%s'.", skillName), nil
+		err := fmt.Errorf("skills: skill %q has no content loader", skillName)
+		p.logger.Error("Failed to load skill content", "skillName", skillName, "error", err)
+		return "", err
 	}
 	content, err := resolved.skill.GetContent(ctx)
 	if err != nil {
 		p.logger.Error("Failed to load skill content", "skillName", skillName, "error", err)
-		return fmt.Sprintf("Error: Failed to load skill '%s'.", skillName), nil
+		return "", err
 	}
 	return content, nil
 }
 
-func (p *providerState) readSkillResource(ctx context.Context, skills providedSkillSet, skillName, resourceName string) any {
+func (p *ContextProvider) readSkillResource(ctx context.Context, skills providedSkillSet, skillName, resourceName string) (any, error) {
 	_, resource, lookupError := resolveSkillItem(skills, skillName, resourceName, "Resource", providedSkill.lookupResource)
 	if lookupError != "" {
-		return lookupError
+		return lookupError, nil
 	}
 	if resource.Read == nil {
-		p.logger.Error("Failed to read resource from skill", "resourceName", resourceName, "skillName", skillName, "error", "resource reader is nil")
-		return fmt.Sprintf("Error: Failed to read resource '%s' from skill '%s'.", resourceName, skillName)
+		err := fmt.Errorf("skills: resource %q in skill %q has no reader", resourceName, skillName)
+		p.logger.Error("Failed to read resource from skill", "resourceName", resourceName, "skillName", skillName, "error", err)
+		return nil, err
 	}
 	content, err := resource.Read(ctx)
 	if err != nil {
 		p.logger.Error("Failed to read resource from skill", "resourceName", resourceName, "skillName", skillName, "error", err)
-		return fmt.Sprintf("Error: Failed to read resource '%s' from skill '%s'.", resourceName, skillName)
+		return nil, err
 	}
-	return content
+	return content, nil
 }
 
-func (p *providerState) runSkillScript(ctx context.Context, skills providedSkillSet, skillName, scriptName string, arguments []string) (any, error) {
+func (p *ContextProvider) runSkillScript(ctx context.Context, skills providedSkillSet, skillName, scriptName string, arguments json.RawMessage) (any, error) {
 	resolved, script, lookupError := resolveSkillItem(skills, skillName, scriptName, "Script", providedSkill.lookupScript)
 	if lookupError != "" {
 		return lookupError, nil
 	}
+	var result any
+	var err error
 	if script.Run == nil {
-		err := errors.New("script runner is nil")
-		p.logger.Error("Failed to execute script from skill", "scriptName", scriptName, "skillName", skillName, "error", err)
-		if p.options.IncludeDetailedErrors {
-			return fmt.Sprintf("Error: Failed to execute script '%s' from skill '%s'. Exception: %s", scriptName, skillName, err.Error()), nil
-		}
-		return nil, err
+		err = errors.New("script runner is nil")
+	} else {
+		result, err = script.Run(ctx, resolved.skill, arguments)
 	}
-	result, err := script.Run(ctx, resolved.skill, arguments)
 	if err != nil {
 		p.logger.Error("Failed to execute script from skill", "scriptName", scriptName, "skillName", skillName, "error", err)
 		if p.options.IncludeDetailedErrors {
