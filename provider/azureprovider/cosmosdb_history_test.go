@@ -1012,7 +1012,11 @@ func TestCosmosHistoryProviderStatePersistence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer p.Close()
+	t.Cleanup(func() {
+		if err := p.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	session := new(agent.Session)
 	session.Set("custom", (*azureprovider.CosmosHistoryState)(nil))
 	for range 2 {
@@ -1082,7 +1086,11 @@ func TestCosmosHistoryProviderConcurrentSessionInitialization(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer p.Close()
+	t.Cleanup(func() {
+		if err := p.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := range 8 {
@@ -1641,7 +1649,11 @@ func TestCosmosHistoryProviderPartitionModesCoexist(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer provider.Close()
+		t.Cleanup(func() {
+			if err := provider.Close(); err != nil {
+				t.Error(err)
+			}
+		})
 		storeCosmosHistoryMessages(t, provider, session, []*message.Message{message.NewText(tc.text)}, nil)
 	}
 	for _, tc := range []struct {
@@ -1654,7 +1666,11 @@ func TestCosmosHistoryProviderPartitionModesCoexist(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer provider.Close()
+		t.Cleanup(func() {
+			if err := provider.Close(); err != nil {
+				t.Error(err)
+			}
+		})
 		assertCosmosHistoryMessages(t, loadCosmosHistoryMessages(t, provider, session), tc.text)
 	}
 }
