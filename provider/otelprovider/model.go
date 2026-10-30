@@ -12,7 +12,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/modelcall"
-	"github.com/microsoft/agent-framework-go/internal/otelx"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -54,7 +54,7 @@ func (m *mw) modelRun(run agent.RunFunc, metadata *modelcall.Metadata) agent.Run
 				}
 				var errorType string
 				if runErr != nil {
-					errorType = otelx.ErrorTypeName(runErr)
+					errorType = telemetry.ErrorTypeName(runErr)
 					span.RecordError(runErr)
 					span.SetStatus(codes.Error, runErr.Error())
 				} else if providerFailure != nil {

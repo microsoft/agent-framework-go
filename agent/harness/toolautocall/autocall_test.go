@@ -39,6 +39,273 @@ func (schemaOnlyTool) ReturnSchema() any {
 	return nil
 }
 
+type tracerFunc func(context.Context, *message.FunctionCallContent, tool.Tool) (context.Context, func(error))
+
+func (f tracerFunc) StartToolCall(ctx context.Context, call *message.FunctionCallContent, definition tool.Tool) (context.Context, func(error)) {
+	return f(ctx, call, definition)
+}
+
+func TestFunctionInvoking_Tracer(t *testing.T) {
+	toolErr := errors.New("tool failure")
+	for _, tc := range []struct {
+		name        string
+		err         error
+		panicValue  any
+		cancel      bool
+		wantMessage string
+	}{
+		{name: "success"},
+		{name: "error", err: toolErr, wantMessage: "tool failure"},
+		{name: "panic error", err: toolErr, panicValue: toolErr, wantMessage: "tool execution panic: tool failure"},
+		{name: "panic value", panicValue: "failure", wantMessage: "tool execution panic: failure"},
+		{name: "cancellation", err: context.Canceled, cancel: true, wantMessage: "context canceled"},
+	} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", tc.name, stream), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				type contextKey struct{}
+				var events []string
+				var tracedErr error
+				tracer := tracerFunc(func(ctx context.Context, call *message.FunctionCallContent, definition tool.Tool) (context.Context, func(error)) {
+					events = append(events, "start")
+					if call.CallID != "call-1" || call.Name != "test_tool" || call.Arguments != `{"value":"input"}` {
+						t.Errorf("unexpected traced call: %+v", call)
+					}
+					if definition.Name() != "test_tool" || definition.Description() != "Test tool" {
+						t.Errorf("unexpected traced definition: %q, %q", definition.Name(), definition.Description())
+					}
+					return context.WithValue(ctx, contextKey{}, "traced"), func(err error) {
+						events = append(events, "complete")
+						tracedErr = err
+					}
+				})
+				testTool := functool.MustNew(functool.Config{Name: "test_tool", Description: "Test tool"},
+					func(ctx context.Context, args struct {
+						Value string `json:"value"`
+					},
+					) (string, error) {
+						events = append(events, "tool")
+						if ctx.Value(contextKey{}) != "traced" || args.Value != "input" {
+							t.Error("tool did not receive the traced context and original arguments")
+						}
+						if tc.cancel {
+							cancel()
+						}
+						if tc.panicValue != nil {
+							panic(tc.panicValue)
+						}
+						return "result", tc.err
+					})
+				runner := &agenttest.Runner{
+					Responses: agenttest.NewResponseBuilder().
+						Add(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+							&message.FunctionCallContent{CallID: "call-1", Name: "test_tool", Arguments: `{"value":"input"}`},
+						}}).
+						NewTurn().AddText("done").Build(),
+				}
+				a := agent.New(agent.ProviderConfig{
+					Run:         runner.Run,
+					Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{Tracer: tracer})},
+				}, agent.Config{Tools: []tool.Tool{testTool}})
+
+				response, err := a.RunText(ctx, "run", agent.Stream(stream)).Collect()
+				if tc.cancel {
+					if !errors.Is(err, context.Canceled) {
+						t.Fatalf("run error = %v, want cancellation", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				if !slices.Equal(events, []string{"start", "tool", "complete"}) {
+					t.Fatalf("tracing events = %v, want one start, invocation, and completion", events)
+				}
+				if tc.wantMessage == "" {
+					if tracedErr != nil {
+						t.Fatalf("traced error = %v, want nil", tracedErr)
+					}
+				} else if tracedErr == nil || tracedErr.Error() != tc.wantMessage {
+					t.Fatalf("traced error = %v, want %q", tracedErr, tc.wantMessage)
+				}
+				if tc.err != nil && !errors.Is(tracedErr, tc.err) {
+					t.Fatalf("traced error = %v, want original error %v", tracedErr, tc.err)
+				}
+				if !tc.cancel {
+					var result *message.FunctionResultContent
+					for _, msg := range response.Messages {
+						for _, content := range msg.Contents {
+							if value, ok := content.(*message.FunctionResultContent); ok {
+								result = value
+							}
+						}
+					}
+					if result == nil || result.CallID != "call-1" || result.Error != tracedErr {
+						t.Fatalf("tool result = %+v, want the original call ID and traced error %v", result, tracedErr)
+					}
+					if tracedErr == nil && result.Result != "result" {
+						t.Fatalf("tool result = %v, want result", result.Result)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestFunctionInvoking_WithTracer(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		parent  string
+		context string
+		config  string
+		clear   bool
+		want    string
+	}{
+		{name: "context tracer", context: "context", want: "context"},
+		{name: "replaced context tracer", parent: "parent", context: "child", want: "child"},
+		{name: "config takes precedence", context: "context", config: "config", want: "config"},
+		{name: "nil clears inherited tracer", parent: "parent", clear: true},
+		{name: "nil preserves config tracer", parent: "parent", clear: true, config: "config", want: "config"},
+		{name: "no tracer"},
+	} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", tc.name, stream), func(t *testing.T) {
+				type contextKey struct{}
+				var events []string
+				newTracer := func(name string) toolautocall.Tracer {
+					if name == "" {
+						return nil
+					}
+					return tracerFunc(func(ctx context.Context, _ *message.FunctionCallContent, _ tool.Tool) (context.Context, func(error)) {
+						events = append(events, name+":start")
+						return context.WithValue(ctx, contextKey{}, name), func(err error) {
+							events = append(events, name+":complete")
+							if err != nil {
+								t.Errorf("traced error = %v, want nil", err)
+							}
+						}
+					})
+				}
+				ctx := t.Context()
+				if tc.parent != "" {
+					ctx = toolautocall.WithTracer(ctx, newTracer(tc.parent))
+				}
+				if tc.context != "" || tc.clear {
+					ctx = toolautocall.WithTracer(ctx, newTracer(tc.context))
+				}
+				var toolCalls int
+				testTool := functool.MustNew(functool.Config{Name: "test_tool"},
+					func(ctx context.Context, _ struct{}) (string, error) {
+						toolCalls++
+						if got, _ := ctx.Value(contextKey{}).(string); got != tc.want {
+							t.Errorf("tool context tracer = %q, want %q", got, tc.want)
+						}
+						return "result", nil
+					})
+				runner := &agenttest.Runner{
+					Responses: agenttest.NewResponseBuilder().
+						Add(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+							&message.FunctionCallContent{CallID: "call-1", Name: "test_tool", Arguments: `{}`},
+						}}).
+						NewTurn().AddText("done").Build(),
+				}
+				a := agent.New(agent.ProviderConfig{
+					Run: runner.Run,
+					Middlewares: []agent.Middleware{
+						toolautocall.New(toolautocall.Config{Tracer: newTracer(tc.config)}),
+					},
+				}, agent.Config{Tools: []tool.Tool{testTool}})
+				if _, err := a.RunText(ctx, "run", agent.Stream(stream)).Collect(); err != nil {
+					t.Fatal(err)
+				}
+				if toolCalls != 1 {
+					t.Fatalf("tool calls = %d, want 1", toolCalls)
+				}
+				var wantEvents []string
+				if tc.want != "" {
+					wantEvents = []string{tc.want + ":start", tc.want + ":complete"}
+				}
+				if !slices.Equal(events, wantEvents) {
+					t.Errorf("tracing events = %v, want %v", events, wantEvents)
+				}
+			})
+		}
+	}
+}
+
+func TestFunctionInvoking_Tracer_Concurrent(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				type contextKey struct{}
+				type completion struct {
+					callID string
+					err    error
+				}
+				completed := make(chan completion, 2)
+				tracer := tracerFunc(func(ctx context.Context, call *message.FunctionCallContent, _ tool.Tool) (context.Context, func(error)) {
+					callID := call.CallID
+					return context.WithValue(ctx, contextKey{}, callID), func(err error) {
+						completed <- completion{callID: callID, err: err}
+					}
+				})
+				toolErr := errors.New("second call failed")
+				var started atomic.Int32
+				ready := make(chan struct{})
+				testTool := functool.MustNew(functool.Config{Name: "test_tool"},
+					func(ctx context.Context, args struct {
+						ID string `json:"id"`
+					},
+					) (string, error) {
+						if ctx.Value(contextKey{}) != args.ID {
+							t.Errorf("traced context = %v, want %q", ctx.Value(contextKey{}), args.ID)
+						}
+						if started.Add(1) == 2 {
+							close(ready)
+						}
+						<-ready
+						if args.ID == "call-2" {
+							return "", toolErr
+						}
+						return args.ID, nil
+					})
+				runner := &agenttest.Runner{
+					Responses: agenttest.NewResponseBuilder().
+						Add(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+							&message.FunctionCallContent{CallID: "call-1", Name: "test_tool", Arguments: `{"id":"call-1"}`},
+							&message.FunctionCallContent{CallID: "call-2", Name: "test_tool", Arguments: `{"id":"call-2"}`},
+						}}).
+						NewTurn().AddText("done").Build(),
+				}
+				a := agent.New(agent.ProviderConfig{
+					Run: runner.Run,
+					Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{
+						AllowConcurrentInvocations: true,
+					})},
+				}, agent.Config{Tools: []tool.Tool{testTool}})
+				if _, err := a.RunText(toolautocall.WithTracer(t.Context(), tracer), "run", agent.Stream(stream)).Collect(); err != nil {
+					t.Fatal(err)
+				}
+				if len(completed) != 2 {
+					t.Fatalf("tracing completions = %d, want 2", len(completed))
+				}
+				close(completed)
+				results := make(map[string]error)
+				for result := range completed {
+					if _, duplicate := results[result.callID]; duplicate {
+						t.Fatalf("duplicate completion for %q", result.callID)
+					}
+					results[result.callID] = result.err
+				}
+				for callID, wantErr := range map[string]error{"call-1": nil, "call-2": toolErr} {
+					if err, ok := results[callID]; !ok || !errors.Is(err, wantErr) {
+						t.Errorf("completion for %q = %v, present = %t; want %v", callID, err, ok, wantErr)
+					}
+				}
+			})
+		})
+	}
+}
+
 func TestFunctionInvoking_ResponseConversationID(t *testing.T) {
 	for _, tc := range []struct {
 		name             string

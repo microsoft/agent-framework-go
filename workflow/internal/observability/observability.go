@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/microsoft/agent-framework-go/internal/otelx"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	workflowobservability "github.com/microsoft/agent-framework-go/workflow/observability"
 )
 
@@ -158,7 +158,7 @@ func (s *Activity) CaptureError(err error) {
 	// ErrorAttributes) as .NET does.
 	s.span.RecordError(err)
 	s.span.SetAttributes(
-		workflowobservability.StringAttribute(TagErrorType, otelx.ErrorTypeName(err)),
+		workflowobservability.StringAttribute(TagErrorType, telemetry.ErrorTypeName(err)),
 	)
 	s.span.SetError(err.Error())
 }
@@ -289,7 +289,7 @@ func BuildErrorAttributes(err error) []workflowobservability.Attribute {
 	}
 	return []workflowobservability.Attribute{
 		workflowobservability.StringAttribute(TagBuildErrorMessage, err.Error()),
-		workflowobservability.StringAttribute(TagBuildErrorType, otelx.ErrorTypeName(err)),
+		workflowobservability.StringAttribute(TagBuildErrorType, telemetry.ErrorTypeName(err)),
 	}
 }
 
@@ -298,7 +298,7 @@ func ErrorAttributes(err error) []workflowobservability.Attribute {
 		return nil
 	}
 	return []workflowobservability.Attribute{
-		workflowobservability.StringAttribute(TagErrorType, otelx.ErrorTypeName(err)),
+		workflowobservability.StringAttribute(TagErrorType, telemetry.ErrorTypeName(err)),
 		workflowobservability.StringAttribute(TagErrorMessage, err.Error()),
 	}
 }
