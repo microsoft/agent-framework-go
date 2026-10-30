@@ -14,7 +14,7 @@ import (
 var logger = demo.NewLogger(
 	"Basic Run",
 	"Demonstrates a simple agent run.",
-	"Model", "claude-sonnet-4-5",
+	"Model", "claude-sonnet-5-5",
 )
 
 func main() {
@@ -22,7 +22,7 @@ func main() {
 	a := anthropicprovider.NewAgent(
 		anthropic.NewClient(),
 		anthropicprovider.AgentConfig{
-			Model:        "claude-sonnet-4-5",
+			Model:        "claude-sonnet-5-5",
 			Instructions: "You are good at telling jokes.",
 			Config: agent.Config{
 				Name:        "Joker",
