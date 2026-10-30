@@ -101,6 +101,13 @@ type Config struct {
 	// middleware as described by [Config]. Negative values are invalid.
 	MaximumIterationsPerRequest *int
 
+	// MaximumFunctionCallsPerRequest is the maximum number of tool invocations allowed
+	// in a single run. When the limit is reached, the middleware makes a final provider
+	// request without schema tools so no more local function calls are requested.
+	// When nil, no call-count limit is enforced. Zero allows the model to run without
+	// invoking any automatic function calls. Negative values are invalid.
+	MaximumFunctionCallsPerRequest *int
+
 	// NewID generates synthetic IDs for generated tool-result messages and
 	// approval-related fallback messages. If nil, a canonical dashed UUID is used.
 	NewID func() string
@@ -124,6 +131,7 @@ type autocall struct {
 	allowConcurrentInvocations          bool
 	maximumConsecutiveErrorsPerRequest  int
 	maximumIterationsPerRequest         int
+	maximumFunctionCallsPerRequest      *int
 	newID                               func() string
 	disableApprovalResponseBinding      bool
 	disableApprovalNotRequiredBypassing bool
@@ -142,6 +150,11 @@ func New(cfg Config) agent.Middleware {
 	if cfg.MaximumIterationsPerRequest != nil {
 		maximumIterationsPerRequest = *cfg.MaximumIterationsPerRequest
 	}
+	var maximumFunctionCallsPerRequest *int
+	if cfg.MaximumFunctionCallsPerRequest != nil {
+		val := *cfg.MaximumFunctionCallsPerRequest
+		maximumFunctionCallsPerRequest = &val
+	}
 	ac := &autocall{
 		logger: slogx.Logger{
 			Logger:        cfg.Logger,
@@ -155,6 +168,7 @@ func New(cfg Config) agent.Middleware {
 		allowConcurrentInvocations:          cfg.AllowConcurrentInvocations,
 		maximumConsecutiveErrorsPerRequest:  maximumConsecutiveErrorsPerRequest,
 		maximumIterationsPerRequest:         maximumIterationsPerRequest,
+		maximumFunctionCallsPerRequest:      maximumFunctionCallsPerRequest,
 		newID:                               cfg.NewID,
 		disableApprovalResponseBinding:      cfg.DisableApprovalResponseBinding,
 		disableApprovalNotRequiredBypassing: cfg.DisableApprovalNotRequiredFunctionBypassing,
@@ -194,6 +208,10 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			yield(nil, fmt.Errorf("toolautocall: MaximumIterationsPerRequest must be 0 or greater, got %d", f.maximumIterationsPerRequest))
 			return
 		}
+		if f.maximumFunctionCallsPerRequest != nil && *f.maximumFunctionCallsPerRequest < 0 {
+			yield(nil, fmt.Errorf("toolautocall: MaximumFunctionCallsPerRequest must be 0 or greater, got %d", *f.maximumFunctionCallsPerRequest))
+			return
+		}
 		if err := ctx.Err(); err != nil {
 			yield(nil, err)
 			return
@@ -207,6 +225,7 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			return
 		}
 		var messagesCloned bool
+		var totalFunctionCalls int
 		session, _ := agent.GetOption(opts, agent.WithSession)
 		serviceID, _ := agent.GetOption(opts, agent.WithServiceID)
 		serviceManagedHistory := strings.TrimSpace(serviceID) != ""
@@ -281,11 +300,13 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			}
 			// Invoke approved approval responses, which generates some additional FRC wrapped in ChatMessage.
 			var newMsg *message.Message
-			newMsg, errCount, err = f.invokeApprovedToolApprovalResponses(ctx, notInvokedMsgs, tools, 0)
+			var executedCount int
+			newMsg, executedCount, errCount, err = f.invokeApprovedToolApprovalResponses(ctx, notInvokedMsgs, tools, 0)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
+			totalFunctionCalls += executedCount
 			if newMsg != nil {
 				opts = updateOptionsForNextIteration(opts)
 				messages = slices.Insert(messages, approvedResultInsertIdx, newMsg)
@@ -309,8 +330,12 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 				yield(nil, err)
 				return
 			}
-			if i >= f.maximumIterationsPerRequest {
-				f.logger.Debug(ctx, "reached maximum iteration count; stopping function invocation loop", "maximumIterationsPerRequest", f.maximumIterationsPerRequest)
+			if i >= f.maximumIterationsPerRequest || (f.maximumFunctionCallsPerRequest != nil && totalFunctionCalls >= *f.maximumFunctionCallsPerRequest) {
+				if i >= f.maximumIterationsPerRequest {
+					f.logger.Debug(ctx, "reached maximum iteration count; stopping function invocation loop", "maximumIterationsPerRequest", f.maximumIterationsPerRequest)
+				} else {
+					f.logger.Debug(ctx, "reached maximum function call count; stopping function invocation loop", "maximumFunctionCallsPerRequest", *f.maximumFunctionCallsPerRequest, "totalFunctionCalls", totalFunctionCalls)
+				}
 				opts = prepareOptionsForLastIteration(opts)
 			}
 			tools, requiresApproval := f.createToolsMap(opts)
@@ -403,7 +428,7 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			}
 			// If there's nothing more to do, break out of the loop and allow the handling at the
 			// end to configure the response with aggregated data from previous requests.
-			if i >= f.maximumIterationsPerRequest || hasApprovalRequiringFcc || f.shouldTerminateLoopBasedOnHandleableFunctions(ctx, functionCallContents, tools) {
+			if i >= f.maximumIterationsPerRequest || (f.maximumFunctionCallsPerRequest != nil && totalFunctionCalls >= *f.maximumFunctionCallsPerRequest) || hasApprovalRequiringFcc || f.shouldTerminateLoopBasedOnHandleableFunctions(ctx, functionCallContents, tools) {
 				break
 			}
 
@@ -411,12 +436,14 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 
 			// Process all of the functions, adding their results into the history.
 			var newMsg *message.Message
+			var executedCount int
 			var err error
-			newMsg, errCount, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount)
+			newMsg, executedCount, errCount, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
+			totalFunctionCalls += executedCount
 
 			// Stream any generated function results. This mirrors what's done for ResponseAsync, where the returned messages
 			// includes all activities, including generated function results.
@@ -1103,10 +1130,10 @@ func snapshotFunctionCall(call *message.FunctionCallContent) *message.FunctionCa
 	return &clone
 }
 
-func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, approvals []toolApprovalResultWithRequestMessage, tools map[string]tool.SchemaTool, errCount int) (*message.Message, int, error) {
+func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, approvals []toolApprovalResultWithRequestMessage, tools map[string]tool.SchemaTool, errCount int) (*message.Message, int, int, error) {
 	// Check if there are any function calls to do for any approved tool requests and execute them.
 	if len(approvals) == 0 {
-		return nil, errCount, nil
+		return nil, 0, errCount, nil
 	}
 	funcCalls := make([]*message.FunctionCallContent, 0, len(approvals))
 	for _, approval := range approvals {
@@ -1117,14 +1144,14 @@ func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, appr
 		}
 	}
 	if len(funcCalls) == 0 {
-		return nil, errCount, nil
+		return nil, 0, errCount, nil
 	}
-	newMsg, errCount, err := f.processFunctionCalls(ctx, tools, funcCalls, errCount)
+	newMsg, executedCount, errCount, err := f.processFunctionCalls(ctx, tools, funcCalls, errCount)
 	if err != nil {
-		return nil, errCount, err
+		return nil, 0, errCount, err
 	}
 
-	return newMsg, errCount, nil
+	return newMsg, executedCount, errCount, nil
 }
 
 type functionInvocationStatus int
@@ -1142,7 +1169,7 @@ type functionInvocationResult struct {
 	err    error
 }
 
-func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]tool.SchemaTool, funcCalls []*message.FunctionCallContent, errCount int) (*message.Message, int, error) {
+func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]tool.SchemaTool, funcCalls []*message.FunctionCallContent, errCount int) (*message.Message, int, int, error) {
 	// We must add a response for every tool call, regardless of whether we successfully executed it or not.
 	// If we successfully execute it, we'll add the result. If we don't, we'll add an error.
 	if len(funcCalls) == 0 { // invariant
@@ -1174,12 +1201,12 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 				}
 			}
 			if len(toolErrors) == 1 {
-				return nil, errCount, toolErrors[0]
+				return nil, 0, errCount, toolErrors[0]
 			}
 			if len(toolErrors) > 1 {
-				return nil, errCount, errors.Join(toolErrors...)
+				return nil, 0, errCount, errors.Join(toolErrors...)
 			}
-			return nil, errCount, err
+			return nil, 0, errCount, err
 		}
 		results = parallelResults
 	} else {
@@ -1189,12 +1216,12 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 			// Request cancellation must bypass the recoverable tool-error path.
 			if err := ctx.Err(); err != nil {
 				if result.err != nil {
-					return nil, errCount, result.err
+					return nil, 0, errCount, result.err
 				}
-				return nil, errCount, err
+				return nil, 0, errCount, err
 			}
 			if !captureCurrentIterationErrors && result.status == functionInvocationStatusException {
-				return nil, errCount, result.err
+				return nil, 0, errCount, result.err
 			}
 			results = append(results, result)
 		}
@@ -1207,10 +1234,10 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 	var err error
 	errCount, err = f.updateConsecutiveErrorCountOrThrow(ctx, newMsg, errCount)
 	if err != nil {
-		return nil, errCount, err
+		return nil, len(results), errCount, err
 	}
 
-	return newMsg, errCount, nil
+	return newMsg, len(results), errCount, nil
 }
 
 func (f *autocall) updateConsecutiveErrorCountOrThrow(ctx context.Context, added *message.Message, errCount int) (int, error) {
