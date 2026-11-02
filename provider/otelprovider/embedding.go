@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/embedding"
-	"github.com/microsoft/agent-framework-go/internal/otelx"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -164,12 +164,12 @@ func (g *embeddingGenerator[TInput, TEmbedding]) Generate(ctx context.Context, v
 	if !start.IsZero() {
 		durationAttrs := attrs
 		if err != nil {
-			durationAttrs = append(durationAttrs, semconv.ErrorTypeKey.String(otelx.ErrorTypeName(err)))
+			durationAttrs = append(durationAttrs, semconv.ErrorTypeKey.String(telemetry.ErrorTypeName(err)))
 		}
 		g.operationDuration.RecordSet(ctx, time.Since(start).Seconds(), attribute.NewSet(durationAttrs...))
 	}
 	if err != nil {
-		span.SetAttributes(semconv.ErrorTypeKey.String(otelx.ErrorTypeName(err)))
+		span.SetAttributes(semconv.ErrorTypeKey.String(telemetry.ErrorTypeName(err)))
 		span.SetStatus(codes.Error, err.Error())
 		if g.cfg.Logger != nil {
 			g.cfg.Logger.WarnContext(ctx, "gen_ai.client.operation.exception", slog.Any("error", err))

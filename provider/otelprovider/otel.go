@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/modelcall"
-	"github.com/microsoft/agent-framework-go/internal/otelx"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 
 	"go.opentelemetry.io/otel"
@@ -21,6 +22,8 @@ import (
 	"go.opentelemetry.io/otel/semconv/v1.41.0/genaiconv"
 	"go.opentelemetry.io/otel/trace"
 )
+
+const defaultSourceName = "github.com/microsoft/agent-framework-go"
 
 // MiddlewareConfig holds configuration for the middleware.
 type MiddlewareConfig struct {
@@ -36,8 +39,11 @@ type MiddlewareConfig struct {
 // NewMiddleware creates middleware that adds OpenTelemetry tracing and metrics
 // to agent runs, function tools, and supported model-adapter calls.
 // Set [MiddlewareConfig.DisableModelTracing] to omit model-call instrumentation.
+//
+// Tool tracing is supplied through [toolautocall.WithTracer] on the run context.
+// An explicit [toolautocall.Config.Tracer] takes precedence over the injected tracer.
 func NewMiddleware(cfg MiddlewareConfig) agent.Middleware {
-	name := cmp.Or(cfg.SourceName, "github.com/microsoft/agent-framework-go")
+	name := cmp.Or(cfg.SourceName, defaultSourceName)
 	operationDuration, tokenUsage := newClientMetrics(otel.Meter(name))
 	return &mw{
 		tracer:              otel.Tracer(name),
@@ -77,7 +83,7 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 		a, _ := agent.AgentFromContext(ctx)
 		start := time.Now()
 		// GenAI conventions name the span "<operation> <target>", mirroring the sibling
-		// execute_tool span (see startToolSpan). Fall back to the agent id when it has no
+		// execute_tool span. Fall back to the agent id when it has no
 		// name so the span still carries a target, matching .NET/Python. Default the id to
 		// "unknown" (as with the provider name below) so the span always carries a target
 		// and gen_ai.agent.id is never an empty string, even when the middleware runs
@@ -98,7 +104,7 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 			attrs = append(attrs, semconv.GenAIAgentDescription(a.Description()))
 		}
 		ctx, span := m.tracer.Start(ctx, name, trace.WithTimestamp(start), trace.WithAttributes(attrs...))
-		ctx = otelx.WithTracer(ctx, m.tracer)
+		ctx = toolautocall.WithTracer(ctx, toolTracer{tracer: m.tracer})
 		if !m.disableModelTracing {
 			ctx = modelcall.WithDecorator(ctx, m.modelRun)
 		}
@@ -126,7 +132,7 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 
 		for update, err := range next(ctx, messages, options...) {
 			if err != nil {
-				errorType = otelx.ErrorTypeName(err)
+				errorType = telemetry.ErrorTypeName(err)
 				span.SetAttributes(semconv.ErrorTypeKey.String(errorType))
 				span.RecordError(err, trace.WithTimestamp(time.Now()))
 				span.SetStatus(codes.Error, err.Error())

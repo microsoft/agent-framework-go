@@ -18,31 +18,50 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/internal/otelx"
 	"github.com/microsoft/agent-framework-go/internal/slogx"
 	"github.com/microsoft/agent-framework-go/internal/toolmiddleware"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
-
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 )
 
 const (
 	defaultMaximumConsecutiveErrorsPerRequest = 3
 	defaultMaximumIterationsPerRequest        = 40
-	opExecuteTool                             = "execute_tool"
 	pendingApprovalRequestsStateKey           = "toolautocall.pendingApprovalRequests"
 	pendingAutoApprovedCallsStateKey          = "toolautocall.pendingAutoApprovedCalls"
-
-	attrKeyOperationName = "gen_ai.operation.name"
-	attrKeyToolName      = "gen_ai.tool.name"
-	attrKeyToolCallID    = "gen_ai.tool.call.id"
-	attrKeyToolType      = "gen_ai.tool.type"
-	attrKeyToolDesc      = "gen_ai.tool.description"
-	attrKeyErrorType     = "error.type"
 )
+
+// Tracer instruments individual tool invocations without depending on a tracing
+// backend. Implementations must be safe for concurrent calls.
+type Tracer interface {
+	// StartToolCall begins tracing an invocation. The non-nil call and definition
+	// are read-only. Calls awaiting approval and tools that cannot be invoked are
+	// not traced.
+	//
+	// The returned context is passed to the tool. The returned completion
+	// function is called exactly once with the invocation's final error, or nil
+	// on success, after any tool panic has been recovered. Both return values
+	// must be non-nil.
+	StartToolCall(ctx context.Context, call *message.FunctionCallContent, definition tool.Tool) (context.Context, func(error))
+}
+
+type tracerContextKey struct{}
+
+type tracerContextValue struct {
+	tracer Tracer
+}
+
+// WithTracer returns a context that supplies tracer to automatic tool invocations.
+// A nil tracer disables context-provided tracing. [Config.Tracer] takes precedence
+// over the context-provided tracer.
+func WithTracer(ctx context.Context, tracer Tracer) context.Context {
+	return context.WithValue(ctx, tracerContextKey{}, tracerContextValue{tracer: tracer})
+}
+
+func tracerFromContext(ctx context.Context) Tracer {
+	value, _ := ctx.Value(tracerContextKey{}).(tracerContextValue)
+	return value.tracer
+}
 
 // Config configures the automatic tool invocation middleware.
 //
@@ -60,6 +79,11 @@ type Config struct {
 	// LogSensitiveData controls whether sensitive function arguments and results
 	// are included in logs. The default is false.
 	LogSensitiveData bool
+
+	// Tracer instruments tool invocations. It takes precedence over the tracer
+	// supplied through [WithTracer]. If nil, the context-provided tracer is used
+	// when available; otherwise tool invocations are not traced.
+	Tracer Tracer
 
 	// AdditionalTools are tools the middleware can invoke without adding them to
 	// provider requests. Request tools supplied through agent options take
@@ -118,6 +142,7 @@ type Config struct {
 
 type autocall struct {
 	logger                              slogx.Logger
+	tracer                              Tracer
 	additionalTools                     []tool.Tool
 	includeDetailedErrors               bool
 	terminateOnUnknownCalls             bool
@@ -149,6 +174,7 @@ func New(cfg Config) agent.Middleware {
 			Type:          slogx.TypeMiddleware,
 			Name:          "autocall",
 		},
+		tracer:                              cfg.Tracer,
 		additionalTools:                     cfg.AdditionalTools,
 		includeDetailedErrors:               cfg.IncludeDetailedErrors,
 		terminateOnUnknownCalls:             cfg.TerminateOnUnknownCalls,
@@ -1257,12 +1283,17 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	f.logger.Debug(ctx, "calling function", "funcName", funcCall.Name, slogx.SensitiveData("arguments", funcCall.Arguments))
 	start := time.Now()
 	ctx = agent.WithFuncCallID(ctx, funcCall.CallID)
-	ctx, span := startToolSpan(ctx, funcCall, declaration)
-	if span != nil {
-		defer span.End()
-	}
 	var result any
 	var err error
+	tracer := f.tracer
+	if tracer == nil {
+		tracer = tracerFromContext(ctx)
+	}
+	if tracer != nil {
+		var complete func(error)
+		ctx, complete = tracer.StartToolCall(ctx, funcCall, declaration)
+		defer func() { complete(err) }()
+	}
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -1276,11 +1307,6 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 		result, err = tl.Call(ctx, funcCall.Arguments)
 	}()
 	if err != nil {
-		if span != nil {
-			span.SetAttributes(attribute.String(attrKeyErrorType, otelx.ErrorTypeName(err)))
-			span.RecordError(err, trace.WithTimestamp(time.Now()))
-			span.SetStatus(codes.Error, err.Error())
-		}
 		if errors.Is(err, context.Canceled) {
 			f.logger.Debug(ctx, "call canceled", "funcName", funcCall.Name)
 		} else {
@@ -1294,32 +1320,6 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	}
 
 	return functionInvocationResult{status: functionInvocationStatusRanToCompletion, call: funcCall, result: result}
-}
-
-func startToolSpan(ctx context.Context, funcCall *message.FunctionCallContent, tl tool.Tool) (context.Context, trace.Span) {
-	tracer, ok := otelx.TracerFromContext(ctx)
-	if !ok || funcCall == nil {
-		return ctx, nil
-	}
-	name := opExecuteTool
-	if funcCall.Name != "" {
-		name += " " + funcCall.Name
-	}
-	attrs := []attribute.KeyValue{
-		attribute.String(attrKeyOperationName, opExecuteTool),
-		attribute.String(attrKeyToolName, funcCall.Name),
-		attribute.String(attrKeyToolCallID, cmp.Or(funcCall.CallID, "unknown")),
-		attribute.String(attrKeyToolType, "function"),
-	}
-	if tl != nil {
-		if desc := tl.Description(); desc != "" {
-			attrs = append(attrs, attribute.String(attrKeyToolDesc, desc))
-		}
-	}
-	// TODO: add gen_ai.tool.call.arguments and gen_ai.tool.call.result when an
-	// opt-in EnableSensitiveData flag is available on Config (parity with Python's
-	// get_function_span_attributes and .NET's OpenTelemetryAgent.EnableSensitiveData).
-	return tracer.Start(ctx, name, trace.WithAttributes(attrs...))
 }
 
 func (f *autocall) createResponseMessage(results []functionInvocationResult) *message.Message {
