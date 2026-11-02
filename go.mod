@@ -9,13 +9,13 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.7.0
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260312103001-8e7ab1df34c8
 	github.com/anthropics/anthropic-sdk-go v1.84.0
-	github.com/github/copilot-sdk/go v1.0.26
+	github.com/github/copilot-sdk/go v1.0.28
 	github.com/gofrs/flock v0.13.1
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.6
-	github.com/openai/openai-go/v3 v3.88.0
+	github.com/openai/openai-go/v3 v3.90.0
 	github.com/qdrant/go-client v1.20.1
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.47.0
@@ -24,7 +24,7 @@ require (
 	go.opentelemetry.io/otel/sdk/metric v1.47.0
 	go.opentelemetry.io/otel/trace v1.47.0
 	golang.org/x/sync v0.24.0
-	google.golang.org/genai v1.76.0
+	google.golang.org/genai v1.77.0
 )
 
 require (
