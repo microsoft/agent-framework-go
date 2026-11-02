@@ -61,6 +61,49 @@ func TestSubworkflowBinding_ForwardsOutputsAsParentOutputsAndMessages(t *testing
 	}
 }
 
+func TestSubworkflowBindingWithConfig_OutputForwardingGates(t *testing.T) {
+	tests := []struct {
+		name      string
+		cfg       inproc.SubworkflowConfig
+		wantSink  int
+		wantYield int
+	}{
+		{"default", inproc.SubworkflowConfig{}, 1, 1},
+		{"no send", inproc.SubworkflowConfig{AutoSendMessageHandlerResultObject: new(false)}, 0, 1},
+		{"no yield", inproc.SubworkflowConfig{AutoYieldOutputHandlerResultObject: new(false)}, 1, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			childStart := workflow.NewExecutor("child-start", func(in textMessage) dataMessage {
+				return dataMessage{Bytes: []byte(in.Text)}
+			}).Bind()
+			child, err := workflow.NewBuilder(childStart).WithOutputFrom(childStart).Build()
+			if err != nil {
+				t.Fatalf("Build child: %v", err)
+			}
+
+			host := inproc.BindSubworkflowAsExecutorWithConfig(child, "child", tt.cfg)
+			sinkCount := 0
+			sink := workflow.NewExecutor("sink", func(dataMessage) { sinkCount++ }).Bind()
+			parent, err := workflow.NewBuilder(host).AddEdge(host, sink).WithOutputFrom(host).Build()
+			if err != nil {
+				t.Fatalf("Build parent: %v", err)
+			}
+
+			run, err := inproc.Lockstep.Run(t.Context(), parent, textMessage{Text: "abc"})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if sinkCount != tt.wantSink {
+				t.Fatalf("sink messages = %d, want %d", sinkCount, tt.wantSink)
+			}
+			if got := len(outputEvents(slicesCollect(run.OutgoingEvents()))); got != tt.wantYield {
+				t.Fatalf("output count = %d, want %d", got, tt.wantYield)
+			}
+		})
+	}
+}
+
 func TestSubworkflowBinding_ForwardsWorkflowWarningAsWorkflowWarning(t *testing.T) {
 	childStart := workflow.NewExecutor("child-start", func(ctx *workflow.Context, _ textMessage) error {
 		return ctx.AddEvent(workflow.WorkflowWarningEvent{Message: "child warning"})
