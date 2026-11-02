@@ -95,7 +95,7 @@ func buildWorkflow() *workflow.Workflow {
 	child := buildChild(approvePort)
 
 	const hostID = "ApprovalSubworkflow"
-	host := inproc.BindSubworkflowAsExecutor(child, hostID)
+	host := inproc.BindSubworkflowAsExecutor(child, hostID, inproc.SubworkflowConfig{})
 
 	// A nested request port is surfaced to the parent under a qualified ID of the
 	// form "<subworkflowID>.<portID>", so the escalation port must match it.

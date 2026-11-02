@@ -38,16 +38,10 @@ type SubworkflowConfig struct {
 }
 
 // BindSubworkflowAsExecutor returns an [workflow.ExecutorBinding] that hosts wf
-// as a subworkflow with the supplied workflow-unique executor ID. Subworkflow
-// outputs are both sent to downstream executors and yielded as parent outputs.
-func BindSubworkflowAsExecutor(wf *workflow.Workflow, id string) workflow.ExecutorBinding {
-	return BindSubworkflowAsExecutorWithConfig(wf, id, SubworkflowConfig{})
-}
-
-// BindSubworkflowAsExecutorWithConfig is like [BindSubworkflowAsExecutor] but
-// lets the caller choose whether subworkflow outputs are sent as messages
-// and/or yielded as outputs of the parent workflow.
-func BindSubworkflowAsExecutorWithConfig(wf *workflow.Workflow, id string, cfg SubworkflowConfig) workflow.ExecutorBinding {
+// as a subworkflow with the supplied workflow-unique executor ID. cfg controls
+// whether outputs are sent to downstream executors and/or yielded as parent
+// outputs; nil config fields default to true.
+func BindSubworkflowAsExecutor(wf *workflow.Workflow, id string, cfg SubworkflowConfig) workflow.ExecutorBinding {
 	if wf == nil {
 		panic("subworkflow: cannot bind nil Workflow as executor")
 	}

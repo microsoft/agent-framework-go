@@ -20071,7 +20071,7 @@
             "note": "Go binds the port and accepts wrapped requests, but has no allowWrappedRequests=false setting."
           },
           "BindAsExecutor(Workflow, string, ExecutorOptions) -> ExecutorBinding": {
-            "go": "inproc.BindSubworkflowAsExecutor(wf, id)",
+            "go": "inproc.BindSubworkflowAsExecutor(wf, id, inproc.SubworkflowConfig{})",
             "go_symbols": [
               "workflow/inproc.BindSubworkflowAsExecutor"
             ],
@@ -20310,7 +20310,7 @@
             "note": "BindNewExecutorFunc covers the explicit-ID factory alias; its callback takes session ID before executor ID."
           },
           "ConfigureSubWorkflow(Workflow, string, ExecutorOptions) -> ExecutorBinding": {
-            "go": "inproc.BindSubworkflowAsExecutor(wf, id)",
+            "go": "inproc.BindSubworkflowAsExecutor(wf, id, inproc.SubworkflowConfig{})",
             "go_symbols": [
               "workflow/inproc.BindSubworkflowAsExecutor"
             ],
@@ -24002,7 +24002,7 @@
         "area": "workflows",
         "assembly": "Microsoft.Agents.AI.Workflows",
         "mapping": {
-          "go": "inproc.BindSubworkflowAsExecutor(wf, id)",
+          "go": "inproc.BindSubworkflowAsExecutor(wf, id, inproc.SubworkflowConfig{})",
           "go_symbols": [
             "workflow/inproc.BindSubworkflowAsExecutor",
             "workflow.ExecutorBinding"
@@ -24115,7 +24115,7 @@
         },
         "constructors": {
           "SubworkflowBinding(Workflow, string, ExecutorOptions)": {
-            "go": "inproc.BindSubworkflowAsExecutor(wf, id)",
+            "go": "inproc.BindSubworkflowAsExecutor(wf, id, inproc.SubworkflowConfig{})",
             "go_symbols": [
               "workflow/inproc.BindSubworkflowAsExecutor"
             ],

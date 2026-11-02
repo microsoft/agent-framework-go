@@ -202,7 +202,7 @@ func sampleResourceWorkflow(t *testing.T) *workflow.Workflow {
 		})
 		return pb, nil
 	})
-	host := inproc.BindSubworkflowAsExecutor(sampleResourceChild(t), "ResourceWorkflow")
+	host := inproc.BindSubworkflowAsExecutor(sampleResourceChild(t), "ResourceWorkflow", inproc.SubworkflowConfig{})
 	cache, policy := sampleResourceGate("ResourceCache", false), sampleResourceGate("QuotaPolicyEngine", true)
 	resourcePort := workflow.RequestPort{ID: "ResourceRequest", Request: reflect.TypeFor[sampleResourceRequest](), Response: reflect.TypeFor[sampleResourceResponse]()}
 	policyPort := workflow.RequestPort{ID: "PolicyCheckRequest", Request: reflect.TypeFor[samplePolicyRequest](), Response: reflect.TypeFor[samplePolicyResponse]()}
