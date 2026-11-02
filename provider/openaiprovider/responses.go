@@ -19,8 +19,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/internal/modelcall"
 	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
@@ -102,15 +103,15 @@ func ResponsesIncludeReasoningEncryptedContent(enabled bool) agent.Option {
 	return responsesIncludeReasoningEncryptedContentOpt(enabled)
 }
 
-func (a *responsesClient) formatOf(v any) (agent.ResponseFormat, error) {
-	format, err := jsonformat.ForType(reflect.TypeOf(v))
+func (a *responsesClient) formatOf(v any) (format.ResponseFormat, error) {
+	responseFormat, err := jsonformat.ForType(reflect.TypeOf(v))
 	if err != nil {
-		return agent.ResponseFormat{}, err
+		return format.ResponseFormat{}, err
 	}
-	return jsonformat.WrapNonObjectSchema(format)
+	return jsonformat.WrapNonObjectSchema(responseFormat)
 }
 
-func (a *responsesClient) unmarshal(format agent.ResponseFormat, data []byte, v any) error {
+func (a *responsesClient) unmarshal(format format.ResponseFormat, data []byte, v any) error {
 	jsonFormat, err := jsonformat.FromResponseFormat(format)
 	if err != nil {
 		return err

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 
 	"github.com/google/uuid"
+	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/internal/agentopts"
 	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/internal/toolmiddleware"
@@ -44,10 +45,10 @@ type ProviderConfig struct {
 	ManagesToolExecution bool
 
 	// Format creates a provider response format for the structured output value.
-	Format func(v any) (ResponseFormat, error)
+	Format func(v any) (format.ResponseFormat, error)
 
 	// Unmarshal decodes provider structured output into v using format.
-	Unmarshal func(format ResponseFormat, data []byte, v any) error
+	Unmarshal func(format format.ResponseFormat, data []byte, v any) error
 
 	// CreateSession configures a provider-specific session. The session is initialized
 	// and supports concurrent state access. Implementations must treat options as
