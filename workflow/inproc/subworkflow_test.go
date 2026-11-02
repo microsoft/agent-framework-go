@@ -89,6 +89,13 @@ func TestSubworkflowBindingWithConfig_OutputForwardingGates(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Build parent: %v", err)
 			}
+			descriptor, err := parent.DescribeProtocol()
+			if err != nil {
+				t.Fatalf("DescribeProtocol: %v", err)
+			}
+			if got := containsType(descriptor.Yields, reflect.TypeFor[dataMessage]()); got != (tt.wantYield != 0) {
+				t.Fatalf("protocol declares dataMessage output = %v, want %v", got, tt.wantYield != 0)
+			}
 
 			run, err := inproc.Lockstep.Run(t.Context(), parent, textMessage{Text: "abc"})
 			if err != nil {
