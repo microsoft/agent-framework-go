@@ -317,7 +317,7 @@ func TestCheckpointResume_StreamingPreservesNestedFanInMessages(t *testing.T) {
 	for _, environment := range checkpointTestEnvironments() {
 		t.Run(environment.name, func(t *testing.T) {
 			buildOuter := func() *workflow.Workflow {
-				host := inproc.BindSubworkflowAsExecutor(checkpointBarrierWorkflow(t, "InnerApproval", "InnerSink", false), "InnerSubworkflow")
+				host := inproc.BindSubworkflowAsExecutor(checkpointBarrierWorkflow(t, "InnerApproval", "InnerSink", false), "InnerSubworkflow", inproc.SubworkflowConfig{})
 				port := workflow.RequestPort{ID: "ForwardedInnerApproval", Request: reflect.TypeFor[checkpointApprovalRequest](), Response: reflect.TypeFor[checkpointApprovalReply]()}
 				wf, err := workflow.NewBuilder(host).AddEdge(host, port.Bind(), workflow.WithEdgeCondition(externalRequestOnly)).
 					AddEdge(port.Bind(), host, workflow.WithEdgeCondition(externalResponseOnly)).Build()

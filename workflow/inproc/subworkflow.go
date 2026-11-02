@@ -23,9 +23,25 @@ const (
 	subworkflowImplementationID  = "workflow/subworkflow.Binding"
 )
 
+// SubworkflowConfig configures how a hosted subworkflow forwards its outputs.
+type SubworkflowConfig struct {
+	// AutoSendMessageHandlerResultObject controls whether each output of the
+	// subworkflow is sent as a message to the host's downstream executors.
+	// Nil means true.
+	AutoSendMessageHandlerResultObject *bool
+
+	// AutoYieldOutputHandlerResultObject controls whether each output of the
+	// subworkflow is also yielded as an output of the parent workflow. When
+	// false, the host does not declare the subworkflow's output types as yielded.
+	// Nil means true.
+	AutoYieldOutputHandlerResultObject *bool
+}
+
 // BindSubworkflowAsExecutor returns an [workflow.ExecutorBinding] that hosts wf
-// as a subworkflow with the supplied workflow-unique executor ID.
-func BindSubworkflowAsExecutor(wf *workflow.Workflow, id string) workflow.ExecutorBinding {
+// as a subworkflow with the supplied workflow-unique executor ID. cfg controls
+// whether outputs are sent to downstream executors and/or yielded as parent
+// outputs; nil config fields default to true.
+func BindSubworkflowAsExecutor(wf *workflow.Workflow, id string, cfg SubworkflowConfig) workflow.ExecutorBinding {
 	if wf == nil {
 		panic("subworkflow: cannot bind nil Workflow as executor")
 	}
@@ -42,12 +58,12 @@ func BindSubworkflowAsExecutor(wf *workflow.Workflow, id string) workflow.Execut
 		RawValue:                          wf,
 		SupportsConcurrentSharedExecution: true,
 		NewExecutorFunc: func(sessionID string) (*workflow.Executor, error) {
-			return newSubworkflowExecutor(id, wf, sessionID, ownershipToken)
+			return newSubworkflowExecutor(id, wf, sessionID, ownershipToken, cfg)
 		},
 	}
 }
 
-func newSubworkflowExecutor(id string, wf *workflow.Workflow, sessionID string, ownershipToken any) (*workflow.Executor, error) {
+func newSubworkflowExecutor(id string, wf *workflow.Workflow, sessionID string, ownershipToken any, cfg SubworkflowConfig) (*workflow.Executor, error) {
 	protocol, err := wf.DescribeProtocol()
 	if err != nil {
 		return nil, err
@@ -58,6 +74,8 @@ func newSubworkflowExecutor(id string, wf *workflow.Workflow, sessionID string, 
 		sessionID:      sessionID,
 		ownershipToken: ownershipToken,
 		protocol:       protocol,
+		autoSend:       cfg.AutoSendMessageHandlerResultObject == nil || *cfg.AutoSendMessageHandlerResultObject,
+		autoYield:      cfg.AutoYieldOutputHandlerResultObject == nil || *cfg.AutoYieldOutputHandlerResultObject,
 	}
 	return host.executor(), nil
 }
@@ -68,6 +86,8 @@ type subworkflowHostExecutor struct {
 	sessionID      string
 	ownershipToken any
 	protocol       workflow.ProtocolDescriptor
+	autoSend       bool
+	autoYield      bool
 	joinContext    *runnerContext
 
 	runner               *runner
@@ -198,7 +218,9 @@ func (h *subworkflowHostExecutor) ensureRunSendMessage(ctx *workflow.Context, in
 
 func (h *subworkflowHostExecutor) configureProtocol(pb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
 	pb.SendsMessageType(h.protocol.Yields...)
-	pb.YieldsOutputType(h.protocol.Yields...)
+	if h.autoYield {
+		pb.YieldsOutputType(h.protocol.Yields...)
+	}
 	pb.RouteBuilder.AddCatchAll(h.queueExternalMessage)
 	return pb, nil
 }
@@ -277,10 +299,14 @@ func (h *subworkflowHostExecutor) forwardWorkflowEvent(ctx *workflow.Context, ev
 			return nil
 		}
 		if h.joinContext != nil {
-			if err := h.joinContext.sendMessage(ctx, h.id, "", event.Output); err != nil {
-				return err
+			if h.autoSend {
+				if err := h.joinContext.sendMessage(ctx, h.id, "", event.Output); err != nil {
+					return err
+				}
 			}
-			return h.yieldOutput(ctx, event.Output)
+			if h.autoYield {
+				return h.yieldOutput(ctx, event.Output)
+			}
 		}
 		return nil
 	case workflow.RequestHaltEvent:
