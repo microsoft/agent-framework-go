@@ -34,13 +34,13 @@ type Frontmatter struct {
 // Validate validates the frontmatter according to the Agent Skills specification.
 // Description and compatibility limits count UTF-16 code units.
 func (f Frontmatter) Validate() error {
-	if err := validateName(f.Name); err != nil {
+	if err := ValidateName(f.Name); err != nil {
 		return err
 	}
-	if err := validateDescription(f.Description); err != nil {
+	if err := ValidateDescription(f.Description); err != nil {
 		return err
 	}
-	if err := validateCompatibility(f.Compatibility); err != nil {
+	if err := ValidateCompatibility(f.Compatibility); err != nil {
 		return err
 	}
 	return nil
@@ -122,8 +122,10 @@ type Script struct {
 // The runner is responsible for decoding and validating its argument format.
 type ScriptRunner func(context.Context, *Skill, *Script, json.RawMessage) (any, error)
 
-// validateName validates a skill name.
-func validateName(name string) error {
+// ValidateName validates a skill name. It must be non-blank, at most 64
+// characters, and use only lowercase letters, digits, and single interior
+// hyphens.
+func ValidateName(name string) error {
 	if strings.TrimSpace(name) == "" {
 		return fmt.Errorf("skill name is required")
 	}
@@ -157,8 +159,9 @@ func isValidSkillName(name string) bool {
 	return !previousHyphen
 }
 
-// validateDescription validates a skill description.
-func validateDescription(description string) error {
+// ValidateDescription validates a skill description. It must be non-blank and
+// at most 1024 UTF-16 code units.
+func ValidateDescription(description string) error {
 	if strings.TrimSpace(description) == "" {
 		return fmt.Errorf("skill description is required")
 	}
@@ -168,8 +171,9 @@ func validateDescription(description string) error {
 	return nil
 }
 
-// validateCompatibility validates an optional compatibility value.
-func validateCompatibility(compatibility string) error {
+// ValidateCompatibility validates an optional compatibility value. An empty
+// value is valid; otherwise it must be at most 500 UTF-16 code units.
+func ValidateCompatibility(compatibility string) error {
 	if utf16Length(compatibility) > maxCompatibilityLength {
 		return fmt.Errorf("skill compatibility must be %d characters or fewer", maxCompatibilityLength)
 	}

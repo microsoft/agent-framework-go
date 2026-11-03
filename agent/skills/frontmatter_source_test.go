@@ -107,6 +107,33 @@ func TestValidateCompatibility_Unset_ReturnsNil(t *testing.T) {
 	}
 }
 
+func TestExportedFieldValidators(t *testing.T) {
+	for _, name := range []string{"my-skill", "a", "a1"} {
+		if err := skills.ValidateName(name); err != nil {
+			t.Errorf("ValidateName(%q) = %v", name, err)
+		}
+	}
+	for _, name := range []string{"", "  ", "-a", "a-", "a--b", "Abc", strings.Repeat("a", 65)} {
+		if err := skills.ValidateName(name); err == nil {
+			t.Errorf("ValidateName(%q) succeeded", name)
+		}
+	}
+	if err := skills.ValidateDescription("ok"); err != nil {
+		t.Errorf("ValidateDescription: %v", err)
+	}
+	for _, d := range []string{"", " ", strings.Repeat("x", 1025)} {
+		if err := skills.ValidateDescription(d); err == nil {
+			t.Errorf("ValidateDescription(len %d) succeeded", len(d))
+		}
+	}
+	if err := skills.ValidateCompatibility(""); err != nil {
+		t.Errorf("ValidateCompatibility empty: %v", err)
+	}
+	if err := skills.ValidateCompatibility(strings.Repeat("x", 501)); err == nil {
+		t.Error("ValidateCompatibility accepted 501 characters")
+	}
+}
+
 func TestFrontmatter_UnicodeLengthLimits(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
