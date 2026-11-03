@@ -25,6 +25,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/harness"
 	"github.com/microsoft/agent-framework-go/agent/harness/agentmode"
 	"github.com/microsoft/agent-framework-go/agent/harness/filememory"
+	"github.com/microsoft/agent-framework-go/agent/harness/loop"
 	"github.com/microsoft/agent-framework-go/agent/harness/todo"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
@@ -1855,4 +1856,278 @@ type borrowedProvider struct {
 func (p *borrowedProvider) Close() error {
 	p.closed = true
 	return nil
+}
+
+func newLocalAgentWithAutocall(cfg agent.Config, run agent.RunFunc, autocallCfg toolautocall.Config) *agent.Agent {
+	return agent.New(agent.ProviderConfig{
+		ProviderName: "test",
+		Run:          run,
+		Middlewares:  []agent.Middleware{toolautocall.New(autocallCfg)},
+	}, cfg)
+}
+
+func TestToolApproval_SharesMaximumFunctionCallsAcrossAutoApprovedReEntries(t *testing.T) {
+	settings := harness.Config{
+		DisableTodo:       true,
+		DisableAgentMode:  true,
+		DisableSkills:     true,
+		DisableFileMemory: true,
+	}
+	settings.ToolApproval.AutoApprovalRules = []toolapproval.AutoApprovalRule{toolapproval.AllToolsAutoApprovalRule}
+
+	var executions int
+	fn := functool.MustNew(functool.Config{Name: "step_action"}, func(context.Context, struct{}) (string, error) {
+		executions++
+		return fmt.Sprintf("step %d done", executions), nil
+	})
+
+	maxCalls := 2
+	runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
+		// Request 1: first auto-approved batch
+		AddFunctionCall("call-1", fn.Name(), `{}`).
+		NewTurn().
+		// Request 1: second auto-approved batch
+		AddFunctionCall("call-2", fn.Name(), `{}`).
+		NewTurn(func(_ context.Context, messages []*message.Message, opts ...agent.Option) {
+			for tl := range agent.AllOptions(opts, agent.WithTool) {
+				if tl.Name() == fn.Name() {
+					t.Errorf("expected %s to be stripped after reaching budget of 2", fn.Name())
+				}
+			}
+		}).
+		AddText("request 1 completed").
+		NewTurn().
+		// Request 2 (independent run): first auto-approved batch with fresh budget
+		AddFunctionCall("call-3", fn.Name(), `{}`).
+		NewTurn().
+		// Request 2: second auto-approved batch
+		AddFunctionCall("call-4", fn.Name(), `{}`).
+		NewTurn(func(_ context.Context, messages []*message.Message, opts ...agent.Option) {
+			for tl := range agent.AllOptions(opts, agent.WithTool) {
+				if tl.Name() == fn.Name() {
+					t.Errorf("expected %s to be stripped in request 2 after reaching budget of 2", fn.Name())
+				}
+			}
+		}).
+		AddText("request 2 completed").
+		Build()}
+
+	a := newLocalAgentWithAutocall(harnessConfig(t, settings)(agent.Config{
+		Tools: []tool.Tool{tool.ApprovalRequiredFunc(fn)},
+	}), runner.Run, toolautocall.Config{
+		MaximumFunctionCallsPerRequest: &maxCalls,
+	})
+
+	session := &agent.Session{}
+
+	// Request 1
+	resp1, err := a.RunText(t.Context(), "start request 1", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executions != 2 {
+		t.Fatalf("expected 2 executions in request 1, got %d", executions)
+	}
+	if resp1.String() != "request 1 completed" {
+		t.Fatalf("unexpected response 1: %q", resp1.String())
+	}
+
+	// Request 2: independent run with same session must reset the budget
+	resp2, err := a.RunText(t.Context(), "start request 2", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executions != 4 {
+		t.Fatalf("expected 4 total executions across both requests, got %d", executions)
+	}
+	if resp2.String() != "request 2 completed" {
+		t.Fatalf("unexpected response 2: %q", resp2.String())
+	}
+}
+
+func TestToolApproval_SharesMaximumFunctionCallsAcrossHumanApprovalResumption(t *testing.T) {
+	settings := harness.Config{
+		DisableTodo:       true,
+		DisableAgentMode:  true,
+		DisableSkills:     true,
+		DisableFileMemory: true,
+	}
+
+	var executions int
+	fn := functool.MustNew(functool.Config{Name: "step_action"}, func(context.Context, struct{}) (string, error) {
+		executions++
+		return fmt.Sprintf("step %d done", executions), nil
+	})
+
+	maxCalls := 1
+	runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
+		// Turn 1 (initial run): returns FCC requiring approval
+		AddFunctionCall("call-1", fn.Name(), `{}`).
+		NewTurn(func(_ context.Context, messages []*message.Message, opts ...agent.Option) {
+			// Resumed run after user approval: since budget is 1 and approved call was executed,
+			// schema tools must be stripped.
+			for tl := range agent.AllOptions(opts, agent.WithTool) {
+				if tl.Name() == fn.Name() {
+					t.Errorf("expected %s to be stripped after reaching budget of 1", fn.Name())
+				}
+			}
+		}).
+		AddText("completed after human approval").
+		NewTurn(func(_ context.Context, messages []*message.Message, opts ...agent.Option) {
+			// Turn 3 (independent run with same session): budget must be reset, so tool is present again
+			hasTool := false
+			for tl := range agent.AllOptions(opts, agent.WithTool) {
+				if tl.Name() == fn.Name() {
+					hasTool = true
+				}
+			}
+			if !hasTool {
+				t.Errorf("expected %s to be available in independent run", fn.Name())
+			}
+		}).
+		AddText("independent request completed").
+		Build()}
+
+	a := newLocalAgentWithAutocall(harnessConfig(t, settings)(agent.Config{
+		Tools: []tool.Tool{tool.ApprovalRequiredFunc(fn)},
+	}), runner.Run, toolautocall.Config{
+		MaximumFunctionCallsPerRequest: &maxCalls,
+	})
+
+	session := &agent.Session{}
+
+	// Step 1: initial run surfaces approval request
+	resp1, err := a.RunText(t.Context(), "start request 1", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var request *message.ToolApprovalRequestContent
+	for content := range resp1.Contents() {
+		if approval, ok := content.(*message.ToolApprovalRequestContent); ok {
+			request = approval
+		}
+	}
+	if request == nil {
+		t.Fatal("expected approval request to be surfaced")
+	}
+	if executions != 0 {
+		t.Fatalf("expected 0 executions before approval, got %d", executions)
+	}
+
+	// Step 2: resume with approval response in a new a.RunMessage call (allocates a new runToken)
+	approvalMsg := message.New(request.CreateResponse(true, "approved"))
+	resp2, err := a.RunMessage(t.Context(), approvalMsg, agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executions != 1 {
+		t.Fatalf("expected 1 execution after approval, got %d", executions)
+	}
+	if resp2.String() != "completed after human approval" {
+		t.Fatalf("unexpected response 2: %q", resp2.String())
+	}
+
+	// Step 3: independent run with the same session starts with a fresh budget
+	resp3, err := a.RunText(t.Context(), "start request 2", agent.WithSession(session)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp3.String() != "independent request completed" {
+		t.Fatalf("unexpected response 3: %q", resp3.String())
+	}
+}
+
+func TestLoop_SharesMaximumFunctionCallsAcrossIterations(t *testing.T) {
+	var executions int
+	fn := functool.MustNew(functool.Config{Name: "step_action"}, func(context.Context, struct{}) (string, error) {
+		executions++
+		return fmt.Sprintf("step %d done", executions), nil
+	})
+
+	maxCalls := 1
+	var round1SchemaToolsStripped bool
+	runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
+		// Round 0 of loop: model calls step_action
+		AddFunctionCall("call-1", fn.Name(), `{}`).
+		NewTurn(func(_ context.Context, _ []*message.Message, opts ...agent.Option) {
+			// Round 1 of loop: called again by loop.New within same agent.Run.
+			// Budget of 1 was consumed in round 0, so schema tools must be stripped.
+			round1SchemaToolsStripped = true
+			for optTool := range agent.AllOptions(opts, agent.WithTool) {
+				if _, ok := optTool.(tool.SchemaTool); ok {
+					round1SchemaToolsStripped = false
+					t.Errorf("round 1: expected schema tools to be stripped after reaching budget of 1")
+				}
+			}
+		}).
+		AddText("completed loop").
+		Build(),
+	}
+
+	cfg := agent.Config{
+		Middlewares: []agent.Middleware{
+			loop.New(loop.Config{
+				MaxIterations: new(3),
+				Evaluators: []loop.Evaluator{
+					loop.EvaluatorFunc(func(_ context.Context, lctx *loop.Context) (loop.Evaluation, error) {
+						if lctx.Iteration < 1 {
+							return loop.Evaluation{ShouldReinvoke: true}, nil
+						}
+						return loop.Evaluation{ShouldReinvoke: false}, nil
+					}),
+				},
+			}),
+		},
+	}
+	a := agent.New(agent.ProviderConfig{
+		ProviderName: "test",
+		Run:          runner.Run,
+		Middlewares: []agent.Middleware{
+			toolautocall.New(toolautocall.Config{
+				MaximumFunctionCallsPerRequest: &maxCalls,
+			}),
+		},
+	}, cfg)
+
+	session := &agent.Session{}
+	resp1, err := a.RunText(t.Context(), "start request 1", agent.WithSession(session), agent.WithTool(fn)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executions != 1 {
+		t.Fatalf("expected 1 execution in request 1 across loop rounds, got %d", executions)
+	}
+	if !round1SchemaToolsStripped {
+		t.Fatalf("expected round 1 to strip schema tools")
+	}
+	if resp1.String() != "completed loop" {
+		t.Fatalf("unexpected response 1: %q", resp1.String())
+	}
+
+	// Request 2: new independent run with same session must reset budget
+	runner2 := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
+		AddFunctionCall("call-2", fn.Name(), `{}`).
+		NewTurn().
+		AddText("completed request 2").
+		Build(),
+	}
+	a2 := agent.New(agent.ProviderConfig{
+		ProviderName: "test",
+		Run:          runner2.Run,
+		Middlewares: []agent.Middleware{
+			toolautocall.New(toolautocall.Config{
+				MaximumFunctionCallsPerRequest: &maxCalls,
+			}),
+		},
+	}, cfg)
+	resp2, err := a2.RunText(t.Context(), "start request 2", agent.WithSession(session), agent.WithTool(fn)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executions != 2 {
+		t.Fatalf("expected 2 total executions across both independent runs, got %d", executions)
+	}
+	if resp2.String() != "completed request 2" {
+		t.Fatalf("unexpected response 2: %q", resp2.String())
+	}
 }

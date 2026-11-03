@@ -1267,6 +1267,609 @@ func TestFunctionInvoking_NegativeMaximumIterationsReturnsError(t *testing.T) {
 	}
 }
 
+func TestFunctionInvoking_NegativeMaximumFunctionCallsReturnsError(t *testing.T) {
+	invoked := false
+	next := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		invoked = true
+		return func(func(*agent.ResponseUpdate, error) bool) {}
+	}
+
+	var got error
+	for _, err := range toolautocall.New(toolautocall.Config{MaximumFunctionCallsPerRequest: new(-1)}).Run(
+		next,
+		t.Context(),
+		[]*message.Message{message.NewText("hello")},
+	) {
+		if err != nil {
+			got = err
+			break
+		}
+	}
+
+	if got == nil || !strings.Contains(got.Error(), "MaximumFunctionCallsPerRequest must be 0 or greater") {
+		t.Fatalf("Run() error = %v, want function-call-limit validation error", got)
+	}
+	if invoked {
+		t.Fatal("provider was invoked for invalid configuration")
+	}
+}
+
+func TestFunctionInvoking_ZeroMaximumFunctionCallsDisablesAutomaticCallsAndReturnsFinalResponse(t *testing.T) {
+	providerCalls := 0
+	toolCalls := 0
+	next := func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerCalls++
+		for t := range agent.AllOptions(opts, agent.WithTool) {
+			if _, ok := t.(tool.SchemaTool); ok {
+				return func(yield func(*agent.ResponseUpdate, error) bool) {
+					yield(nil, errors.New("expected schema tools to be stripped when MaximumFunctionCallsPerRequest is 0"))
+				}
+			}
+		}
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "final text response"}},
+			}, nil)
+		}
+	}
+	testTool := functool.MustNew(functool.Config{Name: "Func1"}, func(context.Context, struct{}) (string, error) {
+		toolCalls++
+		return "ok", nil
+	})
+
+	var resp agent.Response
+	for update, err := range toolautocall.New(toolautocall.Config{MaximumFunctionCallsPerRequest: new(0)}).Run(
+		next,
+		t.Context(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithTool(testTool),
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Update(update)
+	}
+	if providerCalls != 1 {
+		t.Fatalf("provider calls = %d, want 1", providerCalls)
+	}
+	if toolCalls != 0 {
+		t.Fatalf("tool calls = %d, want 0", toolCalls)
+	}
+	if text := resp.String(); text != "final text response" {
+		t.Fatalf("response text = %q, want %q", text, "final text response")
+	}
+}
+
+func TestFunctionInvoking_MaximumFunctionCallsCapsSingleCallsPerIteration(t *testing.T) {
+	maxCalls := 3
+	actualCallCount := 0
+
+	tools := []tool.Tool{
+		functool.MustNew(functool.Config{Name: "VoidReturn"},
+			func(ctx context.Context, args struct{}) (string, error) {
+				actualCallCount++
+				return "Success: Function completed.", nil
+			}),
+	}
+
+	plan := []*message.Message{
+		message.New(&message.TextContent{Text: "hello"}),
+	}
+
+	for i := 0; i < maxCalls+5; i++ {
+		plan = append(plan,
+			&message.Message{Role: message.RoleAssistant, Contents: []message.Content{
+				&message.FunctionCallContent{CallID: fmt.Sprintf("callId%d", i), Name: "VoidReturn"},
+			}},
+		)
+		plan = append(plan,
+			&message.Message{Role: message.RoleTool, Contents: []message.Content{
+				&message.FunctionResultContent{CallID: fmt.Sprintf("callId%d", i), Result: "Success: Function completed."},
+			}},
+		)
+	}
+
+	expectedPlan := plan[:maxCalls*2+2]
+
+	autocallOptions := toolautocall.Config{
+		MaximumFunctionCallsPerRequest: new(maxCalls),
+	}
+
+	invokeAndAssert(t, tools, plan, expectedPlan, autocallOptions)
+
+	if actualCallCount != maxCalls {
+		t.Errorf("Expected %d function calls, got %d", maxCalls, actualCallCount)
+	}
+}
+
+func TestFunctionInvoking_MaximumFunctionCallsAllowsCurrentBatchToFinish(t *testing.T) {
+	maxCalls := 2
+	actualCallCount := 0
+
+	tools := []tool.Tool{
+		functool.MustNew(functool.Config{Name: "ToolCall"},
+			func(ctx context.Context, args struct{}) (string, error) {
+				actualCallCount++
+				return "done", nil
+			}),
+	}
+
+	providerCalls := 0
+	next := func(_ context.Context, msgs []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerCalls++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if providerCalls == 1 {
+				// First turn: model returns a batch of 3 function calls (overshooting limit of 2)
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "call1", Name: "ToolCall"},
+						&message.FunctionCallContent{CallID: "call2", Name: "ToolCall"},
+						&message.FunctionCallContent{CallID: "call3", Name: "ToolCall"},
+					},
+				}, nil)
+				return
+			}
+			// Second turn: tools should be stripped because 3 >= 2
+			for t := range agent.AllOptions(opts, agent.WithTool) {
+				if _, ok := t.(tool.SchemaTool); ok {
+					yield(nil, errors.New("expected schema tools to be stripped after batch exceeded limit"))
+					return
+				}
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "batch finished, here is the answer"}},
+			}, nil)
+		}
+	}
+
+	var resp agent.Response
+	for update, err := range toolautocall.New(toolautocall.Config{
+		MaximumFunctionCallsPerRequest: new(maxCalls),
+	}).Run(
+		next,
+		t.Context(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithTool(tools[0]),
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Update(update)
+	}
+
+	if actualCallCount != 3 {
+		t.Fatalf("expected all 3 calls in the batch to finish, got %d", actualCallCount)
+	}
+	if providerCalls != 2 {
+		t.Fatalf("expected 2 provider calls (1 tool batch + 1 final text response), got %d", providerCalls)
+	}
+	if text := resp.String(); text != "batch finished, here is the answer" {
+		t.Fatalf("expected final text response, got %q", text)
+	}
+}
+
+func TestFunctionInvoking_MaximumFunctionCallsCountsFailedExecutions(t *testing.T) {
+	maxCalls := 1
+	actualCallCount := 0
+
+	tools := []tool.Tool{
+		functool.MustNew(functool.Config{Name: "FailingTool"},
+			func(ctx context.Context, args struct{}) (string, error) {
+				actualCallCount++
+				return "", errors.New("tool internal failure")
+			}),
+	}
+
+	providerCalls := 0
+	next := func(_ context.Context, msgs []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerCalls++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if providerCalls == 1 {
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "call1", Name: "FailingTool"},
+					},
+				}, nil)
+				return
+			}
+			// Second turn: limit of 1 reached (despite failure), tools stripped
+			for t := range agent.AllOptions(opts, agent.WithTool) {
+				if _, ok := t.(tool.SchemaTool); ok {
+					yield(nil, errors.New("expected schema tools to be stripped after failed tool call hit limit"))
+					return
+				}
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "handled error, concluding response"}},
+			}, nil)
+		}
+	}
+
+	var resp agent.Response
+	for update, err := range toolautocall.New(toolautocall.Config{
+		MaximumFunctionCallsPerRequest: new(maxCalls),
+	}).Run(
+		next,
+		t.Context(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithTool(tools[0]),
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Update(update)
+	}
+
+	if actualCallCount != 1 {
+		t.Fatalf("expected failed call to count as execution attempt, got %d", actualCallCount)
+	}
+	if providerCalls != 2 {
+		t.Fatalf("expected 2 provider calls, got %d", providerCalls)
+	}
+	if text := resp.String(); text != "handled error, concluding response" {
+		t.Fatalf("expected final text response, got %q", text)
+	}
+}
+
+func TestFunctionInvoking_MaximumFunctionCallsIgnoresProviderHandledCalls(t *testing.T) {
+	maxCalls := 1
+	localCalls := 0
+
+	localTool := functool.MustNew(functool.Config{Name: "LocalTool"},
+		func(ctx context.Context, args struct{}) (string, error) {
+			localCalls++
+			return "local result", nil
+		})
+
+	providerCalls := 0
+	next := func(_ context.Context, msgs []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerCalls++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if providerCalls == 1 {
+				// Server-handled tool call: update already contains the result
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "server_call_1", Name: "ServerTool"},
+						&message.FunctionResultContent{CallID: "server_call_1", Result: "server handled result"},
+					},
+				}, nil)
+				// Local tool call in the same turn
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "local_call_1", Name: "LocalTool"},
+					},
+				}, nil)
+				return
+			}
+			// Turn 2: Local call reached limit of 1 (server call did NOT increment totalFunctionCalls)
+			for t := range agent.AllOptions(opts, agent.WithTool) {
+				if _, ok := t.(tool.SchemaTool); ok {
+					yield(nil, errors.New("expected schema tools to be stripped after 1 local call"))
+					return
+				}
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "final response after server and local tool"}},
+			}, nil)
+		}
+	}
+
+	var resp agent.Response
+	for update, err := range toolautocall.New(toolautocall.Config{
+		MaximumFunctionCallsPerRequest: new(maxCalls),
+	}).Run(
+		next,
+		t.Context(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithTool(localTool),
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Update(update)
+	}
+
+	if localCalls != 1 {
+		t.Fatalf("expected 1 local call, got %d", localCalls)
+	}
+	if providerCalls != 2 {
+		t.Fatalf("expected 2 provider calls, got %d", providerCalls)
+	}
+}
+
+func TestFunctionInvoking_MaximumFunctionCallsIgnoresNotFoundCalls(t *testing.T) {
+	maxCalls := 1
+	localCalls := 0
+
+	localTool := functool.MustNew(functool.Config{Name: "LocalTool"},
+		func(ctx context.Context, args struct{}) (string, error) {
+			localCalls++
+			return "local result", nil
+		})
+
+	providerCalls := 0
+	next := func(_ context.Context, msgs []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerCalls++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if providerCalls == 1 {
+				// Model calls an unknown/non-existent tool
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "unknown_call_1", Name: "NonExistentTool"},
+					},
+				}, nil)
+				return
+			}
+			if providerCalls == 2 {
+				// Turn 2: Unknown call did not consume budget; LocalTool should still be available
+				hasLocalTool := false
+				for tl := range agent.AllOptions(opts, agent.WithTool) {
+					if tl.Name() == "LocalTool" {
+						hasLocalTool = true
+						break
+					}
+				}
+				if !hasLocalTool {
+					yield(nil, errors.New("expected LocalTool to remain available after not-found call"))
+					return
+				}
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "local_call_1", Name: "LocalTool"},
+					},
+				}, nil)
+				return
+			}
+			// Turn 3: LocalTool execution consumed budget of 1; schema tools must now be stripped
+			for tl := range agent.AllOptions(opts, agent.WithTool) {
+				if _, ok := tl.(tool.SchemaTool); ok {
+					yield(nil, errors.New("expected schema tools to be stripped after LocalTool execution"))
+					return
+				}
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "final response after unknown and local tool"}},
+			}, nil)
+		}
+	}
+
+	var resp agent.Response
+	for update, err := range toolautocall.New(toolautocall.Config{
+		MaximumFunctionCallsPerRequest: new(maxCalls),
+	}).Run(
+		next,
+		t.Context(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithTool(localTool),
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Update(update)
+	}
+
+	if localCalls != 1 {
+		t.Fatalf("expected 1 local call, got %d", localCalls)
+	}
+	if providerCalls != 3 {
+		t.Fatalf("expected 3 provider calls, got %d", providerCalls)
+	}
+	if text := resp.String(); text != "final response after unknown and local tool" {
+		t.Fatalf("unexpected response: %q", text)
+	}
+}
+
+func TestFunctionInvoking_MaximumFunctionCallsCountsPanickingExecutions(t *testing.T) {
+	maxCalls := 1
+	panics := 0
+
+	panicTool := functool.MustNew(functool.Config{Name: "PanicTool"},
+		func(ctx context.Context, args struct{}) (string, error) {
+			panics++
+			panic("tool exploded")
+		})
+
+	providerCalls := 0
+	next := func(_ context.Context, msgs []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerCalls++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if providerCalls == 1 {
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "panic_call_1", Name: "PanicTool"},
+					},
+				}, nil)
+				return
+			}
+			// Turn 2: Panic was counted towards the budget, so schema tools are stripped
+			for tl := range agent.AllOptions(opts, agent.WithTool) {
+				if _, ok := tl.(tool.SchemaTool); ok {
+					yield(nil, errors.New("expected schema tools to be stripped after panicking execution"))
+					return
+				}
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "final response after panic"}},
+			}, nil)
+		}
+	}
+
+	var resp agent.Response
+	for update, err := range toolautocall.New(toolautocall.Config{
+		MaximumFunctionCallsPerRequest: new(maxCalls),
+	}).Run(
+		next,
+		t.Context(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithTool(panicTool),
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Update(update)
+	}
+
+	if panics != 1 {
+		t.Fatalf("expected 1 panic, got %d", panics)
+	}
+	if providerCalls != 2 {
+		t.Fatalf("expected 2 provider calls, got %d", providerCalls)
+	}
+	if text := resp.String(); text != "final response after panic" {
+		t.Fatalf("unexpected response: %q", text)
+	}
+}
+
+type dummyNonSchemaTool struct {
+	name string
+}
+
+func (d dummyNonSchemaTool) Name() string        { return d.name }
+func (d dummyNonSchemaTool) Description() string { return "dummy non-schema tool" }
+
+func TestFunctionInvoking_ZeroBudgetClearsRequiredToolChoiceWhenSchemaToolRemoved(t *testing.T) {
+	fooTool := functool.MustNew(functool.Config{Name: "Foo"},
+		func(ctx context.Context, args struct{}) (string, error) {
+			return "foo result", nil
+		})
+	webSearchTool := dummyNonSchemaTool{name: "WebSearch"}
+
+	providerCalls := 0
+	next := func(_ context.Context, msgs []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerCalls++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			// Zero budget: Foo must be removed, WebSearch must be retained,
+			// and required tool mode for Foo must be cleared.
+			var schemaTools []tool.Tool
+			var nonSchemaTools []tool.Tool
+			for tl := range agent.AllOptions(opts, agent.WithTool) {
+				if _, ok := tl.(tool.SchemaTool); ok {
+					schemaTools = append(schemaTools, tl)
+				} else {
+					nonSchemaTools = append(nonSchemaTools, tl)
+				}
+			}
+			if len(schemaTools) != 0 {
+				yield(nil, fmt.Errorf("expected 0 schema tools, got %d", len(schemaTools)))
+				return
+			}
+			if len(nonSchemaTools) != 1 || nonSchemaTools[0].Name() != "WebSearch" {
+				yield(nil, fmt.Errorf("expected WebSearch non-schema tool, got %v", nonSchemaTools))
+				return
+			}
+			if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
+				yield(nil, fmt.Errorf("expected tool mode to be cleared, got %v", mode))
+				return
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "final response without Foo"}},
+			}, nil)
+		}
+	}
+
+	var resp agent.Response
+	for update, err := range toolautocall.New(toolautocall.Config{
+		MaximumFunctionCallsPerRequest: new(0),
+	}).Run(
+		next,
+		t.Context(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithTool(fooTool),
+		agent.WithTool(webSearchTool),
+		agent.WithToolMode(tool.RequireTool("Foo")),
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Update(update)
+	}
+
+	if providerCalls != 1 {
+		t.Fatalf("expected 1 provider call, got %d", providerCalls)
+	}
+	if text := resp.String(); text != "final response without Foo" {
+		t.Fatalf("unexpected response: %q", text)
+	}
+}
+
+func TestFunctionInvoking_ZeroBudgetClearsGenericRequiredToolModeWhenSchemaToolRemoved(t *testing.T) {
+	fooTool := functool.MustNew(functool.Config{Name: "Foo"},
+		func(ctx context.Context, args struct{}) (string, error) {
+			return "foo result", nil
+		})
+	webSearchTool := dummyNonSchemaTool{name: "WebSearch"}
+
+	providerCalls := 0
+	next := func(_ context.Context, msgs []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerCalls++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			var schemaTools []tool.Tool
+			var nonSchemaTools []tool.Tool
+			for tl := range agent.AllOptions(opts, agent.WithTool) {
+				if _, ok := tl.(tool.SchemaTool); ok {
+					schemaTools = append(schemaTools, tl)
+				} else {
+					nonSchemaTools = append(nonSchemaTools, tl)
+				}
+			}
+			if len(schemaTools) != 0 {
+				yield(nil, fmt.Errorf("expected 0 schema tools, got %d", len(schemaTools)))
+				return
+			}
+			if len(nonSchemaTools) != 1 || nonSchemaTools[0].Name() != "WebSearch" {
+				yield(nil, fmt.Errorf("expected WebSearch non-schema tool, got %v", nonSchemaTools))
+				return
+			}
+			if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
+				yield(nil, fmt.Errorf("expected tool mode to be cleared, got %v", mode))
+				return
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "final response without generic required"}},
+			}, nil)
+		}
+	}
+
+	var resp agent.Response
+	for update, err := range toolautocall.New(toolautocall.Config{
+		MaximumFunctionCallsPerRequest: new(0),
+	}).Run(
+		next,
+		t.Context(),
+		[]*message.Message{message.NewText("hello")},
+		agent.WithTool(fooTool),
+		agent.WithTool(webSearchTool),
+		agent.WithToolMode(tool.ToolModeRequired),
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Update(update)
+	}
+
+	if providerCalls != 1 {
+		t.Fatalf("expected 1 provider call, got %d", providerCalls)
+	}
+	if text := resp.String(); text != "final response without generic required" {
+		t.Fatalf("unexpected response: %q", text)
+	}
+}
+
 // TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools tests AdditionalTools functionality
 func TestFunctionInvoking_SupportsToolsProvidedByAdditionalTools(t *testing.T) {
 	type Func1Args struct{}

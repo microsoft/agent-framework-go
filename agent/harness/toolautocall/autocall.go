@@ -29,6 +29,7 @@ const (
 	defaultMaximumIterationsPerRequest        = 40
 	pendingApprovalRequestsStateKey           = "toolautocall.pendingApprovalRequests"
 	pendingAutoApprovedCallsStateKey          = "toolautocall.pendingAutoApprovedCalls"
+	budgetConsumedCallsStateKey               = "toolautocall.consumedFunctionCalls"
 )
 
 // Tracer instruments individual tool invocations without depending on a tracing
@@ -125,6 +126,16 @@ type Config struct {
 	// middleware as described by [Config]. Negative values are invalid.
 	MaximumIterationsPerRequest *int
 
+	// MaximumFunctionCallsPerRequest is the maximum number of tool invocations allowed
+	// in a single run. The limit is evaluated before each batch of function calls; if
+	// the limit has not been reached, the entire active batch is executed, which may
+	// cause the total invocations to exceed this value. When the limit is reached,
+	// the middleware makes a final provider request without schema tools so no more
+	// local function calls are requested. When nil, no call-count limit is enforced.
+	// Zero allows the model to run without invoking any automatic function calls.
+	// Negative values are invalid.
+	MaximumFunctionCallsPerRequest *int
+
 	// NewID generates synthetic IDs for generated tool-result messages and
 	// approval-related fallback messages. If nil, a canonical dashed UUID is used.
 	NewID func() string
@@ -149,6 +160,7 @@ type autocall struct {
 	allowConcurrentInvocations          bool
 	maximumConsecutiveErrorsPerRequest  int
 	maximumIterationsPerRequest         int
+	maximumFunctionCallsPerRequest      *int
 	newID                               func() string
 	disableApprovalResponseBinding      bool
 	disableApprovalNotRequiredBypassing bool
@@ -167,6 +179,11 @@ func New(cfg Config) agent.Middleware {
 	if cfg.MaximumIterationsPerRequest != nil {
 		maximumIterationsPerRequest = *cfg.MaximumIterationsPerRequest
 	}
+	var maximumFunctionCallsPerRequest *int
+	if cfg.MaximumFunctionCallsPerRequest != nil {
+		val := *cfg.MaximumFunctionCallsPerRequest
+		maximumFunctionCallsPerRequest = &val
+	}
 	ac := &autocall{
 		logger: slogx.Logger{
 			Logger:        cfg.Logger,
@@ -181,6 +198,7 @@ func New(cfg Config) agent.Middleware {
 		allowConcurrentInvocations:          cfg.AllowConcurrentInvocations,
 		maximumConsecutiveErrorsPerRequest:  maximumConsecutiveErrorsPerRequest,
 		maximumIterationsPerRequest:         maximumIterationsPerRequest,
+		maximumFunctionCallsPerRequest:      maximumFunctionCallsPerRequest,
 		newID:                               cfg.NewID,
 		disableApprovalResponseBinding:      cfg.DisableApprovalResponseBinding,
 		disableApprovalNotRequiredBypassing: cfg.DisableApprovalNotRequiredFunctionBypassing,
@@ -230,6 +248,10 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			yield(nil, fmt.Errorf("toolautocall: MaximumIterationsPerRequest must be 0 or greater, got %d", f.maximumIterationsPerRequest))
 			return
 		}
+		if f.maximumFunctionCallsPerRequest != nil && *f.maximumFunctionCallsPerRequest < 0 {
+			yield(nil, fmt.Errorf("toolautocall: MaximumFunctionCallsPerRequest must be 0 or greater, got %d", *f.maximumFunctionCallsPerRequest))
+			return
+		}
 		if err := ctx.Err(); err != nil {
 			yield(nil, err)
 			return
@@ -243,28 +265,50 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			return
 		}
 		var messagesCloned bool
+		var totalFunctionCalls int
 		session, _ := agent.GetOption(opts, agent.WithSession)
 		serviceID, _ := agent.GetOption(opts, agent.WithServiceID)
 		serviceManagedHistory := strings.TrimSpace(serviceID) != ""
 		ambiguousRequestIDs := make(map[string]struct{})
+		var pendingApprovalProduced bool
 		yieldUpdate := func(update *agent.ResponseUpdate) bool {
-			if !f.disableApprovalResponseBinding && update != nil {
-				if err := recordPendingApprovalRequests(session, update.Contents, ambiguousRequestIDs); err != nil {
-					yield(nil, err)
-					return false
+			if update != nil {
+				for _, c := range update.Contents {
+					if _, ok := c.(*message.ToolApprovalRequestContent); ok {
+						pendingApprovalProduced = true
+						break
+					}
+				}
+				if pendingApprovalProduced && f.disableApprovalResponseBinding && session != nil {
+					var state pendingApprovalRequestsState
+					_, _ = session.Get(pendingApprovalRequestsStateKey, &state)
+					state.Consumed = totalFunctionCalls
+					session.Set(pendingApprovalRequestsStateKey, state)
+				}
+				if !f.disableApprovalResponseBinding {
+					if err := recordPendingApprovalRequests(session, update.Contents, ambiguousRequestIDs, totalFunctionCalls); err != nil {
+						yield(nil, err)
+						return false
+					}
 				}
 			}
 			return yield(update, nil)
 		}
+		var restoredApprovalConsumed int
 		if !f.disableApprovalResponseBinding {
 			var changed bool
 			var err error
-			messages, changed, err = bindApprovalResponses(session, messages)
+			messages, restoredApprovalConsumed, changed, err = bindApprovalResponses(session, messages)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
 			messagesCloned = changed
+		} else if session != nil && hasAnyApprovalResponse(messages) {
+			var state pendingApprovalRequestsState
+			if ok, err := session.Get(pendingApprovalRequestsStateKey, &state); err == nil && ok {
+				restoredApprovalConsumed = state.Consumed
+			}
 		}
 		if !f.disableApprovalNotRequiredBypassing {
 			var changed bool
@@ -275,6 +319,12 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 				return
 			}
 			messagesCloned = messagesCloned || changed
+		}
+		var err error
+		totalFunctionCalls, err = f.loadBudgetConsumedCalls(session, ctx, messages, restoredApprovalConsumed)
+		if err != nil {
+			yield(nil, err)
+			return
 		}
 		tools, _ := f.createToolsMap(opts)
 
@@ -315,9 +365,25 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 					return
 				}
 			}
-			// Invoke approved approval responses, which generates some additional FRC wrapped in ChatMessage.
+			// Check if budget is already exhausted before invoking approved functions.
 			var newMsg *message.Message
-			newMsg, errCount, err = f.invokeApprovedToolApprovalResponses(ctx, notInvokedMsgs, tools, 0)
+			var executedCount int
+			if f.maximumFunctionCallsPerRequest != nil && totalFunctionCalls >= *f.maximumFunctionCallsPerRequest {
+				// Budget reached: generate non-execution error results so history remains valid.
+				budgetExceededContents := f.generateBudgetExceededFunctionResults(ctx, notInvokedMsgs)
+				if len(budgetExceededContents) > 0 {
+					newMsg = &message.Message{
+						Role:     message.RoleTool,
+						ID:       toolMsgID,
+						Contents: budgetExceededContents,
+					}
+				}
+			} else {
+				// Invoke approved approval responses, which generates some additional FRC wrapped in ChatMessage.
+				newMsg, executedCount, errCount, err = f.invokeApprovedToolApprovalResponses(ctx, notInvokedMsgs, tools, 0)
+				totalFunctionCalls += executedCount
+				f.saveBudgetConsumedCalls(session, ctx, totalFunctionCalls)
+			}
 			if newMsg != nil {
 				opts = updateOptionsForNextIteration(opts)
 				messages = slices.Insert(messages, approvedResultInsertIdx, newMsg)
@@ -345,8 +411,12 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 				yield(nil, err)
 				return
 			}
-			if i >= f.maximumIterationsPerRequest {
-				f.logger.Debug(ctx, "reached maximum iteration count; stopping function invocation loop", "maximumIterationsPerRequest", f.maximumIterationsPerRequest)
+			if i >= f.maximumIterationsPerRequest || (f.maximumFunctionCallsPerRequest != nil && totalFunctionCalls >= *f.maximumFunctionCallsPerRequest) {
+				if i >= f.maximumIterationsPerRequest {
+					f.logger.Debug(ctx, "reached maximum iteration count; stopping function invocation loop", "maximumIterationsPerRequest", f.maximumIterationsPerRequest)
+				} else {
+					f.logger.Debug(ctx, "reached maximum function call count; stopping function invocation loop", "maximumFunctionCallsPerRequest", *f.maximumFunctionCallsPerRequest, "totalFunctionCalls", totalFunctionCalls)
+				}
 				opts = prepareOptionsForLastIteration(opts)
 			}
 			tools, requiresApproval := f.createToolsMap(opts)
@@ -400,13 +470,15 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 				}
 				hasApprovalRequiringFcc, lastApprovalCheckedFCCIdx = checkForApprovalRequiringFCC(functionCallContents, tools, hasApprovalRequiringFcc, lastApprovalCheckedFCCIdx)
 				if hasApprovalRequiringFcc {
+					pendingApprovalProduced = true
+					f.saveBudgetConsumedCalls(session, ctx, totalFunctionCalls)
 					// If we've encountered a function call content that requires approval,
 					// we need to ask for approval for all functions, since we cannot mix and match.
 					// Convert all function call contents into approval requests from the last yielded update index
 					// and yield all those updates.
 					for ; lastYieldedUpdateIdx < len(updates); lastYieldedUpdateIdx++ {
 						updateToYield := updates[lastYieldedUpdateIdx]
-						updatedContent, err := f.prepareApprovalContents(ctx, updateToYield.Contents, tools, session)
+						updatedContent, err := f.prepareApprovalContents(ctx, updateToYield.Contents, tools, session, totalFunctionCalls)
 						if err != nil {
 							yield(nil, err)
 							return
@@ -439,7 +511,7 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			}
 			// If there's nothing more to do, break out of the loop and allow the handling at the
 			// end to configure the response with aggregated data from previous requests.
-			if i >= f.maximumIterationsPerRequest || hasApprovalRequiringFcc || f.shouldTerminateLoopBasedOnHandleableFunctions(ctx, functionCallContents, tools) {
+			if i >= f.maximumIterationsPerRequest || (f.maximumFunctionCallsPerRequest != nil && totalFunctionCalls >= *f.maximumFunctionCallsPerRequest) || hasApprovalRequiringFcc || f.shouldTerminateLoopBasedOnHandleableFunctions(ctx, functionCallContents, tools) {
 				break
 			}
 
@@ -447,8 +519,11 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 
 			// Process all of the functions, adding their results into the history.
 			var newMsg *message.Message
+			var executedCount int
 			var err error
-			newMsg, errCount, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount)
+			newMsg, executedCount, errCount, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount)
+			totalFunctionCalls += executedCount
+			f.saveBudgetConsumedCalls(session, ctx, totalFunctionCalls)
 
 			// Stream any generated function results. This mirrors what's done for ResponseAsync, where the returned messages
 			// includes all activities, including generated function results.
@@ -490,7 +565,7 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 	}
 }
 
-func (f *autocall) prepareApprovalContents(ctx context.Context, contents message.Contents, tools map[string]tool.SchemaTool, session *agent.Session) (message.Contents, error) {
+func (f *autocall) prepareApprovalContents(ctx context.Context, contents message.Contents, tools map[string]tool.SchemaTool, session *agent.Session, totalFunctionCalls int) (message.Contents, error) {
 	var updated message.Contents
 	var autoApproved []*message.FunctionCallContent
 	for i, c := range contents {
@@ -500,7 +575,8 @@ func (f *autocall) prepareApprovalContents(ctx context.Context, contents message
 			}
 			declaration, known := tools[fcc.Name]
 			_, invocable := declaration.(tool.FuncTool)
-			if !f.disableApprovalNotRequiredBypassing && session != nil && known && invocable && !toolRequiresApproval(declaration) {
+			atBudgetLimit := f.maximumFunctionCallsPerRequest != nil && totalFunctionCalls >= *f.maximumFunctionCallsPerRequest
+			if !f.disableApprovalNotRequiredBypassing && session != nil && known && invocable && !toolRequiresApproval(declaration) && !atBudgetLimit {
 				autoApproved = append(autoApproved, snapshotFunctionCall(fcc))
 				updated[i] = nil
 				continue
@@ -635,6 +711,17 @@ func prepareOptionsForLastIteration(opts []agent.Option) []agent.Option {
 
 	if len(nonSchemaTools) == 0 {
 		updated = slices.DeleteFunc(updated, isToolModeOption)
+	} else if mode, ok := agent.GetOption(opts, agent.WithToolMode); ok {
+		if requiredToolName, ok := mode.RequiredTool(); ok {
+			hasRequiredTool := slices.ContainsFunc(nonSchemaTools, func(t tool.Tool) bool {
+				return t.Name() == requiredToolName
+			})
+			if !hasRequiredTool {
+				updated = slices.DeleteFunc(updated, isToolModeOption)
+			}
+		} else if mode.Mode() == tool.ToolModeRequired {
+			updated = slices.DeleteFunc(updated, isToolModeOption)
+		}
 	}
 
 	return updated
@@ -825,17 +912,78 @@ func approvalResponseNeedsProcessingByRequestID(msgs []*message.Message) map[str
 	return result
 }
 
+type budgetConsumedCallsState struct {
+	RunKey   string `json:"runKey,omitempty"`
+	Consumed int    `json:"consumed"`
+}
+
+func runKey(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	return fmt.Sprintf("%p", ctx)
+}
+
+func hasAnyApprovalResponse(msgs []*message.Message) bool {
+	for _, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+		for _, content := range msg.Contents {
+			if response, ok := content.(*message.ToolApprovalResponseContent); ok && response != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (f *autocall) loadBudgetConsumedCalls(session *agent.Session, ctx context.Context, messages []*message.Message, restoredApprovalConsumed int) (int, error) {
+	if session == nil {
+		return 0, nil
+	}
+	currentRunKey := runKey(ctx)
+	var active budgetConsumedCallsState
+	ok, err := session.Get(budgetConsumedCallsStateKey, &active)
+	if err != nil {
+		return 0, err
+	}
+	if ok && active.RunKey != "" && active.RunKey == currentRunKey {
+		return active.Consumed, nil
+	}
+	if restoredApprovalConsumed > 0 {
+		return restoredApprovalConsumed, nil
+	}
+	if hasAnyApprovalResponse(messages) {
+		var state pendingApprovalRequestsState
+		if found, _ := session.Get(pendingApprovalRequestsStateKey, &state); found {
+			return state.Consumed, nil
+		}
+	}
+	return 0, nil
+}
+
+func (f *autocall) saveBudgetConsumedCalls(session *agent.Session, ctx context.Context, consumed int) {
+	if session != nil {
+		session.Set(budgetConsumedCallsStateKey, budgetConsumedCallsState{
+			RunKey:   runKey(ctx),
+			Consumed: consumed,
+		})
+	}
+}
+
 type pendingApprovalRequestsState struct {
 	Requests []*message.ToolApprovalRequestContent `json:"requests,omitempty"`
+	Consumed int                                    `json:"consumed,omitempty"`
 }
 
 type pendingAutoApprovedCallsState struct {
 	Calls []*message.FunctionCallContent `json:"calls,omitempty"`
 }
 
-func bindApprovalResponses(session *agent.Session, messages []*message.Message) ([]*message.Message, bool, error) {
+func bindApprovalResponses(session *agent.Session, messages []*message.Message) ([]*message.Message, int, bool, error) {
 	if session == nil {
-		return messages, false, nil
+		return messages, 0, false, nil
 	}
 
 	// Results prevent the response processor from invoking these calls again.
@@ -854,8 +1002,9 @@ func bindApprovalResponses(session *agent.Session, messages []*message.Message) 
 
 	known := make(map[string]*message.ToolApprovalRequestContent)
 	var state pendingApprovalRequestsState
+	var restoredConsumed int
 	if ok, err := session.Get(pendingApprovalRequestsStateKey, &state); err != nil {
-		return nil, false, err
+		return nil, 0, false, err
 	} else if ok {
 		for _, request := range state.Requests {
 			if request != nil {
@@ -891,6 +1040,7 @@ func bindApprovalResponses(session *agent.Session, messages []*message.Message) 
 				messageChanged = true
 				continue
 			}
+			restoredConsumed = state.Consumed
 			delete(known, response.RequestID)
 			if toolCallsEquivalent(response.ToolCall, request.ToolCall) {
 				contents = append(contents, content)
@@ -923,12 +1073,12 @@ func bindApprovalResponses(session *agent.Session, messages []*message.Message) 
 		session.Set(pendingApprovalRequestsStateKey, state)
 	}
 	if !changed {
-		return messages, false, nil
+		return messages, restoredConsumed, false, nil
 	}
-	return out, true, nil
+	return out, restoredConsumed, true, nil
 }
 
-func recordPendingApprovalRequests(session *agent.Session, contents message.Contents, ambiguous map[string]struct{}) error {
+func recordPendingApprovalRequests(session *agent.Session, contents message.Contents, ambiguous map[string]struct{}, consumed int) error {
 	if session == nil {
 		return nil
 	}
@@ -953,6 +1103,10 @@ func recordPendingApprovalRequests(session *agent.Session, contents message.Cont
 		}
 	}
 	var changed, collided bool
+	if state.Consumed != consumed {
+		state.Consumed = consumed
+		changed = true
+	}
 	for _, request := range additions {
 		id := request.RequestID
 		if _, ok := ambiguous[id]; ok {
@@ -1139,10 +1293,10 @@ func snapshotFunctionCall(call *message.FunctionCallContent) *message.FunctionCa
 	return &clone
 }
 
-func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, approvals []toolApprovalResultWithRequestMessage, tools map[string]tool.SchemaTool, errCount int) (*message.Message, int, error) {
+func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, approvals []toolApprovalResultWithRequestMessage, tools map[string]tool.SchemaTool, errCount int) (*message.Message, int, int, error) {
 	// Check if there are any function calls to do for any approved tool requests and execute them.
 	if len(approvals) == 0 {
-		return nil, errCount, nil
+		return nil, 0, errCount, nil
 	}
 	funcCalls := make([]*message.FunctionCallContent, 0, len(approvals))
 	for _, approval := range approvals {
@@ -1153,7 +1307,7 @@ func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, appr
 		}
 	}
 	if len(funcCalls) == 0 {
-		return nil, errCount, nil
+		return nil, 0, errCount, nil
 	}
 	return f.processFunctionCalls(ctx, tools, funcCalls, errCount)
 }
@@ -1174,7 +1328,7 @@ type functionInvocationResult struct {
 	err    error
 }
 
-func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]tool.SchemaTool, funcCalls []*message.FunctionCallContent, errCount int) (*message.Message, int, error) {
+func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]tool.SchemaTool, funcCalls []*message.FunctionCallContent, errCount int) (*message.Message, int, int, error) {
 	// We must add a response for every tool call, regardless of whether we successfully executed it or not.
 	// If we successfully execute it, we'll add the result. If we don't, we'll add an error.
 	if len(funcCalls) == 0 { // invariant
@@ -1244,8 +1398,12 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 			results = append(results, functionInvocationResult{status: functionInvocationStatusNotInvoked, call: fc, err: skippedErr})
 		}
 	}
+	var executedCalls int
 	for _, result := range results {
 		result.call.InformationalOnly = true
+		if result.status != functionInvocationStatusNotFound && result.status != functionInvocationStatusNotInvoked {
+			executedCalls++
+		}
 	}
 
 	newMsg := f.createResponseMessage(results)
@@ -1253,7 +1411,7 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 		errCount, runErr = f.updateConsecutiveErrorCountOrThrow(ctx, newMsg, errCount)
 	}
 
-	return newMsg, errCount, runErr
+	return newMsg, executedCalls, errCount, runErr
 }
 
 func (f *autocall) updateConsecutiveErrorCountOrThrow(ctx context.Context, added *message.Message, errCount int) (int, error) {
@@ -1696,6 +1854,28 @@ func (f *autocall) generateRejectedFunctionResults(ctx context.Context, rejectio
 		resultContent := &message.FunctionResultContent{
 			CallID: fcc.CallID,
 			Result: result,
+		}
+		contents = append(contents, resultContent)
+	}
+	return contents
+}
+
+func (f *autocall) generateBudgetExceededFunctionResults(ctx context.Context, approvals []toolApprovalResultWithRequestMessage) message.Contents {
+	if len(approvals) == 0 {
+		return nil
+	}
+	contents := make(message.Contents, 0, len(approvals))
+	for _, app := range approvals {
+		fcc, ok := approvalToolCallAsFunctionCall(app.Response.ToolCall)
+		if !ok {
+			continue
+		}
+		f.logger.Debug(ctx, "function execution skipped: function call budget reached", "funcName", fcc.Name)
+		fcc.InformationalOnly = true
+		resultContent := &message.FunctionResultContent{
+			CallID: fcc.CallID,
+			Error:  errors.New("function call budget reached"),
+			Result: "Error: Function invocation limit reached before the deferred tool could run.",
 		}
 		contents = append(contents, resultContent)
 	}
