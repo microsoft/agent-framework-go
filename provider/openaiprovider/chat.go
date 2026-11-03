@@ -198,23 +198,17 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		stream := a.client.Chat.Completions.NewStreaming(ctx, body, telemetryOption)
 		defer func() { _ = stream.Close() }()
 		var acc openai.ChatCompletionAccumulator
+		var created int64
 		for stream.Next() {
 			chunk := stream.Current()
 			modelcall.RecordResponse(ctx, chunk.Model, chunk.ID)
 			if !acc.AddChunk(chunk) {
 				continue
 			}
+			if created <= 0 && chunk.Created > 0 {
+				created = chunk.Created
+			}
 			var contents []message.Content
-			if tc, ok := acc.JustFinishedToolCall(); ok {
-				contents = append(contents, &message.FunctionCallContent{
-					CallID:    tc.ID,
-					Name:      tc.Name,
-					Arguments: tc.Arguments,
-				})
-			}
-			if refusal, ok := acc.JustFinishedRefusal(); ok {
-				contents = append(contents, &message.ErrorContent{Message: refusal, ErrorCode: "Refusal"})
-			}
 			role := message.RoleAssistant
 			if len(chunk.Choices) > 0 {
 				choice := chunk.Choices[0]
@@ -243,8 +237,34 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				return
 			}
 		}
-		if stream.Err() != nil {
-			yield(nil, stream.Err())
+		if err := stream.Err(); err != nil {
+			yield(nil, err)
+			return
+		}
+		if len(acc.Choices) == 0 {
+			return
+		}
+		choice := acc.Choices[0]
+		var contents []message.Content
+		for _, tc := range choice.Message.ToolCalls {
+			contents = append(contents, &message.FunctionCallContent{
+				CallID:    tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			})
+		}
+		if choice.Message.Refusal != "" {
+			contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal, ErrorCode: "Refusal"})
+		}
+		if len(contents) > 0 {
+			yield(&agent.ResponseUpdate{
+				Contents:     contents,
+				Role:         mapRole(string(choice.Message.Role)),
+				ResponseID:   acc.ID,
+				MessageID:    acc.ID,
+				FinishReason: normalizeChatFinishReason(choice.FinishReason),
+				CreatedAt:    time.Unix(created, 0),
+			}, nil)
 		}
 	}
 }

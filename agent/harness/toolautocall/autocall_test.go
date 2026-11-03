@@ -1835,12 +1835,20 @@ func TestFunctionInvoking_SerialDoesNotCaptureErrorsAfterMaximumConsecutiveError
 	}
 
 	var streamErr error
-	for _, err := range toolautocall.New(toolautocall.Config{MaximumConsecutiveErrorsPerRequest: new(0)}).Run(
+	var results []*message.FunctionResultContent
+	for update, err := range toolautocall.New(toolautocall.Config{MaximumConsecutiveErrorsPerRequest: new(0)}).Run(
 		runner.Run,
 		t.Context(),
 		[]*message.Message{message.NewText("hello")},
 		opts...,
 	) {
+		if update != nil {
+			for _, content := range update.Contents {
+				if result, ok := content.(*message.FunctionResultContent); ok {
+					results = append(results, result)
+				}
+			}
+		}
 		if err != nil {
 			streamErr = err
 			break
@@ -1855,6 +1863,10 @@ func TestFunctionInvoking_SerialDoesNotCaptureErrorsAfterMaximumConsecutiveError
 	}
 	if got := secondInvoked.Load(); got != 0 {
 		t.Fatalf("second tool invoked %d times, want 0", got)
+	}
+	if len(results) != 2 || results[0].CallID != "callId1" || results[0].Error != firstErr ||
+		results[1].CallID != "callId2" || results[1].Error != firstErr || results[1].Result != "Error: Function was not invoked." {
+		t.Fatalf("results = %+v, want the original failure and an unexecuted-call result", results)
 	}
 }
 
@@ -2381,6 +2393,265 @@ func messageTexts(messages []*message.Message) []string {
 	return texts
 }
 
+func TestFunctionInvoking_CancellationPreservesCompletedResults(t *testing.T) {
+	toolFailure := errors.New("original tool failure")
+	for _, outcome := range []string{"success", "error", "panic error", "panic value"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", outcome, stream), func(t *testing.T) {
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				var effects int
+				effect := functool.MustNew(functool.Config{Name: "effect"}, func(callCtx context.Context, _ struct{}) (string, error) {
+					if callCtx.Done() != ctx.Done() {
+						t.Error("tool lost the original cancellation context")
+					}
+					effects++
+					if effects == 3 {
+						cancel()
+						switch outcome {
+						case "error":
+							return "", toolFailure
+						case "panic error":
+							panic(toolFailure)
+						case "panic value":
+							panic("original tool panic")
+						}
+					}
+					return fmt.Sprintf("completed %d", effects), nil
+				})
+				var providerCalls int
+				provider := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return func(yield func(*agent.ResponseUpdate, error) bool) {
+						providerCalls++
+						ids := []string{"earlier"}
+						switch providerCalls {
+						case 2:
+							ids = []string{"first", "interrupted", "skipped"}
+						case 3:
+							yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "done"}}}, nil)
+							return
+						}
+						contents := make(message.Contents, 0, len(ids))
+						for _, id := range ids {
+							contents = append(contents, &message.FunctionCallContent{CallID: id, Name: "effect", Arguments: `{}`})
+						}
+						yield(&agent.ResponseUpdate{
+							Role: message.RoleAssistant, MessageID: fmt.Sprintf("round-%d", providerCalls), Contents: contents,
+						}, nil)
+					}
+				}
+				middleware := toolautocall.New(toolautocall.Config{IncludeDetailedErrors: true})
+				var results []*message.FunctionResultContent
+				var runErr error
+				for update, err := range middleware.Run(
+					provider, ctx, []*message.Message{message.NewText("perform actions")}, agent.WithTool(effect), agent.Stream(stream),
+				) {
+					if update != nil {
+						if !stream && effects != 3 {
+							t.Error("non-streaming run exposed updates before the loop stopped")
+						}
+						for _, content := range update.Contents {
+							if result, ok := content.(*message.FunctionResultContent); ok {
+								results = append(results, result)
+							}
+						}
+					}
+					if err != nil {
+						runErr = err
+						break
+					}
+				}
+				if effects != 3 || providerCalls != 2 || len(results) != 4 {
+					t.Fatalf("effects=%d providers=%d results=%d, want 3/2/4", effects, providerCalls, len(results))
+				}
+				for i, id := range []string{"earlier", "first", "interrupted", "skipped"} {
+					if results[i].CallID != id {
+						t.Errorf("result %d call ID = %q, want %q", i, results[i].CallID, id)
+					}
+				}
+				if results[0].Error != nil || results[0].Result != "completed 1" ||
+					results[1].Error != nil || results[1].Result != "completed 2" {
+					t.Errorf("completed outcomes were lost: %+v", results)
+				}
+				switch outcome {
+				case "success":
+					if !errors.Is(runErr, context.Canceled) || results[2].Error != nil || results[2].Result != "completed 3" {
+						t.Errorf("successful interrupted call was lost: result=%+v err=%v", results[2], runErr)
+					}
+				case "error":
+					if runErr != toolFailure || results[2].Error != toolFailure {
+						t.Errorf("original tool failure changed: result=%+v err=%v", results[2], runErr)
+					}
+				case "panic error":
+					if !errors.Is(runErr, toolFailure) || results[2].Error != runErr {
+						t.Errorf("original panic error was lost: result=%+v err=%v", results[2], runErr)
+					}
+				case "panic value":
+					if runErr == nil || !strings.Contains(runErr.Error(), "original tool panic") || results[2].Error != runErr {
+						t.Errorf("original panic was lost: result=%+v err=%v", results[2], runErr)
+					}
+				}
+				if !errors.Is(results[3].Error, context.Canceled) ||
+					!strings.Contains(fmt.Sprint(results[3].Result), "not invoked") {
+					t.Errorf("skipped call was not reported as unexecuted: %+v", results[3])
+				}
+				response, err := agent.ResponseStream(middleware.Run(
+					provider, t.Context(), []*message.Message{message.NewText("resume")}, agent.WithTool(effect), agent.Stream(stream),
+				)).Collect()
+				if err != nil || response.String() != "done" || effects != 3 || providerCalls != 3 {
+					t.Fatalf("reuse: response=%v err=%v effects=%d providers=%d", response, err, effects, providerCalls)
+				}
+				for content := range response.Contents() {
+					if _, ok := content.(*message.FunctionResultContent); ok {
+						t.Fatal("reusing middleware re-emitted a previous run's results")
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestFunctionInvoking_ApprovedCancellationPreservesResults(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var effects int
+			effect := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "effect"}, func(context.Context, struct{}) (string, error) {
+				effects++
+				if effects == 2 {
+					cancel()
+				}
+				return fmt.Sprintf("completed %d", effects), nil
+			}))
+			var requests, approvals message.Contents
+			for _, id := range []string{"a", "b", "c"} {
+				call := &message.FunctionCallContent{CallID: id, Name: "effect", Arguments: `{}`}
+				requests = append(requests, &message.ToolApprovalRequestContent{RequestID: "request-" + id, ToolCall: call})
+				approvals = append(approvals, &message.ToolApprovalResponseContent{RequestID: "request-" + id, ToolCall: call, Approved: true})
+			}
+			messages := []*message.Message{
+				{Role: message.RoleAssistant, Contents: requests},
+				message.New(approvals...),
+			}
+			var providerCalls int
+			provider := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				return func(yield func(*agent.ResponseUpdate, error) bool) {
+					providerCalls++
+					yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "unexpected"}}}, nil)
+				}
+			}
+			var results []*message.FunctionResultContent
+			var runErr error
+			for update, err := range toolautocall.New(toolautocall.Config{DisableApprovalResponseBinding: true}).Run(
+				provider, ctx, messages, agent.WithTool(effect), agent.Stream(stream),
+			) {
+				if update != nil {
+					for _, content := range update.Contents {
+						if result, ok := content.(*message.FunctionResultContent); ok {
+							results = append(results, result)
+						}
+					}
+				}
+				if err != nil {
+					runErr = err
+					break
+				}
+			}
+			if !errors.Is(runErr, context.Canceled) || effects != 2 || providerCalls != 0 || len(results) != 3 {
+				t.Fatalf("err=%v effects=%d providers=%d results=%d, want cancelled approval results without a provider call", runErr, effects, providerCalls, len(results))
+			}
+			for i, id := range []string{"a", "b", "c"} {
+				if results[i].CallID != id {
+					t.Errorf("result %d call ID = %q, want %q", i, results[i].CallID, id)
+				}
+			}
+			if results[0].Result != "completed 1" || results[0].Error != nil ||
+				results[1].Result != "completed 2" || results[1].Error != nil ||
+				!errors.Is(results[2].Error, context.Canceled) {
+				t.Errorf("approved outcomes lost or misreported: %+v", results)
+			}
+		})
+	}
+}
+
+func TestFunctionInvoking_ProviderFailurePreservesUpdates(t *testing.T) {
+	providerErr := errors.New("provider failed")
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			var providerCalls, toolCalls int
+			effect := functool.MustNew(functool.Config{Name: "effect"}, func(context.Context, struct{}) (string, error) {
+				toolCalls++
+				return "completed", nil
+			})
+			provider := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				return func(yield func(*agent.ResponseUpdate, error) bool) {
+					providerCalls++
+					if providerCalls == 1 {
+						yield(&agent.ResponseUpdate{
+							MessageID: "first", ResponseID: "first", Role: message.RoleAssistant,
+							RawRepresentation: json.RawMessage(`{"first":true}`),
+							Contents: message.Contents{
+								&message.TextContent{Text: "started"},
+								&message.FunctionCallContent{CallID: "call", Name: "effect", Arguments: `{}`},
+								&message.UsageContent{Details: message.UsageDetails{InputTokenCount: 2}},
+							},
+						}, nil)
+						return
+					}
+					if !yield(&agent.ResponseUpdate{
+						MessageID: "second", ResponseID: "second", Role: message.RoleAssistant,
+						RawRepresentation: json.RawMessage(`{"second":true}`),
+						Contents:          message.Contents{&message.TextContent{Text: "unfinished"}},
+					}, nil) {
+						return
+					}
+					if !yield(&agent.ResponseUpdate{AdditionalProperties: map[string]any{"checkpoint": "saved"}}, nil) {
+						return
+					}
+					yield(nil, providerErr)
+				}
+			}
+			middleware := toolautocall.New(toolautocall.Config{})
+			var response agent.Response
+			var runErr error
+			for update, err := range middleware.Run(
+				provider, t.Context(), []*message.Message{message.NewText("start")}, agent.WithTool(effect), agent.Stream(stream),
+			) {
+				if update != nil && !stream && providerCalls != 2 {
+					t.Error("non-streaming run exposed updates before the loop stopped")
+				}
+				response.Update(update)
+				if err != nil {
+					runErr = err
+					break
+				}
+			}
+			if runErr != providerErr || providerCalls != 2 || toolCalls != 1 || len(response.Messages) != 3 ||
+				response.String() != "started\nunfinished" || response.Usage().InputTokenCount != 2 ||
+				response.AdditionalProperties["checkpoint"] != "saved" {
+				t.Fatalf("partial response=%+v err=%v providers=%d tools=%d", response, runErr, providerCalls, toolCalls)
+			}
+			result, ok := response.Messages[1].Contents[0].(*message.FunctionResultContent)
+			if !ok || result.CallID != "call" || result.Result != "completed" || result.Error != nil {
+				t.Fatalf("completed tool result was lost: %+v", response.Messages[1])
+			}
+			for i, want := range map[int]string{0: `{"first":true}`, 2: `{"second":true}`} {
+				if raw, ok := response.Messages[i].RawRepresentation.(json.RawMessage); !ok || string(raw) != want {
+					t.Errorf("message %d raw representation = %#v, want %s", i, response.Messages[i].RawRepresentation, want)
+				}
+			}
+			providerCalls, toolCalls = 0, 0
+			collected, err := agent.ResponseStream(middleware.Run(
+				provider, t.Context(), []*message.Message{message.NewText("start")}, agent.WithTool(effect), agent.Stream(stream),
+			)).Collect()
+			if collected != nil || err != providerErr {
+				t.Fatalf("Collect returned %v/%v, want no response and the original error", collected, err)
+			}
+		})
+	}
+}
+
 func TestFunctionInvoking_RequestCancellation(t *testing.T) {
 	toolFailure := errors.New("first failed")
 	secondFailure := errors.New("second failed")
@@ -2490,6 +2761,7 @@ func TestFunctionInvoking_RequestCancellation(t *testing.T) {
 						}
 					}
 					var runErr error
+					var results []*message.FunctionResultContent
 					for update, err := range toolautocall.New(toolautocall.Config{
 						AllowConcurrentInvocations:  tc.concurrent,
 						MaximumIterationsPerRequest: tc.maxIterations,
@@ -2498,6 +2770,13 @@ func TestFunctionInvoking_RequestCancellation(t *testing.T) {
 						if err != nil {
 							runErr = err
 							break
+						}
+						if update != nil {
+							for _, content := range update.Contents {
+								if result, ok := content.(*message.FunctionResultContent); ok {
+									results = append(results, result)
+								}
+							}
 						}
 						if tc.cancelAt == "after results" && update != nil && update.Role == message.RoleTool {
 							stop()
@@ -2519,6 +2798,50 @@ func TestFunctionInvoking_RequestCancellation(t *testing.T) {
 					}
 					if providerCalls != wantProviders {
 						t.Errorf("provider calls = %d, want %d", providerCalls, wantProviders)
+					}
+					wantResults := 2
+					if wantProviders == 0 || tc.maxIterations != nil && *tc.maxIterations == 0 {
+						wantResults = 0
+					}
+					if len(results) != wantResults {
+						t.Fatalf("results = %+v, want %d paired outcomes", results, wantResults)
+					}
+					var skipped int32
+					var successfulResults []string
+					for i, result := range results {
+						if result.CallID != fmt.Sprint(i+1) {
+							t.Errorf("result %d call ID = %q, want original call order", i, result.CallID)
+						}
+						if result.Result == "Error: Function was not invoked." {
+							skipped++
+							if !errors.Is(result.Error, ctx.Err()) {
+								t.Errorf("unexecuted call error = %v, want %v", result.Error, ctx.Err())
+							}
+						} else if result.Error == nil {
+							value, ok := result.Result.(string)
+							if !ok {
+								t.Errorf("completed outcome = %v, want a string", result.Result)
+							}
+							successfulResults = append(successfulResults, value)
+						}
+					}
+					if wantResults > 0 && skipped != int32(wantResults)-tc.wantTools {
+						t.Errorf("unexecuted outcomes = %d, want %d", skipped, int32(wantResults)-tc.wantTools)
+					}
+					var wantSuccessfulResults []string
+					for i := range int(tc.wantTools) {
+						if i < len(tc.toolErrors) {
+							if tc.toolErrors[i] == nil {
+								wantSuccessfulResults = append(wantSuccessfulResults, "")
+							}
+						} else {
+							wantSuccessfulResults = append(wantSuccessfulResults, "result")
+						}
+					}
+					slices.Sort(successfulResults)
+					slices.Sort(wantSuccessfulResults)
+					if !slices.Equal(successfulResults, wantSuccessfulResults) {
+						t.Errorf("completed outcomes = %v, want %v", successfulResults, wantSuccessfulResults)
 					}
 				})
 			})
