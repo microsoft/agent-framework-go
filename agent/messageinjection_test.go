@@ -763,6 +763,118 @@ func TestMessageInjection_ConcurrentEnqueuesDoNotLoseMessages(t *testing.T) {
 	}
 }
 
+func TestMessageInjection_ExternalHistoryRetainsImagesAcrossToolRounds(t *testing.T) {
+	for _, perCall := range []bool{false, true} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("per-call=%t/stream=%t", perCall, stream), func(t *testing.T) {
+				var stored [][]byte
+				history := agent.NewHistoryProvider(agent.HistoryProviderConfig{
+					SourceID: "external-store",
+					Provide: func(context.Context, agent.InvokingContext) ([]*message.Message, error) {
+						messages := make([]*message.Message, 0, len(stored))
+						for _, data := range stored {
+							var msg message.Message
+							if err := json.Unmarshal(data, &msg); err != nil {
+								return nil, fmt.Errorf("decode history: %w", err)
+							}
+							messages = append(messages, &msg)
+						}
+						return messages, nil
+					},
+					Store: func(_ context.Context, invoked agent.InvokedContext) error {
+						for _, batch := range [][]*message.Message{invoked.RequestMessages, invoked.ResponseMessages} {
+							for _, msg := range batch {
+								data, err := json.Marshal(msg)
+								if err != nil {
+									return fmt.Errorf("encode history: %w", err)
+								}
+								stored = append(stored, data)
+							}
+						}
+						return nil
+					},
+				})
+				injection := &agent.MessageInjector{}
+				session := &agent.Session{}
+				var fetchCalls, noopCalls int
+				fetch := functool.MustNew(functool.Config{Name: "fetch"}, func(context.Context, struct{}) (string, error) {
+					fetchCalls++
+					if err := injection.EnqueueMessages(session, message.New(&message.URIContent{
+						URI: "https://example.invalid/image.png", MediaType: "image/png",
+					})); err != nil {
+						return "", err
+					}
+					return "fetched image", nil
+				})
+				noop := functool.MustNew(functool.Config{Name: "noop"}, func(context.Context, struct{}) (string, error) {
+					noopCalls++
+					return "completed", nil
+				})
+				var imageCounts, imagePositions []int
+				run := func(_ context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return func(yield func(*agent.ResponseUpdate, error) bool) {
+						if id, _ := agent.GetOption(opts, agent.WithServiceID); id != "" {
+							t.Errorf("local history ID reached the provider: %q", id)
+						}
+						count, position := 0, -1
+						for i, msg := range messages {
+							for _, content := range msg.Contents {
+								if image, ok := content.(*message.URIContent); ok && image.URI == "https://example.invalid/image.png" {
+									count++
+									position = i
+									if image.MediaType != "image/png" || msg.Role != message.RoleUser {
+										t.Errorf("image content or role was not preserved: %+v", msg)
+									}
+								}
+							}
+						}
+						imageCounts = append(imageCounts, count)
+						imagePositions = append(imagePositions, position)
+						contents := message.Contents{&message.TextContent{Text: "done"}}
+						switch len(imageCounts) {
+						case 1:
+							contents = message.Contents{&message.FunctionCallContent{CallID: "fetch", Name: "fetch", Arguments: `{}`}}
+						case 2:
+							contents = message.Contents{&message.FunctionCallContent{CallID: "noop", Name: "noop", Arguments: `{}`}}
+						}
+						yield(&agent.ResponseUpdate{
+							Role: message.RoleAssistant, MessageID: fmt.Sprintf("round-%d", len(imageCounts)), Contents: contents,
+						}, nil)
+					}
+				}
+				a := agent.New(agent.ProviderConfig{
+					Run: run, Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{})},
+				}, agent.Config{
+					HistoryProvider: history, MessageInjector: injection,
+					RequirePerServiceCallHistoryPersistence: perCall,
+					Tools:                                   []tool.Tool{fetch, noop},
+				})
+				response, err := a.RunText(t.Context(), "start", agent.WithSession(session), agent.Stream(stream)).Collect()
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantCounts, wantStored := []int{0, 1, 0}, 6
+				if perCall {
+					wantCounts, wantStored = []int{0, 1, 1}, 7
+				}
+				if !slices.Equal(imageCounts, wantCounts) || len(stored) != wantStored ||
+					fetchCalls != 1 || noopCalls != 1 || response.String() != "done" {
+					t.Fatalf("images=%v stored=%d fetch=%d noop=%d response=%q", imageCounts, len(stored), fetchCalls, noopCalls, response.String())
+				}
+				if perCall && imagePositions[1] != imagePositions[2] {
+					t.Errorf("image moved between provider calls: %v", imagePositions)
+				}
+				if memory, err := session.InMemoryHistory(""); err != nil || len(memory) != 0 {
+					t.Errorf("external history unexpectedly used session in-memory history: %v %v", memory, err)
+				}
+				if pending, err := injection.PendingMessages(session); err != nil || len(pending) != 0 {
+					t.Errorf("delivered image remained queued: %v %v", pending, err)
+				}
+			})
+		}
+	}
+}
+
 func newMessageInjectingAgent(run agent.RunFunc, config toolautocall.Config, tools []tool.Tool, injection *agent.MessageInjector) *agent.Agent {
 	return agent.New(agent.ProviderConfig{
 		Run:         run,

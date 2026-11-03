@@ -194,18 +194,28 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 	}
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		var finalConversationID *string
-		response, err := agent.ResponseStream(f.run(next, ctx, messages, opts, &finalConversationID)).Collect()
-		if err != nil {
-			yield(nil, err)
-			return
+		var response agent.Response
+		var runErr error
+		for update, err := range f.run(next, ctx, messages, opts, &finalConversationID) {
+			response.Update(update)
+			if err != nil {
+				runErr = err
+				break
+			}
 		}
+		response.Coalesce()
 		// A completed non-streaming run uses the final provider response's ID,
 		// even when it is nil. Earlier tool rounds still contribute messages.
-		response.ConversationID = finalConversationID
+		if runErr == nil {
+			response.ConversationID = finalConversationID
+		}
 		for _, update := range response.ToUpdates() {
 			if !yield(update, nil) {
 				return
 			}
+		}
+		if runErr != nil {
+			yield(nil, runErr)
 		}
 	}
 }
@@ -308,10 +318,6 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			// Invoke approved approval responses, which generates some additional FRC wrapped in ChatMessage.
 			var newMsg *message.Message
 			newMsg, errCount, err = f.invokeApprovedToolApprovalResponses(ctx, notInvokedMsgs, tools, 0)
-			if err != nil {
-				yield(nil, err)
-				return
-			}
 			if newMsg != nil {
 				opts = updateOptionsForNextIteration(opts)
 				messages = slices.Insert(messages, approvedResultInsertIdx, newMsg)
@@ -323,6 +329,10 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 				if !yield(update, nil) {
 					return
 				}
+			}
+			if err != nil {
+				yield(nil, err)
+				return
 			}
 		}
 		// At this point, we've fully handled all approval responses that were part of the original messages,
@@ -439,16 +449,16 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			var newMsg *message.Message
 			var err error
 			newMsg, errCount, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount)
-			if err != nil {
-				yield(nil, err)
-				return
-			}
 
 			// Stream any generated function results. This mirrors what's done for ResponseAsync, where the returned messages
 			// includes all activities, including generated function results.
 			resultUpdate := convertToolResultMsgToUpdate(newMsg, toolMsgID)
 			resultUpdate.ConversationID = conversationID
 			if !yield(resultUpdate, nil) {
+				return
+			}
+			if err != nil {
+				yield(nil, err)
 				return
 			}
 
@@ -1145,12 +1155,7 @@ func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, appr
 	if len(funcCalls) == 0 {
 		return nil, errCount, nil
 	}
-	newMsg, errCount, err := f.processFunctionCalls(ctx, tools, funcCalls, errCount)
-	if err != nil {
-		return nil, errCount, err
-	}
-
-	return newMsg, errCount, nil
+	return f.processFunctionCalls(ctx, tools, funcCalls, errCount)
 }
 
 type functionInvocationStatus int
@@ -1159,6 +1164,7 @@ const (
 	functionInvocationStatusRanToCompletion functionInvocationStatus = iota
 	functionInvocationStatusNotFound
 	functionInvocationStatusException
+	functionInvocationStatusNotInvoked
 )
 
 type functionInvocationResult struct {
@@ -1177,6 +1183,7 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 	captureCurrentIterationErrors := errCount < f.maximumConsecutiveErrorsPerRequest
 	// Process all functions. If there's more than one and concurrent invocation is enabled, do so in parallel.
 	results := make([]functionInvocationResult, 0, len(funcCalls))
+	var runErr error
 	if len(funcCalls) > 1 && f.allowConcurrentInvocations {
 		// Rather than awaiting each function before invoking the next, invoke all of them
 		// and then await all of them. We avoid forcibly introducing parallelism via Task.Run,
@@ -1192,6 +1199,7 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 			}()
 		}
 		wg.Wait()
+		results = parallelResults
 		if err := ctx.Err(); err != nil {
 			var toolErrors []error
 			for _, result := range parallelResults {
@@ -1200,29 +1208,40 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 				}
 			}
 			if len(toolErrors) == 1 {
-				return nil, errCount, toolErrors[0]
+				runErr = toolErrors[0]
+			} else if len(toolErrors) > 1 {
+				runErr = errors.Join(toolErrors...)
+			} else {
+				runErr = err
 			}
-			if len(toolErrors) > 1 {
-				return nil, errCount, errors.Join(toolErrors...)
-			}
-			return nil, errCount, err
 		}
-		results = parallelResults
 	} else {
 		// Invoke each function serially.
 		for _, fc := range funcCalls {
 			result := f.processFunctionCall(ctx, tools, fc)
+			results = append(results, result)
 			// Request cancellation must bypass the recoverable tool-error path.
 			if err := ctx.Err(); err != nil {
 				if result.err != nil {
-					return nil, errCount, result.err
+					runErr = result.err
+				} else {
+					runErr = err
 				}
-				return nil, errCount, err
+				break
 			}
 			if !captureCurrentIterationErrors && result.status == functionInvocationStatusException {
-				return nil, errCount, result.err
+				runErr = result.err
+				break
 			}
-			results = append(results, result)
+		}
+	}
+	if len(results) < len(funcCalls) {
+		skippedErr := runErr
+		if err := ctx.Err(); err != nil {
+			skippedErr = err
+		}
+		for _, fc := range funcCalls[len(results):] {
+			results = append(results, functionInvocationResult{status: functionInvocationStatusNotInvoked, call: fc, err: skippedErr})
 		}
 	}
 	for _, result := range results {
@@ -1230,13 +1249,11 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 	}
 
 	newMsg := f.createResponseMessage(results)
-	var err error
-	errCount, err = f.updateConsecutiveErrorCountOrThrow(ctx, newMsg, errCount)
-	if err != nil {
-		return nil, errCount, err
+	if runErr == nil {
+		errCount, runErr = f.updateConsecutiveErrorCountOrThrow(ctx, newMsg, errCount)
 	}
 
-	return newMsg, errCount, nil
+	return newMsg, errCount, runErr
 }
 
 func (f *autocall) updateConsecutiveErrorCountOrThrow(ctx context.Context, added *message.Message, errCount int) (int, error) {
@@ -1268,7 +1285,7 @@ func (f *autocall) updateConsecutiveErrorCountOrThrow(ctx context.Context, added
 
 func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]tool.SchemaTool, funcCall *message.FunctionCallContent) functionInvocationResult {
 	if err := ctx.Err(); err != nil {
-		return functionInvocationResult{status: functionInvocationStatusException, call: funcCall, err: err}
+		return functionInvocationResult{status: functionInvocationStatusNotInvoked, call: funcCall, err: err}
 	}
 	declaration, ok := tools[funcCall.Name]
 	if !ok {
@@ -1353,6 +1370,11 @@ func (f *autocall) createFunctionResultContent(result functionInvocationResult) 
 		functionResult = fmt.Sprintf("Error: Requested function %q not found.", result.call.Name)
 	case functionInvocationStatusException:
 		functionResult = "Error: Function failed."
+		if f.includeDetailedErrors && result.err != nil {
+			functionResult = fmt.Sprintf("%s Exception: %v", functionResult, result.err)
+		}
+	case functionInvocationStatusNotInvoked:
+		functionResult = "Error: Function was not invoked."
 		if f.includeDetailedErrors && result.err != nil {
 			functionResult = fmt.Sprintf("%s Exception: %v", functionResult, result.err)
 		}
