@@ -16,8 +16,9 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	responseformat "github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
@@ -644,7 +645,7 @@ type structuredPortAnimal struct {
 
 func TestAgent_ResponseFormatFromConfigReachesProvider(t *testing.T) {
 	format := jsonformat.MustFor[structuredPortAnimal]()
-	var captured agent.ResponseFormat
+	var captured responseformat.ResponseFormat
 	responses := agenttest.NewResponseBuilder(func(_ context.Context, _ []*message.Message, options ...agent.Option) {
 		captured, _ = agent.GetOption(options, agent.WithResponseFormat)
 	}).AddText("test")
@@ -662,7 +663,7 @@ func TestAgent_ResponseFormatFromConfigReachesProvider(t *testing.T) {
 
 func TestAgent_ResponseFormatFromRunReachesProvider(t *testing.T) {
 	format := jsonformat.MustFor[structuredPortAnimal]()
-	var captured agent.ResponseFormat
+	var captured responseformat.ResponseFormat
 	responses := agenttest.NewResponseBuilder(func(_ context.Context, _ []*message.Message, options ...agent.Option) {
 		captured, _ = agent.GetOption(options, agent.WithResponseFormat)
 	}).AddText("test")
@@ -679,7 +680,7 @@ func TestAgent_ResponseFormatFromRunReachesProvider(t *testing.T) {
 func TestAgent_ResponseFormatFromRunOverridesConfig(t *testing.T) {
 	initial := jsonformat.MustFor[structuredPortAnimal]()
 	invocation := jsonformat.MustFor[structuredPortAnimal]()
-	var captured agent.ResponseFormat
+	var captured responseformat.ResponseFormat
 	responses := agenttest.NewResponseBuilder(func(_ context.Context, _ []*message.Message, options ...agent.Option) {
 		captured, _ = agent.GetOption(options, agent.WithResponseFormat)
 	}).AddText("test")
@@ -725,17 +726,17 @@ func TestAgent_StructuredOutputSetsSchemaAndDecodesResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var captured agent.ResponseFormat
+	var captured responseformat.ResponseFormat
 	responses := agenttest.NewResponseBuilder(func(_ context.Context, _ []*message.Message, options ...agent.Option) {
 		captured, _ = agent.GetOption(options, agent.WithResponseFormat)
 	}).AddText(string(data))
 	runner := &agenttest.Runner{Responses: responses.Build()}
 	a := agent.New(agent.ProviderConfig{
 		Run: runner.Run,
-		Format: func(v any) (agent.ResponseFormat, error) {
+		Format: func(v any) (responseformat.ResponseFormat, error) {
 			return jsonformat.ForType(reflect.TypeOf(v))
 		},
-		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
+		Unmarshal: func(format responseformat.ResponseFormat, data []byte, v any) error {
 			f, err := jsonformat.FromResponseFormat(format)
 			if err != nil {
 				return err
@@ -791,10 +792,10 @@ func testAgentRunWithCustomOptions(t *testing.T, inputKind string, streaming, st
 	}
 	a := agent.New(agent.ProviderConfig{
 		Run: run,
-		Format: func(v any) (agent.ResponseFormat, error) {
+		Format: func(v any) (responseformat.ResponseFormat, error) {
 			return jsonformat.ForType(reflect.TypeOf(v))
 		},
-		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
+		Unmarshal: func(format responseformat.ResponseFormat, data []byte, v any) error {
 			f, err := jsonformat.FromResponseFormat(format)
 			if err != nil {
 				return err

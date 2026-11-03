@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 )
 
 func TestStrictSchemaToMapTransformsCloneRecursively(t *testing.T) {

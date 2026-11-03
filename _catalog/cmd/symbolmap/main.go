@@ -269,7 +269,7 @@ func runReconciliation(out io.Writer, c symbolcatalog.Catalog, report mappingsRe
 		if example == "" {
 			continue
 		}
-		if err := checkGoExample(example, api); err != nil {
+		if err := checkGoExample(example, api, row.GoSymbols); err != nil {
 			return fmt.Errorf("%s.%s: Go example: %w", row.Namespace, row.Dotnet, err)
 		}
 	}
