@@ -3,6 +3,7 @@
 package agentworkflow
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -40,6 +41,14 @@ func (d outputDesignations) explicit() bool {
 }
 
 func (d outputDesignations) withOutputFrom(agents ...*agent.Agent) (outputDesignations, error) {
+	// An explicit designation call with no agents is a caller error (e.g. an
+	// accidentally empty computed slice): it would otherwise silently zero all
+	// workflow output. Reject it rather than guessing, matching Python's
+	// _resolve_participant_output_config, which treats an explicit-but-empty
+	// output designation as a hard error.
+	if len(agents) == 0 {
+		return d, errors.New("agentworkflow: WithOutputFrom/WithIntermediateOutputFrom requires at least one agent")
+	}
 	if d == nil {
 		d = make(outputDesignations)
 	}

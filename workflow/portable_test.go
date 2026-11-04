@@ -11,6 +11,18 @@ import (
 	"github.com/microsoft/agent-framework-go/workflow"
 )
 
+func TestPortableValue_ObjectRoundtrip(t *testing.T) {
+	value := message.NewText("Hello?")
+	portable := workflow.AnyPortableValue(value)
+	if _, ok := workflow.PortableValueAs[func()](portable); ok {
+		t.Fatal("message must not convert to unrelated type")
+	}
+	got, ok := workflow.PortableValueAs[*message.Message](portable)
+	if !ok || got != value {
+		t.Fatalf("PortableValueAs = %p, %t, want original message %p", got, ok, value)
+	}
+}
+
 func TestPortableValueRoundtrip(t *testing.T) {
 	testRountrip(t, "string")
 	testRountrip(t, 42)
@@ -122,6 +134,12 @@ func TestPortableValueAny_DecodesDelayedPrimitive(t *testing.T) {
 	delayed := delayedPortableValue(t, pv)
 	if got := delayed.Any(); got != "hello" {
 		t.Fatalf("Any() = %v (%T), want hello (string)", got, got)
+	}
+	if delayed.TypeID != pv.TypeID {
+		t.Fatalf("TypeID = %+v, want %+v", delayed.TypeID, pv.TypeID)
+	}
+	if delayed.Is(reflect.TypeFor[int]()) {
+		t.Fatal("Is(int) = true, want false")
 	}
 }
 

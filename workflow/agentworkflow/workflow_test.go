@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"iter"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -226,6 +227,256 @@ func uppercaseLatestTextBinding(id string) workflow.ExecutorBinding {
 		}), nil
 	}
 	return binding
+}
+
+func hostRequestPortAgent(t *testing.T, content message.Content, completeOnResponse bool) *agent.Agent {
+	t.Helper()
+	provider := agent.New(agent.ProviderConfig{ProviderName: "request-emitting", Run: func(_ context.Context, messages []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			reply := content
+			if completeOnResponse {
+				for _, msg := range messages {
+					for _, item := range msg.Contents {
+						switch item.(type) {
+						case *message.FunctionResultContent, *message.ToolApprovalResponseContent:
+							reply = &message.TextContent{Text: "Request processed"}
+						}
+					}
+				}
+			}
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{reply}}, nil)
+		}
+	}}, agent.Config{HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "noop-history"})})
+	binding := agentworkflow.New(provider, agentworkflow.Config{EmitUpdateEvents: new(true)})
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{Config: agent.Config{ID: "WorkflowAgent"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return host
+}
+
+func hostRequestPortUpdates(t *testing.T, host *agent.Agent, session *agent.Session, messages []*message.Message) []*agent.ResponseUpdate {
+	t.Helper()
+	options := []agent.Option{agent.Stream(true)}
+	if session != nil {
+		options = append(options, agent.WithSession(session))
+	}
+	var updates []*agent.ResponseUpdate
+	for update, err := range host.Run(t.Context(), messages, options...) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		updates = append(updates, update)
+	}
+	return updates
+}
+
+func firstRequestPortCall(t *testing.T, updates []*agent.ResponseUpdate) *message.FunctionCallContent {
+	t.Helper()
+	for _, update := range updates {
+		if _, ok := update.RawRepresentation.(workflow.RequestInfoEvent); !ok {
+			continue
+		}
+		var calls []*message.FunctionCallContent
+		for _, content := range update.Contents {
+			if call, ok := content.(*message.FunctionCallContent); ok {
+				calls = append(calls, call)
+			}
+		}
+		if len(calls) > 0 {
+			if len(calls) != 1 {
+				t.Fatalf("request update has %d function calls, want one", len(calls))
+			}
+			return calls[0]
+		}
+	}
+	t.Fatalf("no request-info function call in %v", updates)
+	return nil
+}
+
+func firstRequestPortApproval(t *testing.T, updates []*agent.ResponseUpdate) *message.ToolApprovalRequestContent {
+	t.Helper()
+	for _, update := range updates {
+		if _, ok := update.RawRepresentation.(workflow.RequestInfoEvent); !ok {
+			continue
+		}
+		var approvals []*message.ToolApprovalRequestContent
+		for _, content := range update.Contents {
+			if approval, ok := content.(*message.ToolApprovalRequestContent); ok {
+				approvals = append(approvals, approval)
+			}
+		}
+		if len(approvals) > 0 {
+			if len(approvals) != 1 {
+				t.Fatalf("request update has %d approvals, want one", len(approvals))
+			}
+			return approvals[0]
+		}
+	}
+	t.Fatalf("no request-info approval in %v", updates)
+	return nil
+}
+
+func requireNoRepeatedPortRequest(t *testing.T, updates []*agent.ResponseUpdate, id string, checkErrors bool) {
+	t.Helper()
+	if len(updates) == 0 {
+		t.Fatal("resume produced no updates")
+	}
+	for _, update := range updates {
+		_, requestInfo := update.RawRepresentation.(workflow.RequestInfoEvent)
+		for _, content := range update.Contents {
+			switch content := content.(type) {
+			case *message.FunctionCallContent:
+				if requestInfo && content.CallID == id {
+					t.Fatalf("handled request %q re-emitted", id)
+				}
+			case *message.ToolApprovalRequestContent:
+				if requestInfo && content.RequestID == id {
+					t.Fatalf("handled approval %q re-emitted", id)
+				}
+			case *message.ErrorContent:
+				if checkErrors {
+					t.Fatalf("unexpected error content: %s", content.Message)
+				}
+			}
+		}
+	}
+}
+
+func TestWorkflowHost_FunctionCallContentPreservedInRequestInfo(t *testing.T) {
+	original := &message.FunctionCallContent{CallID: "test-call-id", Name: "testFunction"}
+	host := hostRequestPortAgent(t, original, false)
+	updates := hostRequestPortUpdates(t, host, nil, []*message.Message{message.NewText("Hello")})
+	call := firstRequestPortCall(t, updates)
+	if call.CallID == original.CallID || !strings.HasSuffix(call.CallID, ":"+original.CallID) || call.Name != original.Name {
+		t.Fatalf("surfaced call = %#v", call)
+	}
+}
+
+func TestWorkflowHost_ApprovalContentPreservedInRequestInfo(t *testing.T) {
+	original := &message.ToolApprovalRequestContent{RequestID: "test-request-id", ToolCall: &message.MCPServerToolCallContent{CallID: "call-id", Name: "testToolName", ServerName: "http://localhost"}}
+	host := hostRequestPortAgent(t, original, false)
+	approval := firstRequestPortApproval(t, hostRequestPortUpdates(t, host, nil, []*message.Message{message.NewText("Hello")}))
+	if approval.RequestID == original.RequestID || !strings.HasSuffix(approval.RequestID, ":"+original.RequestID) {
+		t.Fatalf("surfaced approval = %#v", approval)
+	}
+}
+
+func TestWorkflowHost_FunctionCallRoundtripProcessesResponse(t *testing.T) {
+	host := hostRequestPortAgent(t, &message.FunctionCallContent{CallID: "roundtrip-call-id", Name: "testFunction"}, true)
+	session, err := host.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := hostRequestPortUpdates(t, host, session, []*message.Message{message.NewText("Start")})
+	call := firstRequestPortCall(t, first)
+	if !strings.HasSuffix(call.CallID, ":roundtrip-call-id") {
+		t.Fatalf("call ID = %q", call.CallID)
+	}
+	second := hostRequestPortUpdates(t, host, session, []*message.Message{{Role: message.RoleTool, Contents: message.Contents{&message.FunctionResultContent{CallID: call.CallID, Result: "test result"}}}})
+	requireNoRepeatedPortRequest(t, second, call.CallID, false)
+}
+
+func TestWorkflowHost_ApprovalRoundtripProcessesResponse(t *testing.T) {
+	original := &message.ToolApprovalRequestContent{RequestID: "roundtrip-request-id", ToolCall: &message.MCPServerToolCallContent{CallID: "mcp-call-id", Name: "testMcpTool", ServerName: "http://localhost"}}
+	host := hostRequestPortAgent(t, original, true)
+	session, err := host.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := hostRequestPortUpdates(t, host, session, []*message.Message{message.NewText("Start")})
+	approval := firstRequestPortApproval(t, first)
+	if !strings.HasSuffix(approval.RequestID, ":roundtrip-request-id") {
+		t.Fatalf("approval ID = %q", approval.RequestID)
+	}
+	second := hostRequestPortUpdates(t, host, session, []*message.Message{{Role: message.RoleUser, Contents: message.Contents{approval.CreateResponse(true, "")}}})
+	requireNoRepeatedPortRequest(t, second, approval.RequestID, false)
+}
+
+func TestWorkflowHost_MixedResponseAndRegularMessageIsProcessed(t *testing.T) {
+	host := hostRequestPortAgent(t, &message.FunctionCallContent{CallID: "mixed-call-id", Name: "mixedTestFunction"}, true)
+	session, err := host.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := hostRequestPortUpdates(t, host, session, []*message.Message{message.NewText("Start")})
+	call := firstRequestPortCall(t, first)
+	if !slices.ContainsFunc(first, func(update *agent.ResponseUpdate) bool {
+		return slices.ContainsFunc(update.Contents, func(content message.Content) bool { _, ok := content.(*message.FunctionCallContent); return ok })
+	}) {
+		t.Fatal("no function call content in first updates")
+	}
+	second := hostRequestPortUpdates(t, host, session, []*message.Message{{
+		Role: message.RoleTool, Contents: message.Contents{&message.FunctionResultContent{CallID: call.CallID, Result: "tool output"}, &message.TextContent{Text: "additional context"}},
+	}})
+	requireNoRepeatedPortRequest(t, second, call.CallID, true)
+}
+
+func TestWorkflowHost_ResponseThenRegularMessageDoesNotDuplicateCall(t *testing.T) {
+	host := hostRequestPortAgent(t, &message.FunctionCallContent{CallID: "mixed-separate-call-id", Name: "mixedSeparateTestFunction"}, true)
+	session, err := host.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := firstRequestPortCall(t, hostRequestPortUpdates(t, host, session, []*message.Message{message.NewText("Start")}))
+	second := hostRequestPortUpdates(t, host, session, []*message.Message{
+		{Role: message.RoleTool, Contents: message.Contents{&message.FunctionResultContent{CallID: call.CallID, Result: "tool output"}}},
+		{Role: message.RoleTool, Contents: message.Contents{&message.TextContent{Text: "extra context in separate message"}}},
+	})
+	requireNoRepeatedPortRequest(t, second, call.CallID, true)
+}
+
+func TestWorkflowHost_MatchingResponseDoesNotCauseExtraTurn(t *testing.T) {
+	host := hostRequestPortAgent(t, &message.FunctionCallContent{CallID: "matching-response-call-id", Name: "matchingResponseFunction"}, false)
+	session, err := host.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := firstRequestPortCall(t, hostRequestPortUpdates(t, host, session, []*message.Message{message.NewText("Start")}))
+	second := hostRequestPortUpdates(t, host, session, []*message.Message{{Role: message.RoleTool, Contents: message.Contents{&message.FunctionResultContent{CallID: call.CallID, Result: "tool output"}}}})
+	count := 0
+	for _, update := range second {
+		if _, ok := update.RawRepresentation.(workflow.RequestInfoEvent); !ok {
+			continue
+		}
+		for _, content := range update.Contents {
+			if emitted, ok := content.(*message.FunctionCallContent); ok && emitted.CallID == call.CallID {
+				count++
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("re-emitted request count = %d, want one (no extra turn)", count)
+	}
+}
+
+func TestWorkflowHost_UndesignatedHostedResponseIsNotSurfaced(t *testing.T) {
+	provider := agent.New(agent.ProviderConfig{ProviderName: "replay", Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "progress"}}}, nil)
+		}
+	}}, agent.Config{})
+	binding := agentworkflow.New(provider, agentworkflow.Config{EmitResponseEvents: true})
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{Config: agent.Config{ID: "WorkflowAgent"}, IncludeOutputsInResponse: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updates := hostRequestPortUpdates(t, host, nil, []*message.Message{message.NewText("hi")})
+	for _, update := range updates {
+		if output, ok := update.RawRepresentation.(workflow.OutputEvent); ok {
+			if _, response := output.Output.(*agent.Response); response {
+				t.Fatal("undesignated hosted response was surfaced")
+			}
+		}
+	}
 }
 
 func TestNew_StreamsResponseUpdates(t *testing.T) {
@@ -800,7 +1051,10 @@ func TestNew_IncludeOutputsInResponse(t *testing.T) {
 	}
 
 	var updates int
-	for range ag.RunText(t.Context(), "ping", agent.Stream(true)) {
+	for _, err := range ag.RunText(t.Context(), "ping", agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
 		updates++
 	}
 	// Streaming keeps both the hosted update and the translated workflow output visible.
@@ -873,7 +1127,7 @@ func TestNew_GatesHostedAgentResponseOutputsByDefault(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	for update, err := range ag.RunText(t.Context(), "ping") {
+	for update, err := range ag.RunText(t.Context(), "ping", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("RunText: %v", err)
 		}
@@ -889,15 +1143,25 @@ func TestNew_GatesHostedAgentResponseOutputsByDefault(t *testing.T) {
 		t.Fatalf("New included: %v", err)
 	}
 	var sawResponseOutput bool
+	var textUpdates int
 	for update, err := range included.RunText(t.Context(), "ping", agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("RunText included: %v", err)
 		}
+		if update.Contents.Text() == "hosted-response" {
+			textUpdates++
+		}
 		if raw, ok := update.RawRepresentation.(workflow.OutputEvent); ok {
 			if _, isResponse := raw.Output.(*agent.Response); isResponse {
+				if len(update.Contents) != 0 {
+					t.Fatalf("aggregated hosted agent response output contents = %v, want empty", update.Contents)
+				}
 				sawResponseOutput = true
 			}
 		}
+	}
+	if textUpdates != 1 {
+		t.Fatalf("hosted-response text update count = %d, want 1", textUpdates)
 	}
 	if !sawResponseOutput {
 		t.Fatalf("aggregated hosted agent response output was not forwarded when included")
@@ -1027,6 +1291,9 @@ func TestNew_CollectPrefersTerminalWorkflowOutputOverIntermediateHostedAgentUpda
 	if got, want := responseTexts(resp), []string{"SECOND ANSWER"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("response texts = %v, want %v; response = %+v", got, want, resp)
 	}
+	if got := resp.String(); got != "SECOND ANSWER" {
+		t.Fatalf("response text = %q, want SECOND ANSWER", got)
+	}
 }
 
 func TestNew_ConvertsResponseOutputAsMessageUpdates(t *testing.T) {
@@ -1130,14 +1397,22 @@ func TestNew_RejectsIncompatibleWorkflow(t *testing.T) {
 		t.Fatalf("build workflow: %v", err)
 	}
 
-	if _, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{}); err == nil {
+	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{})
+	if err == nil {
 		t.Fatalf("New should reject workflow that does not accept []*message.Message")
+	}
+	if ag != nil || !strings.Contains(err.Error(), "does not accept []*message.Message") {
+		t.Fatalf("NewAgent = (%v, %v), want no agent and an incompatible-input error", ag, err)
 	}
 }
 
 func TestNew_NilWorkflow(t *testing.T) {
-	if _, err := agentworkflow.NewAgent(nil, agentworkflow.AgentConfig{}); err == nil {
+	ag, err := agentworkflow.NewAgent(nil, agentworkflow.AgentConfig{})
+	if err == nil {
 		t.Fatalf("NewAgent(nil) should return an error")
+	}
+	if ag != nil {
+		t.Fatalf("NewAgent(nil) returned %v, want no partially constructed agent", ag)
 	}
 }
 
@@ -2670,51 +2945,63 @@ func TestNew_MatchingResponse_DoesNotCauseExtraTurn(t *testing.T) {
 }
 
 func TestNew_UnmatchedResponse_TriggersTurnAndKeepsProgressing(t *testing.T) {
-	host := agentworkflow.New(
-		requestEmittingAgent("unmatched-response-call-id", "unmatchedResponseFunction"),
-		agentworkflow.Config{EmitUpdateEvents: new(true)},
-	)
-	wf, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	session, err := ag.CreateSession(t.Context())
-	if err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	first, err := ag.RunText(t.Context(), "Start", agent.WithSession(session)).Collect()
-	if err != nil {
-		t.Fatalf("first: %v", err)
-	}
-	_ = requireWorkflowFunctionCallID(t, first)
-
-	second, err := ag.Run(t.Context(), []*message.Message{{
-		Role: message.RoleTool,
-		Contents: []message.Content{
-			&message.FunctionResultContent{CallID: "different-call-id", Result: "tool output"},
-		},
-	}}, agent.WithSession(session)).Collect()
-	if err != nil {
-		t.Fatalf("second: %v", err)
-	}
-
-	functionCallCount := 0
-	for _, msg := range second.Messages {
-		for _, content := range msg.Contents {
-			if call, ok := content.(*message.FunctionCallContent); ok && call.CallID == "unmatched-response-call-id" {
-				functionCallCount++
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			host := agentworkflow.New(
+				requestEmittingAgent("unmatched-response-call-id", "unmatchedResponseFunction"),
+				agentworkflow.Config{EmitUpdateEvents: new(true)},
+			)
+			wf, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
+			if err != nil {
+				t.Fatalf("Build: %v", err)
 			}
-		}
-	}
-	if functionCallCount != 1 {
-		t.Fatalf("FunctionCallContent count = %d, want 1; response = %+v", functionCallCount, second)
-	}
-	if errors := responseErrorMessages(second); len(errors) != 0 {
-		t.Fatalf("unexpected ErrorContent messages: %v", errors)
+			ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			session, err := ag.CreateSession(t.Context())
+			if err != nil {
+				t.Fatalf("CreateSession: %v", err)
+			}
+			first, err := ag.RunText(t.Context(), "Start", agent.WithSession(session), agent.Stream(stream)).Collect()
+			if err != nil {
+				t.Fatalf("first: %v", err)
+			}
+			_ = requireWorkflowFunctionCallID(t, first)
+			if errors := responseErrorMessages(first); len(errors) != 0 {
+				t.Fatalf("unexpected first-turn ErrorContent messages: %v", errors)
+			}
+
+			result := &message.FunctionResultContent{CallID: "different-call-id", Result: "tool output"}
+			second, err := ag.Run(t.Context(), []*message.Message{{
+				Role:     message.RoleTool,
+				Contents: []message.Content{result},
+			}}, agent.WithSession(session), agent.Stream(stream)).Collect()
+			if err != nil {
+				t.Fatalf("second: %v", err)
+			}
+
+			functionCallCount := 0
+			for _, msg := range second.Messages {
+				for _, content := range msg.Contents {
+					if call, ok := content.(*message.FunctionCallContent); ok && call.CallID == "unmatched-response-call-id" {
+						functionCallCount++
+						if call.Name != "unmatchedResponseFunction" {
+							t.Errorf("function name = %q, want unmatchedResponseFunction", call.Name)
+						}
+					}
+				}
+			}
+			if functionCallCount != 1 {
+				t.Fatalf("FunctionCallContent count = %d, want 1; response = %+v", functionCallCount, second)
+			}
+			if errors := responseErrorMessages(second); len(errors) != 0 {
+				t.Fatalf("unexpected ErrorContent messages: %v", errors)
+			}
+			if result.CallID != "different-call-id" || result.Result != "tool output" {
+				t.Fatalf("unmatched caller-owned result was modified: %#v", result)
+			}
+		})
 	}
 }
 
@@ -2791,49 +3078,65 @@ func TestNew_ResponseOnlyToNonStartExecutor_StartExecutorIsStillActivated(t *tes
 		startExecutorID = "start-executor"
 		activatedMarker = "start-executor-activated"
 	)
-	downstream := agentworkflow.New(
-		requestCompletingAgent("response-only-call-id", "responseOnlyFunction"),
-		agentworkflow.Config{EmitUpdateEvents: new(true)},
-	)
-	start := turnTrackingStartExecutorBinding(startExecutorID, downstream.ID, activatedMarker)
-	wf, err := addCrossExecutorEdges(workflow.NewBuilder(start), start, downstream).
-		WithOutputFrom(downstream).
-		Build()
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-	ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{})
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	session, err := ag.CreateSession(t.Context())
-	if err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	first, err := ag.RunText(t.Context(), "Start", agent.WithSession(session)).Collect()
-	if err != nil {
-		t.Fatalf("first: %v", err)
-	}
-	requestID := requireWorkflowFunctionCallID(t, first)
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%v", stream), func(t *testing.T) {
+			downstream := agentworkflow.New(
+				requestCompletingAgent("response-only-call-id", "responseOnlyFunction"),
+				agentworkflow.Config{EmitUpdateEvents: new(true)},
+			)
+			start := turnTrackingStartExecutorBinding(startExecutorID, downstream.ID, activatedMarker)
+			wf, err := addCrossExecutorEdges(workflow.NewBuilder(start), start, downstream).
+				WithOutputFrom(downstream).
+				Build()
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			ag, err := agentworkflow.NewAgent(wf, agentworkflow.AgentConfig{})
+			if err != nil {
+				t.Fatalf("New: %v", err)
+			}
+			session, err := ag.CreateSession(t.Context())
+			if err != nil {
+				t.Fatalf("CreateSession: %v", err)
+			}
+			first, err := ag.RunText(t.Context(), "Start", agent.WithSession(session), agent.Stream(stream)).Collect()
+			if err != nil {
+				t.Fatalf("first: %v", err)
+			}
+			requestID := requireWorkflowFunctionCallID(t, first)
+			externalCallCount := 0
+			for content := range first.Contents() {
+				if call, ok := content.(*message.FunctionCallContent); ok && strings.Contains(call.CallID, "_FunctionCall:") {
+					externalCallCount++
+				}
+			}
+			if externalCallCount != 1 {
+				t.Fatalf("first-turn workflow-facing function calls = %d, want 1; response = %+v", externalCallCount, first)
+			}
+			if errors := responseErrorMessages(first); len(errors) != 0 {
+				t.Fatalf("unexpected first-turn ErrorContent messages: %v", errors)
+			}
 
-	second, err := ag.Run(t.Context(), []*message.Message{{
-		Role: message.RoleTool,
-		Contents: []message.Content{
-			&message.FunctionResultContent{CallID: requestID, Result: "tool output"},
-		},
-	}}, agent.WithSession(session)).Collect()
-	if err != nil {
-		t.Fatalf("second: %v", err)
-	}
+			second, err := ag.Run(t.Context(), []*message.Message{{
+				Role: message.RoleTool,
+				Contents: []message.Content{
+					&message.FunctionResultContent{CallID: requestID, Result: "tool output"},
+				},
+			}}, agent.WithSession(session), agent.Stream(stream)).Collect()
+			if err != nil {
+				t.Fatalf("second: %v", err)
+			}
 
-	texts := strings.Join(responseTexts(second), "\n")
-	if !strings.Contains(texts, "Request processed") {
-		t.Fatalf("second response text = %q, want Request processed", texts)
-	}
-	if !strings.Contains(texts, activatedMarker) {
-		t.Fatalf("second response text = %q, want %q", texts, activatedMarker)
-	}
-	if errors := responseErrorMessages(second); len(errors) != 0 {
-		t.Fatalf("unexpected ErrorContent messages: %v", errors)
+			texts := strings.Join(responseTexts(second), "\n")
+			if !strings.Contains(texts, "Request processed") {
+				t.Fatalf("second response text = %q, want Request processed", texts)
+			}
+			if !strings.Contains(texts, activatedMarker) {
+				t.Fatalf("second response text = %q, want %q", texts, activatedMarker)
+			}
+			if errors := responseErrorMessages(second); len(errors) != 0 {
+				t.Fatalf("unexpected ErrorContent messages: %v", errors)
+			}
+		})
 	}
 }
