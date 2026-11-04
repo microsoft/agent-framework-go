@@ -306,8 +306,8 @@ func (e *Executor) OnCheckpointRestored(ctx *Context) error {
 	return nil
 }
 
-// OnMessageDeliveryStarting invokes all configured OnMessageDeliveryStarting
-// hooks. Returns the first error from any hook.
+// OnMessageDeliveryStarting invokes the configured OnMessageDeliveryStarting
+// hooks in order, stopping at and returning the first hook error.
 func (e *Executor) OnMessageDeliveryStarting(ctx *Context) error {
 	if e.OnMessageDeliveryStartingFunc != nil {
 		return e.OnMessageDeliveryStartingFunc(ctx)
@@ -670,7 +670,7 @@ func (s *StatefulExecutorCache[T]) OnCheckpointRestored(*Context) error {
 // newRequestPortExecutor creates the executor that turns request-port messages
 // into [ExternalRequest]s and routes matching [ExternalResponse]s back into the
 // workflow.
-func newRequestPortExecutor(port RequestPort) *Executor {
+func newRequestPortExecutor(port RequestPort, allowWrapped bool) *Executor {
 	var (
 		wrappedMu       sync.Mutex
 		wrappedRequests = make(map[string]*ExternalRequest)
@@ -722,8 +722,9 @@ func newRequestPortExecutor(port RequestPort) *Executor {
 						return nil, err
 					}
 					return nil, nil
-				}).
-				AddHandlerRaw(reflect.TypeFor[*ExternalRequest](), nil, func(ctx *Context, msg any) (any, error) {
+				})
+			if allowWrapped {
+				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[*ExternalRequest](), nil, func(ctx *Context, msg any) (any, error) {
 					req := msg.(*ExternalRequest)
 					data, ok := req.Data.As(port.Request)
 					if !ok {
@@ -743,7 +744,9 @@ func newRequestPortExecutor(port RequestPort) *Executor {
 						return nil, err
 					}
 					return nil, nil
-				}).
+				})
+			}
+			rb.RouteBuilder.
 				AddHandlerRaw(reflect.TypeFor[*ExternalResponse](), nil, func(ctx *Context, msg any) (any, error) {
 					resp := msg.(*ExternalResponse)
 					if resp.PortInfo.PortID != port.ID {
@@ -867,12 +870,12 @@ func NewExecutor(id string, v any) *Executor {
 		}
 		return v
 	case RequestPort:
-		return newRequestPortExecutor(v)
+		return newRequestPortExecutor(v, true)
 	case *RequestPort:
 		if v == nil {
 			panic("workflow: cannot create Executor from nil *RequestPort")
 		}
-		return newRequestPortExecutor(*v)
+		return newRequestPortExecutor(*v, true)
 	case ExecutorBinding:
 		if id != "" && v.ID != id {
 			panic(fmt.Errorf("workflow: binding ID %q does not match provided ID %q", v.ID, id))

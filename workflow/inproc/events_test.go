@@ -941,17 +941,32 @@ func (te *trackingExecutor) Bind() workflow.ExecutorBinding {
 				return nil
 			},
 			ConfigureProtocol: func(rb *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
-				rb.SendsMessageType(reflect.TypeFor[string]())
-				rb.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
-					s := msg.(string)
-					te.mu.Lock()
-					te.received = append(te.received, s)
-					te.mu.Unlock()
-					if te.forwardMessages {
-						return nil, ctx.SendMessage("", s)
-					}
-					return nil, nil
-				})
+				rb.SendsMessageType(reflect.TypeFor[string](), reflect.TypeFor[[]string]())
+				rb.RouteBuilder.
+					AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+						s := msg.(string)
+						te.mu.Lock()
+						te.received = append(te.received, s)
+						te.mu.Unlock()
+						if te.forwardMessages {
+							return nil, ctx.SendMessage("", s)
+						}
+						return nil, nil
+					}).
+					AddHandlerRaw(reflect.TypeFor[[]string](), nil, func(ctx *workflow.Context, msg any) (any, error) {
+						batch := msg.([]string)
+						te.mu.Lock()
+						te.received = append(te.received, batch...)
+						te.mu.Unlock()
+						if te.forwardMessages {
+							for _, item := range batch {
+								if err := ctx.SendMessage("", []string{item}); err != nil {
+									return nil, err
+								}
+							}
+						}
+						return nil, nil
+					})
 				return rb, nil
 			},
 		}, nil
@@ -960,43 +975,89 @@ func (te *trackingExecutor) Bind() workflow.ExecutorBinding {
 }
 
 func TestDeliveryEvents_InvokedOncePerExecutorPerSuperstep(t *testing.T) {
-	starter := &trackingExecutor{id: "Starting", forwardMessages: true}
-	receives := &trackingExecutor{id: "Receives", forwardMessages: false}
-	uninvoked := &trackingExecutor{id: "Uninvoked", forwardMessages: false}
+	for _, testCase := range []struct {
+		name      string
+		env       *inproc.ExecutionEnvironment
+		input     any
+		streaming bool
+	}{
+		{name: "scalar", env: inproc.Default, input: "msg"},
+		{name: "lockstep batch", env: inproc.Lockstep, input: []string{"Message_1"}, streaming: true},
+		{name: "offthread batch", env: inproc.OffThread, input: []string{"Message_1"}, streaming: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			starter := &trackingExecutor{id: "Starting", forwardMessages: true}
+			receives := &trackingExecutor{id: "Receives", forwardMessages: false}
+			uninvoked := &trackingExecutor{id: "Uninvoked", forwardMessages: false}
 
-	startBinding := starter.Bind()
-	receivesBinding := receives.Bind()
-	uninvokedBinding := uninvoked.Bind()
+			startBinding := starter.Bind()
+			receivesBinding := receives.Bind()
+			uninvokedBinding := uninvoked.Bind()
 
-	wf, err := workflow.NewBuilder(startBinding).
-		AddEdge(startBinding, receivesBinding).
-		AddEdge(receivesBinding, uninvokedBinding).
-		Build()
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
+			wf, err := workflow.NewBuilder(startBinding).
+				AddEdge(startBinding, receivesBinding).
+				AddEdge(receivesBinding, uninvokedBinding).
+				Build()
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
 
-	if _, err := inproc.Default.Run(context.Background(), wf, "msg"); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
+			ctx := t.Context()
+			var events []workflow.Event
+			if testCase.streaming {
+				stream, err := testCase.env.OpenStreaming(ctx, wf)
+				if err != nil {
+					t.Fatalf("OpenStreaming: %v", err)
+				}
+				defer func() {
+					if err := stream.Close(ctx); err != nil {
+						t.Errorf("Close stream: %v", err)
+					}
+				}()
+				if accepted, err := stream.TrySendMessage(ctx, testCase.input); err != nil || !accepted {
+					t.Fatalf("TrySendMessage batch = (%v, %v), want (true, nil)", accepted, err)
+				}
+				for evt, err := range stream.WatchStream(ctx) {
+					if err != nil {
+						t.Fatalf("WatchStream: %v", err)
+					}
+					events = append(events, evt)
+				}
+			} else {
+				run, err := testCase.env.Run(ctx, wf, testCase.input)
+				if err != nil {
+					t.Fatalf("Run: %v", err)
+				}
+				defer func() {
+					if err := run.Close(ctx); err != nil {
+						t.Errorf("Close run: %v", err)
+					}
+				}()
+				events = collectEvents(run.OutgoingEvents())
+			}
+			if hasErrorEvents(events) {
+				t.Fatalf("unexpected error events: %#v", events)
+			}
 
-	if got := starter.deliveryStarting.Load(); got != 1 {
-		t.Errorf("starter.deliveryStarting = %d, want 1", got)
-	}
-	if got := starter.deliveryFinished.Load(); got != 1 {
-		t.Errorf("starter.deliveryFinished = %d, want 1", got)
-	}
-	if got := receives.deliveryStarting.Load(); got != 1 {
-		t.Errorf("receives.deliveryStarting = %d, want 1", got)
-	}
-	if got := receives.deliveryFinished.Load(); got != 1 {
-		t.Errorf("receives.deliveryFinished = %d, want 1", got)
-	}
-	if got := uninvoked.deliveryStarting.Load(); got != 0 {
-		t.Errorf("uninvoked.deliveryStarting = %d, want 0", got)
-	}
-	if got := uninvoked.deliveryFinished.Load(); got != 0 {
-		t.Errorf("uninvoked.deliveryFinished = %d, want 0", got)
+			if got := starter.deliveryStarting.Load(); got != 1 {
+				t.Errorf("starter.deliveryStarting = %d, want 1", got)
+			}
+			if got := starter.deliveryFinished.Load(); got != 1 {
+				t.Errorf("starter.deliveryFinished = %d, want 1", got)
+			}
+			if got := receives.deliveryStarting.Load(); got != 1 {
+				t.Errorf("receives.deliveryStarting = %d, want 1", got)
+			}
+			if got := receives.deliveryFinished.Load(); got != 1 {
+				t.Errorf("receives.deliveryFinished = %d, want 1", got)
+			}
+			if got := uninvoked.deliveryStarting.Load(); got != 0 {
+				t.Errorf("uninvoked.deliveryStarting = %d, want 0", got)
+			}
+			if got := uninvoked.deliveryFinished.Load(); got != 0 {
+				t.Errorf("uninvoked.deliveryFinished = %d, want 0", got)
+			}
+		})
 	}
 }
 

@@ -18,6 +18,7 @@ import (
 	"weak"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -237,9 +238,24 @@ func (p *Provider) loadSessionState(session *agent.Session) *state {
 	}
 	var s state
 	if found, _ := session.Get(stateKey, &s); found {
+		p.ensureConfiguredMode(session, &s)
 		return &s
 	}
 	return &state{CurrentMode: p.defaultMode}
+}
+
+// ensureConfiguredMode resets a restored mode that is no longer configured to
+// the default mode and persists the correction.
+func (p *Provider) ensureConfiguredMode(session *agent.Session, s *state) {
+	if _, ok := p.validModes[s.CurrentMode]; ok {
+		return
+	}
+	s.CurrentMode = p.defaultMode
+	// A pending notification must not announce a default-to-default change.
+	if s.PreviousMode == p.defaultMode {
+		s.PreviousMode = ""
+	}
+	p.saveSessionState(session, s)
 }
 
 func (p *Provider) saveSessionState(session *agent.Session, s *state) {
@@ -268,6 +284,7 @@ func (p *Provider) saveState(opts []agent.Option, s *state) {
 }
 
 func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	telemetry.MarkUsed(telemetry.FeatureAgentModeProvider)
 	opts := invoking.Options
 
 	var outMessages []*message.Message

@@ -5,6 +5,7 @@ package geminiprovider_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -447,6 +448,74 @@ func TestStructuredOutput_NonStreaming(t *testing.T) {
 	}
 	if out.Age != 30 {
 		t.Errorf("out.Age = %d, want 30", out.Age)
+	}
+}
+
+func TestStructuredOutput_NonObject(t *testing.T) {
+	type species string
+	for _, tc := range []struct {
+		name, payload, wantJSON, schemaType string
+		newTarget                           func() any
+	}{
+		{name: "integer", payload: `{"data":42}`, wantJSON: `42`, schemaType: "integer", newTarget: func() any { return new(int) }},
+		{name: "array", payload: `{"data":["a","b"]}`, wantJSON: `["a","b"]`, schemaType: "array", newTarget: func() any { return new([]string) }},
+		{name: "enum", payload: `{"data":"Tiger"}`, wantJSON: `"Tiger"`, schemaType: "string", newTarget: func() any { return new(species) }},
+	} {
+		for _, streaming := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/streaming=%v", tc.name, streaming), func(t *testing.T) {
+				bodyCh := make(chan []byte, 1)
+				contentType := "application/json"
+				responseBody := minimalTextResponse(tc.payload)
+				if streaming {
+					contentType = "text/event-stream"
+					responseBody = minimalStreamingResponse(tc.payload)
+				}
+				server := httptest.NewServer(captureAndRespond(t, bodyCh, contentType, responseBody))
+				defer server.Close()
+
+				out := tc.newTarget()
+				response, err := newTestClient(t, server).RunText(t.Context(), "get result", agent.WithStructuredOutput(out), agent.Stream(streaming)).Collect()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if response.String() != tc.payload {
+					t.Errorf("response text = %q, want %q", response.String(), tc.payload)
+				}
+				data, err := json.Marshal(out)
+				if err != nil || string(data) != tc.wantJSON {
+					t.Errorf("decoded output = %s, err = %v; want %s", data, err, tc.wantJSON)
+				}
+				var request struct {
+					GenerationConfig struct {
+						ResponseJsonSchema struct {
+							Type                 string                     `json:"type"`
+							Properties           map[string]json.RawMessage `json:"properties"`
+							Required             []string                   `json:"required"`
+							AdditionalProperties *bool                      `json:"additionalProperties"`
+						} `json:"responseJsonSchema"`
+					} `json:"generationConfig"`
+				}
+				if err := json.Unmarshal(<-bodyCh, &request); err != nil {
+					t.Fatal(err)
+				}
+				schema := request.GenerationConfig.ResponseJsonSchema
+				if schema.Type != "object" || schema.AdditionalProperties == nil || *schema.AdditionalProperties ||
+					!slices.Equal(schema.Required, []string{"data"}) {
+					t.Fatalf("wire schema = %+v, want closed object with required data", schema)
+				}
+				var property struct{ Type any }
+				if err := json.Unmarshal(schema.Properties["data"], &property); err != nil {
+					t.Fatal(err)
+				}
+				if types, ok := property.Type.([]any); ok {
+					if !slices.Contains(types, any(tc.schemaType)) {
+						t.Errorf("data type = %v, want %s", types, tc.schemaType)
+					}
+				} else if property.Type != tc.schemaType {
+					t.Errorf("data type = %v, want %s", property.Type, tc.schemaType)
+				}
+			})
+		}
 	}
 }
 
@@ -2634,6 +2703,87 @@ func TestFinishReason_Streaming(t *testing.T) {
 	}
 	if resp.FinishReason != "length" {
 		t.Errorf("aggregated Response.FinishReason = %q, want %q", resp.FinishReason, "length")
+	}
+}
+
+// Server-side tool invocations echoed back by Gemini (toolCall/toolResponse
+// parts) must be surfaced: the call as an informational-only function call so
+// the tool loop does not re-execute it, and the response as a function result.
+func TestServerSideToolCallAndResponsePartsSurfaced(t *testing.T) {
+	body := `{
+		"candidates":[{
+			"content":{"role":"model","parts":[
+				{"toolCall":{"id":"tc_1","toolType":"google_search","args":{"query":"weather"}}},
+				{"toolResponse":{"id":"tc_1","toolType":"google_search","response":{"result":"sunny"}}}
+			]},
+			"finishReason":"STOP"
+		}],
+		"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}
+	}`
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", body))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var call *message.FunctionCallContent
+	var result *message.FunctionResultContent
+	for content := range resp.Contents() {
+		switch c := content.(type) {
+		case *message.FunctionCallContent:
+			call = c
+		case *message.FunctionResultContent:
+			result = c
+		}
+	}
+	if call == nil || !call.InformationalOnly {
+		t.Fatalf("function call = %#v, want an informational-only server-side call", call)
+	}
+	if call.Name != "google_search" || call.CallID != "tc_1" {
+		t.Errorf("call = %#v, want name google_search / id tc_1", call)
+	}
+	if result == nil || result.CallID != "tc_1" {
+		t.Fatalf("function result = %#v, want id tc_1", result)
+	}
+}
+
+// When a tool response omits its own id, it must correlate with the preceding
+// tool call's id rather than getting an independent synthesized id.
+func TestServerSideToolResponseInheritsCallID(t *testing.T) {
+	body := `{
+		"candidates":[{
+			"content":{"role":"model","parts":[
+				{"toolCall":{"id":"tc_9","toolType":"google_search","args":{}}},
+				{"toolResponse":{"toolType":"google_search","response":{"result":"ok"}}}
+			]},
+			"finishReason":"STOP"
+		}],
+		"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"totalTokenCount":15}
+	}`
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", body))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var call *message.FunctionCallContent
+	var result *message.FunctionResultContent
+	for content := range resp.Contents() {
+		switch c := content.(type) {
+		case *message.FunctionCallContent:
+			call = c
+		case *message.FunctionResultContent:
+			result = c
+		}
+	}
+	if call == nil || result == nil {
+		t.Fatalf("call/result missing: call=%#v result=%#v", call, result)
+	}
+	if result.CallID != "tc_9" || result.CallID != call.CallID {
+		t.Errorf("result CallID = %q, want it to match the call id %q", result.CallID, call.CallID)
 	}
 }
 

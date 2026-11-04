@@ -292,7 +292,11 @@ func TestExternalResponse_UnsolicitedResponseErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Stream: %v", err)
 	}
-	defer func() { _ = stream.CancelRun() }()
+	defer func() {
+		if err := stream.Close(ctx); err != nil {
+			t.Errorf("Close stream: %v", err)
+		}
+	}()
 
 	port := workflow.RequestPort{
 		ID:       "p",
@@ -308,19 +312,18 @@ func TestExternalResponse_UnsolicitedResponseErrors(t *testing.T) {
 		t.Fatalf("SendResponse: %v", err)
 	}
 
-	var sawErr bool
+	var gotErr error
 	for evt, err := range stream.WatchStream(ctx) {
 		if err != nil {
 			t.Fatalf("watch: %v", err)
 		}
-		if e, ok := evt.(workflow.ErrorEvent); ok && e.Error != nil &&
-			strings.Contains(e.Error.Error(), "no pending request") {
-			sawErr = true
+		if e, ok := evt.(workflow.ErrorEvent); ok {
+			gotErr = e.Error
 			break
 		}
 	}
-	if !sawErr {
-		t.Errorf("expected an ErrorEvent referencing 'no pending request', got none")
+	if gotErr == nil || !strings.Contains(gotErr.Error(), "no pending request with ID no-such-id") {
+		t.Fatalf("ErrorEvent error = %v, want the original no pending request diagnostic with no-such-id", gotErr)
 	}
 }
 
@@ -366,6 +369,11 @@ func TestExternalResponse_RejectsForgedPortIDWithoutConsumingRequest(t *testing.
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
+	defer func() {
+		if err := run.Close(ctx); err != nil {
+			t.Errorf("Close custom-asker run: %v", err)
+		}
+	}()
 
 	var pending *workflow.ExternalRequest
 	for evt := range run.OutgoingEvents() {

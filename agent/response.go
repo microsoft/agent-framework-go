@@ -123,7 +123,10 @@ func (resp *Response) Usage() message.UsageDetails {
 	return usage
 }
 
-// Coalesce merges adjacent compatible content items within each message.
+// Coalesce merges compatible content items within each message (adjacent
+// text/reasoning/data runs, and call-ID-keyed image-generation results,
+// web-search calls, and code-interpreter calls and results regardless of
+// position).
 func (resp *Response) Coalesce() {
 	if resp == nil {
 		return
@@ -339,6 +342,9 @@ type ResponseUpdate struct {
 
 	// Contents contains the content items carried by this update.
 	Contents message.Contents `json:",omitzero"`
+
+	// resetStructuredOutput discards prior injected replies without changing message identity.
+	resetStructuredOutput bool
 }
 
 // String returns the concatenated text contents of this update.

@@ -11,6 +11,7 @@ import (
 	"iter"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	aguiSSEClient "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/client/sse"
@@ -45,6 +46,8 @@ type provider struct {
 
 const threadIDStateKey = "aguiprovider.threadID"
 
+var threadIDInitMu sync.Mutex
+
 type threadIDOpt string
 
 func (o threadIDOpt) MAFValue() any { return string(o) }
@@ -56,7 +59,8 @@ func WithThreadID(id string) agent.Option { return threadIDOpt(id) }
 
 // NewAgent creates a new [agent.Agent] backed by a remote agent that speaks the
 // AG-UI protocol over Server-Sent Events via the AG-UI client. It panics if
-// aclient is nil.
+// aclient is nil. Provider updates retain their original AG-UI event in
+// [agent.ResponseUpdate.RawRepresentation].
 func NewAgent(aclient *aguiSSEClient.Client, config AgentConfig) *agent.Agent {
 	if aclient == nil {
 		panic("aguiprovider: client cannot be nil")
@@ -162,6 +166,7 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 					if update == nil {
 						continue
 					}
+					update.RawRepresentation = evt
 					if update.ResponseID == "" {
 						update.ResponseID = runID
 					}
@@ -198,7 +203,19 @@ func decodeFrame(decoder *aguiEvents.EventDecoder, data []byte) (aguiEvents.Even
 }
 
 func getOrCreateThreadID(session *agent.Session) (string, error) {
+	if session == nil {
+		return aguiEvents.GenerateThreadID(), nil
+	}
 	var threadID string
+	if _, err := session.Get(threadIDStateKey, &threadID); err != nil {
+		return "", err
+	}
+	if threadID != "" {
+		return threadID, nil
+	}
+	threadIDInitMu.Lock()
+	defer threadIDInitMu.Unlock()
+
 	if _, err := session.Get(threadIDStateKey, &threadID); err != nil {
 		return "", err
 	}

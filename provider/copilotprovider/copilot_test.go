@@ -70,12 +70,15 @@ func TestConstructor_WithDefaultParameters_UsesBaseProperties(t *testing.T) {
 func TestCreateSession_ReturnsSession(t *testing.T) {
 	agent := copilotprovider.NewAgent(copilot.NewClient(nil), copilotprovider.AgentConfig{})
 
-	session, err := agent.CreateSession(context.Background())
+	session, err := agent.CreateSession(t.Context())
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	if session == nil {
 		t.Fatal("session is nil")
+	}
+	if got := session.ServiceID(); got != "" {
+		t.Fatalf("new session ServiceID = %q, want empty", got)
 	}
 }
 
@@ -190,7 +193,6 @@ func TestCopyResumeSessionConfig_CopiesAllProperties(t *testing.T) {
 	assertStringSlice(t, request["pluginDirectories"], []string{"/plugins"}, "pluginDirectories")
 	assertStringSlice(t, request["instructionDirectories"], []string{"/instructions"}, "instructionDirectories")
 	assertEqual(t, request["gitHubToken"], "gh-token-123", "gitHubToken")
-	assertEqual(t, request["remoteSession"], "on", "remoteSession")
 	for _, key := range []string{"providers", "models", "capi", "modelCapabilities", "sessionLimits", "defaultAgent", "largeOutput", "toolSearch", "memory"} {
 		if request[key] == nil {
 			t.Fatalf("%s was not sent on resume", key)
@@ -349,14 +351,23 @@ func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenStreaming_DoesNot
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
 
-	response, err := runText(t, agent, "hello")
-	if err != nil {
-		t.Fatalf("RunText: %v", err)
+	var response agentpkg.Response
+	for update, err := range agent.RunText(t.Context(), "hello") {
+		if err != nil {
+			t.Fatalf("RunText: %v", err)
+		}
+		for _, content := range update.Contents {
+			if _, ok := content.(*message.TextContent); ok {
+				t.Fatalf("streaming completion emitted TextContent: %#v", content)
+			}
+		}
+		response.Update(update)
 	}
+	response.Coalesce()
 	if got := response.String(); got != "" {
 		t.Fatalf("response text = %q, want empty", got)
 	}
-	_ = firstContent[*message.RawContent](t, response)
+	_ = firstContent[*message.RawContent](t, &response)
 }
 
 func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenNotStreaming_EmitsTextContent(t *testing.T) {
@@ -367,7 +378,7 @@ func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenNotStreaming_Emit
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
 
-	response, err := runText(t, agent, "hello", agentpkg.Stream(false))
+	response, err := runProjectedCopilotEvent(t, agent, "assistant.message", agentpkg.Stream(false))
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
@@ -386,14 +397,20 @@ func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenNotStreaming_Hand
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
 
-	response, err := runText(t, agent, "hello", agentpkg.Stream(false))
+	response, err := runProjectedCopilotEvent(t, agent, "assistant.message", agentpkg.Stream(false))
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
 	if got := response.String(); got != "" {
 		t.Fatalf("response text = %q, want empty", got)
 	}
-	_ = firstContent[*message.TextContent](t, response)
+	text := firstContent[*message.TextContent](t, response)
+	if text.Text != "" {
+		t.Fatalf("TextContent.Text = %q, want empty", text.Text)
+	}
+	if response.ID != "msg-000" || len(response.Messages) != 1 || response.Messages[0].ID != "msg-000" {
+		t.Fatalf("empty content lost response/message identity: %#v", response)
+	}
 }
 
 func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenNotStreaming_HandlesNullData(t *testing.T) {
@@ -403,7 +420,7 @@ func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenNotStreaming_Hand
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
 
-	response, err := runText(t, agent, "hello", agentpkg.Stream(false))
+	response, err := runProjectedCopilotEvent(t, agent, "assistant.message", agentpkg.Stream(false))
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
@@ -414,6 +431,9 @@ func TestConvertToAgentResponseUpdate_AssistantMessageEventWhenNotStreaming_Hand
 	if len(response.Messages) == 0 || response.Messages[0].ID != "" {
 		t.Fatalf("message ID = %#v, want empty", response.Messages)
 	}
+	if response.ID != "" {
+		t.Fatalf("response ID = %q, want empty", response.ID)
+	}
 }
 
 func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_ProducesFunctionCallContent(t *testing.T) {
@@ -423,7 +443,7 @@ func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_ProducesFunctionCa
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{Config: agentpkg.Config{ID: "agent-1"}})
 
-	response, err := runText(t, agent, "hello")
+	response, err := runProjectedCopilotEvent(t, agent, "tool.execution_start")
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
@@ -450,7 +470,7 @@ func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithNullArguments_
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
 
-	response, err := runText(t, agent, "hello")
+	response, err := runProjectedCopilotEvent(t, agent, "tool.execution_start")
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
@@ -460,6 +480,9 @@ func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithNullArguments_
 	}
 	if call.Arguments != "" {
 		t.Fatalf("Arguments = %q, want empty", call.Arguments)
+	}
+	if call.Error != nil {
+		t.Fatalf("null arguments produced an error: %v", call.Error)
 	}
 }
 
@@ -485,6 +508,28 @@ func TestConvertToAgentResponseUpdate_UsageEvent_SurfacesReasoningTokens(t *test
 	}
 	if usage.Details.OutputTokenCount != 20 {
 		t.Fatalf("OutputTokenCount = %d, want 20", usage.Details.OutputTokenCount)
+	}
+}
+
+// The usage event reports which model actually served the request; it must be
+// surfaced on AdditionalProperties, matching the Python client.
+func TestConvertToAgentResponseUpdate_UsageEvent_SurfacesModel(t *testing.T) {
+	runtime := newFakeRuntime(t,
+		sessionEvent("assistant.usage", map[string]any{
+			"model":        "gpt-5",
+			"inputTokens":  10,
+			"outputTokens": 20,
+		}),
+		idleEvent(),
+	)
+	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
+
+	response, err := runText(t, agent, "hello")
+	if err != nil {
+		t.Fatalf("RunText: %v", err)
+	}
+	if got, _ := response.AdditionalProperties["model"].(string); got != "gpt-5" {
+		t.Fatalf("AdditionalProperties[model] = %q, want gpt-5", got)
 	}
 }
 
@@ -586,13 +631,16 @@ func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithNullData_Produ
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
 
-	response, err := runText(t, agent, "hello")
+	response, err := runProjectedCopilotEvent(t, agent, "tool.execution_start")
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
 	call := firstContent[*message.FunctionCallContent](t, response)
 	if call.CallID != "" || call.Name != "" || call.Arguments != "" {
 		t.Fatalf("call = (%q, %q, %q), want empty fields", call.CallID, call.Name, call.Arguments)
+	}
+	if call.Error != nil {
+		t.Fatalf("null event data produced an argument error: %v", call.Error)
 	}
 }
 
@@ -604,7 +652,7 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithSuccess_Pro
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{Config: agentpkg.Config{ID: "agent-2"}})
 
-	response, err := runText(t, agent, "hello")
+	response, err := runProjectedCopilotEvent(t, agent, "tool.execution_complete")
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
@@ -627,7 +675,7 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithError_Produ
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
 
-	response, err := runText(t, agent, "hello")
+	response, err := runProjectedCopilotEvent(t, agent, "tool.execution_complete")
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
@@ -650,7 +698,7 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithFailureNoEr
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
 
-	response, err := runText(t, agent, "hello")
+	response, err := runProjectedCopilotEvent(t, agent, "tool.execution_complete")
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
@@ -673,13 +721,16 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithNullData_Pr
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
 
-	response, err := runText(t, agent, "hello")
+	response, err := runProjectedCopilotEvent(t, agent, "tool.execution_complete")
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
 	result := firstContent[*message.FunctionResultContent](t, response)
 	if result.CallID != "" || result.Result != "Tool execution failed" {
 		t.Fatalf("result = (%q, %#v), want empty call ID and default failure", result.CallID, result.Result)
+	}
+	if result.Error == nil || !strings.Contains(result.Error.Error(), "tool execution failed") {
+		t.Fatalf("Error = %v, want default failure error", result.Error)
 	}
 }
 
@@ -690,13 +741,16 @@ func TestConvertToAgentResponseUpdate_ToolExecutionCompleteEvent_WithSuccessButN
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
 
-	response, err := runText(t, agent, "hello")
+	response, err := runProjectedCopilotEvent(t, agent, "tool.execution_complete")
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
 	result := firstContent[*message.FunctionResultContent](t, response)
 	if result.CallID != "call-null-result" || result.Result != nil {
 		t.Fatalf("result = (%q, %#v), want nil", result.CallID, result.Result)
+	}
+	if result.Error != nil {
+		t.Fatalf("successful null result produced an error: %v", result.Error)
 	}
 }
 
@@ -707,13 +761,16 @@ func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithEmptyObjectArg
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
 
-	response, err := runText(t, agent, "hello")
+	response, err := runProjectedCopilotEvent(t, agent, "tool.execution_start")
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
 	call := firstContent[*message.FunctionCallContent](t, response)
-	if call.CallID != "call-empty" || call.Arguments != "{}" {
-		t.Fatalf("call = (%q, %q), want empty object arguments", call.CallID, call.Arguments)
+	if call.CallID != "call-empty" || call.Name != "noArgsTool" || call.Arguments != "{}" {
+		t.Fatalf("call = (%q, %q, %q), want call-empty/noArgsTool with empty object arguments", call.CallID, call.Name, call.Arguments)
+	}
+	if call.Error != nil {
+		t.Fatalf("empty object arguments produced an error: %v", call.Error)
 	}
 }
 
@@ -724,7 +781,7 @@ func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithMultipleArgume
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
 
-	response, err := runText(t, agent, "hello")
+	response, err := runProjectedCopilotEvent(t, agent, "tool.execution_start")
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
@@ -732,12 +789,15 @@ func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithMultipleArgume
 	if call.CallID != "call-multi" || call.Name != "queryTable" {
 		t.Fatalf("call = (%q, %q), want call-multi/queryTable", call.CallID, call.Name)
 	}
+	if call.Error != nil {
+		t.Fatalf("object arguments produced an error: %v", call.Error)
+	}
 	var args map[string]any
 	if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
 		t.Fatalf("unmarshal arguments: %v", err)
 	}
-	if args["table"] != "incidents" || args["limit"] != float64(10) || args["filter"] != "active=true" {
-		t.Fatalf("arguments = %#v, want all top-level arguments", args)
+	if len(args) != 3 || args["table"] != "incidents" || args["limit"] != float64(10) || args["filter"] != "active=true" {
+		t.Fatalf("arguments = %#v, want exactly the three top-level arguments", args)
 	}
 }
 
@@ -748,11 +808,14 @@ func TestConvertToAgentResponseUpdate_ToolExecutionStartEvent_WithNestedJsonArgu
 	)
 	agent := copilotprovider.NewAgent(runtime.client(), copilotprovider.AgentConfig{})
 
-	response, err := runText(t, agent, "hello")
+	response, err := runProjectedCopilotEvent(t, agent, "tool.execution_start")
 	if err != nil {
 		t.Fatalf("RunText: %v", err)
 	}
 	call := firstContent[*message.FunctionCallContent](t, response)
+	if call.CallID != "call-nested" {
+		t.Fatalf("CallID = %q, want call-nested", call.CallID)
+	}
 	var args map[string]any
 	if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
 		t.Fatalf("unmarshal arguments: %v", err)
@@ -999,7 +1062,6 @@ func richSessionConfig() *copilot.SessionConfig {
 		ToolSearch:                         &copilot.ToolSearchConfig{Enabled: new(true)},
 		Memory:                             &copilot.MemoryConfiguration{Enabled: true},
 		GitHubToken:                        "gh-token-123",
-		RemoteSession:                      rpc.RemoteSessionModeOn,
 	}
 }
 
@@ -1008,6 +1070,38 @@ func runText(t *testing.T, a *agentpkg.Agent, prompt string, options ...agentpkg
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return a.RunText(ctx, prompt, options...).Collect()
+}
+
+func runProjectedCopilotEvent(t *testing.T, a *agentpkg.Agent, eventType string, options ...agentpkg.Option) (*agentpkg.Response, error) {
+	t.Helper()
+	var response agentpkg.Response
+	var projected int
+	for update, err := range a.RunText(t.Context(), "hello", options...) {
+		if err != nil {
+			return nil, err
+		}
+		if native, ok := update.RawRepresentation.(copilot.SessionEvent); ok && string(native.Type()) == eventType {
+			projected++
+			wantRole := message.RoleAssistant
+			if eventType == "tool.execution_complete" {
+				wantRole = message.RoleTool
+			}
+			if update.Role != wantRole || update.AgentID != a.ID() || len(update.Contents) != 1 {
+				t.Fatalf("projection role/agent/contents = %q / %q / %d, want %q / %q / 1",
+					update.Role, update.AgentID, len(update.Contents), wantRole, a.ID())
+			}
+			raw, ok := update.Contents[0].Header().RawRepresentation.(copilot.SessionEvent)
+			if !ok || raw.Data != native.Data {
+				t.Fatal("projected content did not preserve the original event")
+			}
+		}
+		response.Update(update)
+	}
+	if projected != 1 {
+		t.Fatalf("projected %s events = %d, want 1", eventType, projected)
+	}
+	response.Coalesce()
+	return &response, nil
 }
 
 func firstContent[T message.Content](t *testing.T, response *agentpkg.Response) T {

@@ -300,15 +300,21 @@ func selectedTargetIDs(edge workflow.Edge, envelope *MessageEnvelope) []string {
 			}
 		}
 	}
-	if envelope.TargetID == "" {
-		return targetIDs
+	// The assigner or the sink list can name a target more than once; deliver
+	// to each target once, in the order first named.
+	seen := make(map[string]struct{}, len(targetIDs))
+	unique := make([]string, 0, len(targetIDs))
+	for _, id := range targetIDs {
+		if envelope.TargetID != "" && id != envelope.TargetID {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
 	}
-	if edge.Assigner == nil {
-		targetIDs = slices.Clone(targetIDs)
-	}
-	return slices.DeleteFunc(targetIDs, func(id string) bool {
-		return id != envelope.TargetID
-	})
+	return unique
 }
 
 func (em *EdgeRunner) resolveTargets(ctx context.Context, targetIDs []string) ([]*workflow.Executor, error) {
