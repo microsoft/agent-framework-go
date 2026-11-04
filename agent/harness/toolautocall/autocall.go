@@ -908,7 +908,6 @@ func approvalResponseNeedsProcessingByRequestID(msgs []*message.Message) map[str
 	return result
 }
 
-
 func hasAnyApprovalResponse(msgs []*message.Message) bool {
 	for _, msg := range msgs {
 		if msg == nil {
@@ -923,10 +922,9 @@ func hasAnyApprovalResponse(msgs []*message.Message) bool {
 	return false
 }
 
-
 type pendingApprovalRequestsState struct {
 	Requests []*message.ToolApprovalRequestContent `json:"requests,omitempty"`
-	Consumed int                                    `json:"consumed,omitempty"`
+	Consumed int                                   `json:"consumed,omitempty"`
 }
 
 type pendingAutoApprovedCallsState struct {
