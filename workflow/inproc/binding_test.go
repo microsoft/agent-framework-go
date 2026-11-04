@@ -533,6 +533,35 @@ func TestHandlerWithoutOutputTypeDoesNotAutoOutputReturnValue(t *testing.T) {
 	}
 }
 
+type portBaseOutput struct{}
+
+func (portBaseOutput) OutputName() string { return "BaseOutput" }
+
+func TestPolymorphicOutput_ReturningExactDeclaredType(t *testing.T) {
+	executor := workflow.NewExecutor("ExactTypeExecutor", func(string) portBaseOutput { return portBaseOutput{} }).Bind()
+	wf, err := workflow.NewBuilder(executor).WithOutputFrom(executor).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := inproc.Default.RunStreaming(t.Context(), wf, "test input")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.Close(t.Context()) }()
+	events := readStreamToHalt(t, t.Context(), stream)
+	outputs := outputEvents(events)
+	if len(events) == 0 || len(outputs) != 1 {
+		t.Fatalf("events/outputs = %v/%v", events, outputs)
+	}
+	value, ok := outputs[0].Output.(portBaseOutput)
+	if !ok || value.OutputName() != "BaseOutput" {
+		t.Fatalf("output = %#v, want BaseOutput", outputs[0].Output)
+	}
+	if errors := errorEvents(events); len(errors) != 0 {
+		t.Fatalf("unexpected workflow errors: %v", errors)
+	}
+}
+
 func TestWorkflowOutput_AllowsValuesAssignableToDeclaredOutputType(t *testing.T) {
 	tests := []struct {
 		name   string

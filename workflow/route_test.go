@@ -5,7 +5,9 @@ package workflow
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -19,6 +21,159 @@ type routeTestConcrete struct {
 }
 
 func (m routeTestConcrete) routeMarker() string { return m.value }
+
+type reflectedPortDefault struct{ invoked bool }
+
+func (handler *reflectedPortDefault) Handle(any) { handler.invoked = true }
+
+type reflectedPortVoid struct{ invoked bool }
+
+func (handler *reflectedPortVoid) Handle(int) { handler.invoked = true }
+
+type reflectedPortValue struct{ invoked bool }
+
+func (handler *reflectedPortValue) Handle(value int) string {
+	handler.invoked = true
+	return fmt.Sprint(value)
+}
+
+func TestReflectingExecutor_DefaultHandler(t *testing.T) {
+	handler := &reflectedPortDefault{}
+	router, err := NewExecutor("DefaultHandler", handler).router()
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := new(struct{})
+	if router == nil || !router.canHandleType(reflect.TypeOf(input)) {
+		t.Fatal("default handler cannot handle object input")
+	}
+	result, handled := router.routeMessage(&Context{Context: t.Context()}, input)
+	if !handled || !handler.invoked || result.err != nil || result.result != nil || len(slices.Collect(router.defaultOutputTypes())) != 0 {
+		t.Fatalf("reflection result = %#v, %t", result, handled)
+	}
+}
+
+func TestReflectingExecutor_TypedVoidHandler(t *testing.T) {
+	handler := &reflectedPortVoid{}
+	router, err := NewExecutor("TypedHandler", handler).router()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if router == nil || !router.canHandleType(reflect.TypeFor[int]()) {
+		t.Fatal("typed handler cannot handle int input")
+	}
+	result, handled := router.routeMessage(&Context{Context: t.Context()}, 3)
+	if !handled || !handler.invoked || result.err != nil || result.result != nil || len(slices.Collect(router.defaultOutputTypes())) != 0 {
+		t.Fatalf("reflection result = %#v, %t", result, handled)
+	}
+}
+
+func TestReflectingExecutor_TypedValueHandler(t *testing.T) {
+	handler := &reflectedPortValue{}
+	router, err := NewExecutor("TypedHandlerWithOutput", handler).router()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if router == nil || !router.canHandleType(reflect.TypeFor[int]()) {
+		t.Fatal("typed handler cannot handle int input")
+	}
+	result, handled := router.routeMessage(&Context{Context: t.Context()}, 3)
+	if !handled || !handler.invoked || result.err != nil || result.isVoid() || result.result != "3" {
+		t.Fatalf("reflection result = %#v, %t, want successful nonvoid 3", result, handled)
+	}
+}
+
+func TestRouteBuilder_RejectsDuplicateTypedHandler(t *testing.T) {
+	var builder RouteBuilder
+	handler := func(*Context, any) (any, error) { return nil, nil }
+	builder.AddHandlerRaw(reflect.TypeFor[string](), nil, handler)
+	builder.AddHandlerRaw(reflect.TypeFor[string](), nil, handler)
+	if _, err := builder.build(); err == nil || !strings.Contains(err.Error(), "already registered") {
+		t.Fatalf("duplicate handler error = %v", err)
+	}
+}
+
+func TestRouteBuilder_RejectsDuplicateCatchAll(t *testing.T) {
+	var builder RouteBuilder
+	handler := func(*Context, PortableValue) (any, error) { return nil, nil }
+	builder.AddCatchAll(handler)
+	builder.AddCatchAll(handler)
+	if _, err := builder.build(); err == nil || !strings.Contains(err.Error(), "already registered") {
+		t.Fatalf("duplicate catch-all error = %v", err)
+	}
+}
+
+func TestRouteBuilder_OverwritesTypedHandler(t *testing.T) {
+	var builder RouteBuilder
+	builder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *Context, _ any) (any, error) { return nil, ctx.SendMessage("", "first") })
+	builder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *Context, _ any) (any, error) { return nil, ctx.SendMessage("", "second") }, WithHandlerOverwrite(true))
+	router, err := builder.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent []any
+	ctx := &Context{Context: t.Context(), SendMessage: func(_ string, value any) error { sent = append(sent, value); return nil }}
+	if result, handled := router.routeMessage(ctx, "hello"); !handled || result.err != nil {
+		t.Fatalf("route = %#v, %t", result, handled)
+	}
+	if !reflect.DeepEqual(sent, []any{"second"}) {
+		t.Fatalf("sent = %v, want [second]", sent)
+	}
+}
+
+func TestRouteBuilder_OverwritesCatchAll(t *testing.T) {
+	var builder RouteBuilder
+	builder.AddCatchAll(func(ctx *Context, _ PortableValue) (any, error) { return nil, ctx.SendMessage("", "first") })
+	builder.AddCatchAll(func(ctx *Context, _ PortableValue) (any, error) { return nil, ctx.SendMessage("", "second") }, WithHandlerOverwrite(true))
+	router, err := builder.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent []any
+	ctx := &Context{Context: t.Context(), SendMessage: func(_ string, value any) error { sent = append(sent, value); return nil }}
+	if result, handled := router.routeMessage(ctx, routeTestConcrete{value: "hello"}); !handled || result.err != nil {
+		t.Fatalf("route = %#v, %t", result, handled)
+	}
+	if !reflect.DeepEqual(sent, []any{"second"}) {
+		t.Fatalf("sent = %v, want [second]", sent)
+	}
+}
+
+func TestRouteBuilder_UntypedVoidAndResultHandlers(t *testing.T) {
+	type capture struct {
+		message any
+		ctx     *Context
+		token   context.Context
+	}
+	var builder RouteBuilder
+	var voidCall, resultCall capture
+	builder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(ctx *Context, value any) (any, error) {
+		voidCall = capture{value, ctx, ctx.Context}
+		return struct{}{}, nil
+	})
+	builder.AddHandlerRaw(reflect.TypeFor[int](), reflect.TypeFor[int](), func(ctx *Context, value any) (any, error) {
+		resultCall = capture{value, ctx, ctx.Context}
+		return value.(int) + 1, nil
+	})
+	router, err := builder.build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	ctx := &Context{Context: token}
+	voidResult, handled := router.routeMessage(ctx, "hello")
+	if !handled || !voidResult.isVoid() || voidCall.message != "hello" || voidCall.ctx != ctx || voidCall.token != token {
+		t.Fatalf("void result/call = %#v/%#v", voidResult, voidCall)
+	}
+	result, handled := router.routeMessage(ctx, 41)
+	if !handled || result.result != 42 || resultCall.message != 41 || resultCall.ctx != ctx || resultCall.token != token {
+		t.Fatalf("typed result/call = %#v/%#v", result, resultCall)
+	}
+	if !slices.Contains(slices.Collect(router.defaultOutputTypes()), reflect.TypeFor[int]()) {
+		t.Fatal("router output types do not contain int")
+	}
+}
 
 func TestRouteBuilder_OverwriteRequiresRegisteredHandler(t *testing.T) {
 	tests := []struct {

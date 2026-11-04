@@ -103,3 +103,88 @@ func TestBuildAvailableScriptsBlock_DescriptionIsXmlEscaped(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildAvailableResourcesBlock_EmptyList_ReturnsSelfClosingElement(t *testing.T) {
+	if got := buildAvailableResourcesBlock([]skills.Resource{}); got != "\n<available_resources />" {
+		t.Fatalf("block = %q, want self-closing resources element", got)
+	}
+}
+
+func TestBuildAvailableResourcesBlock_WithResources_EmitsOptionalDescriptions(t *testing.T) {
+	got := buildAvailableResourcesBlock([]skills.Resource{
+		{Name: "config", Description: "A described resource."},
+		{Name: "table"},
+	})
+	for _, want := range []string{
+		"<available_resources>",
+		`<resource name="config" description="A described resource."/>`,
+		`<resource name="table"/>`,
+		"</available_resources>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("block = %q, want %q", got, want)
+		}
+	}
+}
+
+func TestBuildAvailableResourcesBlock_WhitespaceDescription_OmitsDescriptionAttribute(t *testing.T) {
+	got := buildAvailableResourcesBlock([]skills.Resource{{Name: "config", Description: "   "}})
+	if !strings.Contains(got, `<resource name="config"/>`) || strings.Contains(got, "description=") {
+		t.Fatalf("whitespace description must be omitted, got %q", got)
+	}
+}
+
+func TestBuildAvailableResourcesBlock_NameIsXmlEscaped(t *testing.T) {
+	got := buildAvailableResourcesBlock([]skills.Resource{{Name: `a<b>&"c`}})
+	if !strings.Contains(got, `<resource name="a&lt;b&gt;&amp;&quot;c"/>`) {
+		t.Fatalf("resource name is not escaped: %q", got)
+	}
+}
+
+func TestBuildAvailableScriptsBlock_EmptyList_ReturnsSelfClosingElement(t *testing.T) {
+	if got := buildAvailableScriptsBlock([]skills.Script{}); got != "\n<available_scripts />" {
+		t.Fatalf("block = %q, want self-closing scripts element", got)
+	}
+}
+
+func TestBuildAvailableScriptsBlock_WithoutSchema_UsesSelfClosingScript(t *testing.T) {
+	got := buildAvailableScriptsBlock([]skills.Script{{Name: "no-params"}})
+	if !strings.Contains(got, `<script name="no-params"/>`) || strings.Contains(got, "<parameters_schema>") {
+		t.Fatalf("schema-less script must be self-closing, got %q", got)
+	}
+}
+
+func TestBuildAvailableScriptsBlock_WhitespaceDescription_OmitsDescriptionAttribute(t *testing.T) {
+	got := buildAvailableScriptsBlock([]skills.Script{{Name: "deploy", Description: "   "}})
+	if !strings.Contains(got, `<script name="deploy"/>`) || strings.Contains(got, "description=") {
+		t.Fatalf("whitespace description must be omitted, got %q", got)
+	}
+}
+
+func TestBuildAvailableScriptsBlock_WithSchema_PreservesJsonInElement(t *testing.T) {
+	got := buildAvailableScriptsBlock([]skills.Script{{
+		Name:             "search",
+		ParametersSchema: `{"type":"object","properties":{"query":{"type":"string"}}}`,
+	}})
+	for _, want := range []string{
+		`<script name="search">`,
+		"<parameters_schema>",
+		`"query"`,
+		"</parameters_schema>",
+		"</script>",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("block = %q, want %q", got, want)
+		}
+	}
+	if strings.Contains(got, "<![CDATA[") {
+		t.Fatalf("schema must not use CDATA: %q", got)
+	}
+}
+
+func TestBuildAvailableScriptsBlock_NameIsXmlEscaped(t *testing.T) {
+	got := buildAvailableScriptsBlock([]skills.Script{{Name: `a<b>&"c`}})
+	if !strings.Contains(got, `<script name="a&lt;b&gt;&amp;&quot;c"/>`) {
+		t.Fatalf("script name is not escaped: %q", got)
+	}
+}

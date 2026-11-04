@@ -101,3 +101,48 @@ func TestPipelineStrategy_ComposesStrategiesEndToEnd(t *testing.T) {
 		t.Fatalf("expected both strategies to be called once, got first=%d second=%d", first.calls, second.calls)
 	}
 }
+
+func TestPipelineStrategy_CompactAsyncReturnsFalseWhenNoStrategyCompactsAsync(t *testing.T) {
+	strategy := &testStrategy{fn: func(*compaction.MessageIndex) bool { return false }}
+	pipeline := &compaction.PipelineStrategy{Strategies: []compaction.Strategy{strategy}}
+	index := compaction.CreateMessageIndex([]*message.Message{
+		textMessage(message.RoleUser, "Hello"),
+		textMessage(message.RoleAssistant, "Hi!"),
+	}, nil)
+	compacted, err := pipeline.Compact(t.Context(), index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compacted {
+		t.Fatal("pipeline should report no compaction")
+	}
+}
+
+func TestPipelineStrategy_CompactAsyncReturnsTrueWhenAnyStrategyCompactsAsync(t *testing.T) {
+	first := &testStrategy{fn: func(*compaction.MessageIndex) bool { return false }}
+	second := &testStrategy{fn: func(*compaction.MessageIndex) bool { return true }}
+	pipeline := &compaction.PipelineStrategy{Strategies: []compaction.Strategy{first, second}}
+	index := compaction.CreateMessageIndex([]*message.Message{
+		textMessage(message.RoleUser, "Hello"),
+		textMessage(message.RoleAssistant, "Hi!"),
+	}, nil)
+	compacted, err := pipeline.Compact(t.Context(), index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !compacted {
+		t.Fatal("pipeline should report compaction")
+	}
+}
+
+func TestPipelineStrategy_CompactAsyncEmptyPipelineReturnsFalseAsync(t *testing.T) {
+	pipeline := &compaction.PipelineStrategy{Strategies: []compaction.Strategy{}}
+	index := compaction.CreateMessageIndex([]*message.Message{textMessage(message.RoleUser, "Hello")}, nil)
+	compacted, err := pipeline.Compact(t.Context(), index)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compacted {
+		t.Fatal("empty pipeline should report no compaction")
+	}
+}

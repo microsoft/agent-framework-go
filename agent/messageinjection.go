@@ -20,6 +20,9 @@ type pendingInjectedMessagesState struct {
 
 // MessageInjector queues messages for injection between provider calls.
 // Its zero value is ready to use.
+// To retain delivered messages across stateless provider calls, enable
+// [Config.RequirePerServiceCallHistoryPersistence] and use a [HistoryProvider]
+// that preserves their content, including images and other non-text parts.
 type MessageInjector struct {
 	mu sync.Mutex
 }
@@ -39,8 +42,10 @@ func (m *MessageInjector) run(next RunFunc, ctx context.Context, messages []*mes
 		}
 
 		stream, _ := GetOption(options, Stream)
+		structuredOutput, _ := GetOption(options, WithStructuredOutput)
 		var priorUsage message.UsageDetails
 		var hasPriorUsage bool
+		var resetOutput bool
 		for {
 			hasActionableFunctionCall := false
 			var conversationID *string
@@ -55,6 +60,12 @@ func (m *MessageInjector) run(next RunFunc, ctx context.Context, messages []*mes
 					}
 				}
 				if stream {
+					if resetOutput && update != nil {
+						out := *update
+						out.resetStructuredOutput = true
+						update = &out
+						resetOutput = false
+					}
 					if !yield(update, runErr) || runErr != nil {
 						return
 					}
@@ -64,6 +75,11 @@ func (m *MessageInjector) run(next RunFunc, ctx context.Context, messages []*mes
 						return
 					}
 					response.Update(update)
+				}
+			}
+			if resetOutput {
+				if !yield(&ResponseUpdate{resetStructuredOutput: true}, nil) {
+					return
 				}
 			}
 
@@ -113,6 +129,7 @@ func (m *MessageInjector) run(next RunFunc, ctx context.Context, messages []*mes
 				options = append(slices.Clone(options), WithServiceID(serviceID))
 			}
 			currentMessages = injected
+			resetOutput = stream && structuredOutput != nil
 		}
 	}
 }

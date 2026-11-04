@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/agentopts"
 	"github.com/microsoft/agent-framework-go/message"
@@ -62,6 +63,7 @@ type Config struct {
 
 	// NonStreamingReturnsLastResponseOnly causes non-streaming runs (those
 	// without agent.Stream(true)) to surface only the final iteration response.
+	// Usage still includes every completed iteration.
 	NonStreamingReturnsLastResponseOnly bool
 
 	// SessionCreatedCallback is invoked when the loop creates a fresh session
@@ -181,6 +183,9 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			}
 		}
 		var historyMessages []*message.Message
+		var pendingSurfaced []*message.Message
+		var priorUsage message.UsageDetails
+		var hasPriorUsage bool
 		stream, _ := agent.GetOption(opts, agent.Stream)
 		returnLastResponseOnly := cfg.NonStreamingReturnsLastResponseOnly && !stream
 		initialSession, hasSession := agent.GetOption(opts, agent.WithSession)
@@ -202,6 +207,25 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 		for {
 			var resp agent.Response
 			var iterationUpdates []*agent.ResponseUpdate
+			flushFeedback := func(responseID string) bool {
+				if len(pendingSurfaced) == 0 {
+					return true
+				}
+				if responseID == "" {
+					responseID = uuid.NewString()
+				}
+				for _, msg := range pendingSurfaced {
+					update := messageToUpdate(msg, uuid.NewString())
+					if update != nil {
+						update.ResponseID = responseID
+					}
+					if !yield(update, nil) {
+						return false
+					}
+				}
+				pendingSurfaced = nil
+				return true
+			}
 			messagesToSend := currentMessages
 			activeSession, _ := agent.GetOption(currentOpts, agent.WithSession)
 			serviceID, _ := agent.GetOption(currentOpts, agent.WithServiceID)
@@ -214,6 +238,13 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 				messagesToSend = append(messagesToSend, currentMessages...)
 			}
 			for update, err := range next(ctx, messagesToSend, currentOpts...) {
+				responseID := ""
+				if update != nil {
+					responseID = update.ResponseID
+				}
+				if !flushFeedback(responseID) {
+					return
+				}
 				if update != nil {
 					resp.Update(update)
 					if returnLastResponseOnly {
@@ -231,6 +262,9 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 					return
 				}
 			}
+			if !flushFeedback("") {
+				return
+			}
 			resp.Coalesce()
 			if retainHistory {
 				// Retain the completed iteration, not the intermediate invocations
@@ -243,7 +277,7 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 
 			if hasPendingApprovalRequests(&resp) || loopCtx.Iteration >= maxIterations {
 				if returnLastResponseOnly {
-					if !yieldResponseUpdates(yield, iterationUpdates) {
+					if !yieldLastResponseUpdates(yield, iterationUpdates, priorUsage, hasPriorUsage) {
 						return
 					}
 				}
@@ -257,13 +291,21 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 			}
 			if !ok {
 				if returnLastResponseOnly {
-					if !yieldResponseUpdates(yield, iterationUpdates) {
+					if !yieldLastResponseUpdates(yield, iterationUpdates, priorUsage, hasPriorUsage) {
 						return
 					}
 				}
 				return
 			}
 
+			if returnLastResponseOnly {
+				for content := range resp.Contents() {
+					if usage, ok := content.(*message.UsageContent); ok {
+						priorUsage.Add(usage.Details)
+						hasPriorUsage = true
+					}
+				}
+			}
 			loopCtx.Feedback = append(loopCtx.Feedback, evaluation.Feedback)
 			var surfacedMessages []*message.Message
 			currentMessages, surfacedMessages = nextMessages(cfg, loopCtx, evaluation)
@@ -282,11 +324,7 @@ func run(cfg Config, next agent.RunFunc, ctx context.Context, messages []*messag
 				currentOpts = append(slices.Clone(opts), agent.WithSession(nextSession))
 			}
 			if !returnLastResponseOnly && !cfg.ExcludeOnBehalfOfMessages {
-				for i, msg := range surfacedMessages {
-					if !yield(messageToUpdate(msg, fmt.Sprintf("loop-message-%d-%d", loopCtx.Iteration, i)), nil) {
-						return
-					}
-				}
+				pendingSurfaced = surfacedMessages
 			}
 		}
 	}
@@ -384,6 +422,20 @@ func yieldResponseUpdates(yield func(*agent.ResponseUpdate, error) bool, updates
 		}
 	}
 	return true
+}
+
+func yieldLastResponseUpdates(yield func(*agent.ResponseUpdate, error) bool, updates []*agent.ResponseUpdate, priorUsage message.UsageDetails, hasPriorUsage bool) bool {
+	if hasPriorUsage {
+		usage := &message.UsageContent{Details: priorUsage}
+		if len(updates) == 0 {
+			updates = []*agent.ResponseUpdate{{Contents: message.Contents{usage}}}
+		} else {
+			last := cloneResponseUpdate(updates[len(updates)-1])
+			last.Contents = append(last.Contents, usage)
+			updates[len(updates)-1] = last
+		}
+	}
+	return yieldResponseUpdates(yield, updates)
 }
 
 func snapshotSession(session *agent.Session) ([]byte, error) {

@@ -21,8 +21,11 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/internal/modelcall"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
@@ -51,6 +54,7 @@ type AgentConfig struct {
 	ToolAutoCall *toolautocall.Config
 
 	// Instructions are provided to Anthropic as system instructions for each run.
+	// Empty or whitespace-only instructions are ignored.
 	Instructions string
 
 	Model string
@@ -71,7 +75,10 @@ func NewAgent(aclient anthropic.Client, config AgentConfig) *agent.Agent {
 	}
 	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
-		Run:          c.run,
+		Run: modelcall.Wrap(c.run, func(options []agent.Option) string {
+			params, _ := agent.GetOption(options, MessageNewParams)
+			return cmp.Or(params.Model, config.Model)
+		}),
 		ProviderName: "anthropic",
 		Middlewares:  providerMiddlewares,
 		Format:       c.formatOf,
@@ -79,19 +86,24 @@ func NewAgent(aclient anthropic.Client, config AgentConfig) *agent.Agent {
 	}, config.Config)
 }
 
-func (a *client) formatOf(v any) (agent.ResponseFormat, error) {
-	return jsonformat.ForType(reflect.TypeOf(v))
+func (a *client) formatOf(v any) (format.ResponseFormat, error) {
+	responseFormat, err := jsonformat.ForType(reflect.TypeOf(v))
+	if err != nil {
+		return format.ResponseFormat{}, err
+	}
+	return jsonformat.WrapNonObjectSchema(responseFormat)
 }
 
-func (a *client) unmarshal(f agent.ResponseFormat, data []byte, v any) error {
+func (a *client) unmarshal(f format.ResponseFormat, data []byte, v any) error {
 	format, err := jsonformat.FromResponseFormat(f)
 	if err != nil {
 		return err
 	}
-	return format.Unmarshal(data, v)
+	return format.UnmarshalStructuredOutput(data, v)
 }
 
 func (a *client) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	telemetry.MarkUsed(telemetry.FeatureAnthropic)
 	params, err := a.buildMessageParams(messages, options)
 	if err != nil {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -105,6 +117,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				yield(nil, err)
 			}
 		}
+		modelcall.RecordResponse(ctx, resp.Model, resp.ID)
 		functions := make(map[int]*message.FunctionCallContent)
 		contents := make([]message.Content, 0, len(resp.Content))
 		for i, c := range resp.Content {
@@ -140,8 +153,10 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		var finishReason string
 		var usage message.UsageDetails
 		var accumulated anthropic.Message
+		receivedEvent := false
 
 		for stream.Next() {
+			receivedEvent = true
 			event := stream.Current()
 			if err := accumulated.Accumulate(event); err != nil {
 				yield(nil, err)
@@ -151,6 +166,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			var contents []message.Content
 			switch event := event.AsAny().(type) {
 			case anthropic.MessageStartEvent:
+				modelcall.RecordResponse(ctx, event.Message.Model, event.Message.ID)
 				messageID = cmp.Or(messageID, event.Message.ID)
 				modelID = cmp.Or(modelID, string(event.Message.Model))
 				usage.Add(toUsageDetails(event.Message.Usage))
@@ -225,6 +241,9 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		}
 		if err := stream.Err(); err != nil {
 			yield(nil, err)
+			return
+		}
+		if !receivedEvent {
 			return
 		}
 		if !yield(&agent.ResponseUpdate{
@@ -632,7 +651,12 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 	}
 	params.Model = cmp.Or(params.Model, a.config.Model)
 	params.MaxTokens = cmp.Or(params.MaxTokens, 4096)
-	instructions := slices.Collect(agent.AllOptions(opts, agent.WithInstructions))
+	var instructions []string
+	for instruction := range agent.AllOptions(opts, agent.WithInstructions) {
+		if instruction != "" {
+			instructions = append(instructions, instruction)
+		}
+	}
 	if len(instructions) > 0 {
 		params.System = append(params.System, anthropic.TextBlockParam{Text: strings.Join(instructions, "\n")})
 	}

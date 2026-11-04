@@ -7,8 +7,8 @@ go 1.26.0
 require (
 	github.com/microsoft/go-winmd v0.0.0-20260922124842-16e7d31aeb8a
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba
-	golang.org/x/mod v0.41.0
-	golang.org/x/tools v0.51.0
+	golang.org/x/mod v0.42.0
+	golang.org/x/tools v0.52.0
 )
 
-require golang.org/x/sync v0.23.0 // indirect
+require golang.org/x/sync v0.24.0 // indirect

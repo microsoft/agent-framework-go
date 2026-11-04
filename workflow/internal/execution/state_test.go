@@ -3,7 +3,12 @@
 package execution
 
 import (
+	"bytes"
+	"encoding/json"
+	"maps"
 	"reflect"
+	"slices"
+	"strconv"
 	"sync"
 	"testing"
 
@@ -602,8 +607,16 @@ func TestScopeLoadPortableValueState_AfterSerialization(t *testing.T) {
 		StateData: stateData,
 	}
 
+	data, err := json.Marshal(testCheckpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored checkpoint.Checkpoint
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
 	manager = NewStateManager()
-	mustSucceed(t, manager.ImportState(testCheckpoint))
+	mustSucceed(t, manager.ImportState(&restored))
 
 	assertPortableStateValue(t, &manager, scope, "StringValue", StringValue,
 		reflect.TypeFor[int](), reflect.TypeFor[*message.Message]())
@@ -613,6 +626,74 @@ func TestScopeLoadPortableValueState_AfterSerialization(t *testing.T) {
 		reflect.TypeFor[string](), reflect.TypeFor[int](), reflect.TypeFor[workflow.PortableValue]())
 	assertPortableStateValue(t, &manager, scope, "PortableValueValue", StringValue,
 		reflect.TypeFor[int](), reflect.TypeFor[*message.Message](), reflect.TypeFor[workflow.PortableValue]())
+}
+
+func TestEdgeStateDataJSON_Roundtrip(t *testing.T) {
+	port := workflow.RequestPort{ID: "StringToInt", Request: reflect.TypeFor[string](), Response: reflect.TypeFor[int]()}
+	request, err := workflow.NewExternalRequest("TestData", port, "Request1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := request.CreateResponse(13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloads := []any{"Hello, world!", response, jsonPortSerializable{ID: 42, Name: "TestCustomSerializable"}}
+	value := map[string]workflow.PortableValue{}
+	for i, payload := range payloads {
+		state := newStatefulEdgeState([]string{"SourceExecutor1", "SourceExecutor2"})
+		envelope, err := NewMessageEnvelope(payload, reflect.TypeOf(payload), "SourceExecutor1", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if messages := state.processMessage("SourceExecutor1", envelope); messages != nil {
+			t.Fatal("fan-in released before its second source")
+		}
+		value[strconv.Itoa(i+1)] = workflow.AnyPortableValue(state)
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]workflow.PortableValue
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != len(value) {
+		t.Fatalf("edge state count = %d, want %d", len(result), len(value))
+	}
+	for id, expected := range value {
+		portable, ok := result[id]
+		if !ok {
+			t.Fatalf("missing edge %q", id)
+		}
+		before, ok := workflow.PortableValueAs[*statefulEdgeState](expected)
+		if !ok {
+			t.Fatal("original state cannot decode")
+		}
+		after, ok := workflow.PortableValueAs[*statefulEdgeState](portable)
+		if !ok || !slices.Equal(after.sourceIDs, before.sourceIDs) || !maps.Equal(after.unseen, before.unseen) ||
+			len(after.pendingMessages) != len(before.pendingMessages) {
+			t.Fatalf("edge %s state did not round trip: %#v", id, after)
+		}
+		for i, message := range before.pendingMessages {
+			got := after.pendingMessages[i]
+			if got.MessageType != message.MessageType || got.TargetID != message.TargetID {
+				t.Fatalf("edge %s pending envelope metadata changed", id)
+			}
+			expectedJSON, err := json.Marshal(message.Message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actualJSON, err := json.Marshal(got.Message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(expectedJSON, actualJSON) {
+				t.Fatalf("edge %s pending message = %s, want %s", id, actualJSON, expectedJSON)
+			}
+		}
+	}
 }
 
 func TestScopeID_Equality(t *testing.T) {

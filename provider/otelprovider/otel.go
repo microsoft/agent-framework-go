@@ -9,7 +9,9 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/internal/otelx"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/internal/modelcall"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 
 	"go.opentelemetry.io/otel"
@@ -21,18 +23,37 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+const defaultSourceName = "github.com/microsoft/agent-framework-go"
+
 // MiddlewareConfig holds configuration for the middleware.
 type MiddlewareConfig struct {
 	SourceName string
+
+	// DisableModelTracing omits client spans and usage/duration metrics for
+	// model-adapter calls, retaining agent-run and function-tool instrumentation.
+	// By default, OpenAI, Foundry Responses, Anthropic, and Gemini adapter calls
+	// are instrumented. Raw messages and tool arguments are not captured.
+	DisableModelTracing bool
 }
 
-// NewMiddleware creates a new middleware that adds OpenTelemetry tracing and metrics to agent runs.
+// NewMiddleware creates middleware that adds OpenTelemetry tracing and metrics
+// to agent runs, function tools, and supported model-adapter calls.
+// Set [MiddlewareConfig.DisableModelTracing] to omit model-call instrumentation.
+//
+// Tool tracing is supplied through [toolautocall.WithTracer] on the run context.
+// An explicit [toolautocall.Config.Tracer] takes precedence over the injected tracer.
 func NewMiddleware(cfg MiddlewareConfig) agent.Middleware {
-	name := cmp.Or(cfg.SourceName, "github.com/microsoft/agent-framework-go")
-	m := &mw{
-		tracer: otel.Tracer(name),
+	name := cmp.Or(cfg.SourceName, defaultSourceName)
+	operationDuration, tokenUsage := newClientMetrics(otel.Meter(name))
+	return &mw{
+		tracer:              otel.Tracer(name),
+		operationDuration:   operationDuration,
+		tokenUsage:          tokenUsage,
+		disableModelTracing: cfg.DisableModelTracing,
 	}
-	meter := otel.Meter(name)
+}
+
+func newClientMetrics(meter metric.Meter) (genaiconv.ClientOperationDuration, genaiconv.ClientTokenUsage) {
 	operationDuration, err := genaiconv.NewClientOperationDuration(
 		meter,
 		metric.WithExplicitBucketBoundaries(0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92),
@@ -40,7 +61,6 @@ func NewMiddleware(cfg MiddlewareConfig) agent.Middleware {
 	if err != nil {
 		otel.Handle(err)
 	}
-	m.operationDuration = operationDuration
 	tokenUsage, err := genaiconv.NewClientTokenUsage(
 		meter,
 		metric.WithExplicitBucketBoundaries(1, 4, 16, 64, 256, 1024, 4096, 16384, 65536, 262144, 1048576, 4194304, 16777216, 67108864),
@@ -48,14 +68,14 @@ func NewMiddleware(cfg MiddlewareConfig) agent.Middleware {
 	if err != nil {
 		otel.Handle(err)
 	}
-	m.tokenUsage = tokenUsage
-	return m
+	return operationDuration, tokenUsage
 }
 
 type mw struct {
-	tracer            trace.Tracer
-	operationDuration genaiconv.ClientOperationDuration
-	tokenUsage        genaiconv.ClientTokenUsage
+	tracer              trace.Tracer
+	operationDuration   genaiconv.ClientOperationDuration
+	tokenUsage          genaiconv.ClientTokenUsage
+	disableModelTracing bool
 }
 
 func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -63,7 +83,7 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 		a, _ := agent.AgentFromContext(ctx)
 		start := time.Now()
 		// GenAI conventions name the span "<operation> <target>", mirroring the sibling
-		// execute_tool span (see startToolSpan). Fall back to the agent id when it has no
+		// execute_tool span. Fall back to the agent id when it has no
 		// name so the span still carries a target, matching .NET/Python. Default the id to
 		// "unknown" (as with the provider name below) so the span always carries a target
 		// and gen_ai.agent.id is never an empty string, even when the middleware runs
@@ -84,7 +104,10 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 			attrs = append(attrs, semconv.GenAIAgentDescription(a.Description()))
 		}
 		ctx, span := m.tracer.Start(ctx, name, trace.WithTimestamp(start), trace.WithAttributes(attrs...))
-		ctx = otelx.WithTracer(ctx, m.tracer)
+		ctx = toolautocall.WithTracer(ctx, toolTracer{tracer: m.tracer})
+		if !m.disableModelTracing {
+			ctx = modelcall.WithDecorator(ctx, m.modelRun)
+		}
 
 		// Accumulated across the whole run. An agent that makes several LLM round-trips
 		// emits one UsageContent per round-trip, so summing them gives the true cost of
@@ -109,7 +132,7 @@ func (m *mw) Run(next agent.RunFunc, ctx context.Context, messages []*message.Me
 
 		for update, err := range next(ctx, messages, options...) {
 			if err != nil {
-				errorType = otelx.ErrorTypeName(err)
+				errorType = telemetry.ErrorTypeName(err)
 				span.SetAttributes(semconv.ErrorTypeKey.String(errorType))
 				span.RecordError(err, trace.WithTimestamp(time.Now()))
 				span.SetStatus(codes.Error, err.Error())
@@ -163,20 +186,7 @@ func setUsage(span trace.Span, usage message.UsageDetails) {
 		return
 	}
 
-	// input + output are the only usage-token attributes the registry defines (no
-	// total); cache_read is a subset of input and reasoning a subset of output, so
-	// consumers sum rather than reading a provider-side total.
-	attrs := []attribute.KeyValue{
-		semconv.GenAIUsageInputTokensKey.Int64(usage.InputTokenCount),
-		semconv.GenAIUsageOutputTokensKey.Int64(usage.OutputTokenCount),
-	}
-	if usage.CachedInputTokenCount > 0 {
-		attrs = append(attrs, semconv.GenAIUsageCacheReadInputTokensKey.Int64(usage.CachedInputTokenCount))
-	}
-	if usage.ReasoningTokenCount > 0 {
-		attrs = append(attrs, semconv.GenAIUsageReasoningOutputTokensKey.Int64(usage.ReasoningTokenCount))
-	}
-	span.SetAttributes(attrs...)
+	span.SetAttributes(usageAttributes(usage)...)
 }
 
 func hasTokenUsage(usage message.UsageDetails) bool {

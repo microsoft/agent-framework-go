@@ -27,7 +27,7 @@ Go symbols combine the module-relative package and exported symbol: `agent.Agent
 
 Notes are optional for `mapped` entries: the targets and example usually convey the correspondence without repeating it in prose. Keep a note only when it adds useful context. `adapted`, `partial`, `unmapped`, and `intentional` assessments still require a note explaining the adaptation, limitation, missing counterpart, or confirmed decision. Go-only assessments also require their explanation. Omitting a mapped note does not certify behavioral parity or establish current verification.
 
-For non-property declarations, `go` is a minimal Go snippet showing the correspondence. It is an empty string only when no counterpart is recorded. Property mappings intentionally omit `go`: their `go_symbols` identify the field, accessor, or composed API without adding a contrived usage example. Examples contain no imports or synthetic outer function; conventional free identifiers such as `ctx`, `session`, and `logger` denote caller-supplied values. Reconciliation resolves and type-checks package-qualified APIs against the indexed Go API without executing them.
+For non-property declarations, `go` is a minimal Go snippet showing the correspondence. It is an empty string only when no counterpart is recorded. Property mappings intentionally omit `go`: their `go_symbols` identify the field, accessor, or composed API without adding a contrived usage example. Examples contain no imports or synthetic outer function; conventional free identifiers such as `ctx`, `session`, and `logger` denote caller-supplied values. Reconciliation resolves and type-checks package-qualified APIs against the indexed Go API without executing them. When package names collide, recorded Go target packages disambiguate otherwise matching imports; unresolved ambiguity fails.
 
 Extraction-added API placeholders have `unreviewed: true`, `status: unmapped`, empty `go_symbols`, and an empty `go` for non-properties. They have no `note`; the stored status is not an assessed gap. Remove `unreviewed` only when recording an actual assessment, preserving declaration keys and extraction markers. Placeholders do not claim an assessment against the original baseline. Existing assessments outside the extracted assembly scope remain valid catalog entries without being treated as current extracted declarations.
 
@@ -95,7 +95,157 @@ The `go-only` view returns the original baseline and a paged `go_only` object. I
 
 ## Extract the .NET Declaration Inventory
 
-The [mapping catalog](../_catalog/dotnet-go-sdk-symbol-mapping.json) contains public declarations from the three core MAF 1.22.0 packages at `net8.0` and 6,750 test method declarations from 45 upstream test assemblies. API package metadata retain version provenance under `dotnet`; test assemblies record source commits, target frameworks, and hashes under `dotnet.tests`. Public APIs from every provider integration or external dependency are not included; existing out-of-scope assessments are retained without extracted declaration metadata.
+The [mapping catalog](../_catalog/dotnet-go-sdk-symbol-mapping.json) contains public declarations from the three core MAF 1.22.0 packages and the explicitly selected `Microsoft.Agents.AI.CosmosNoSql` `1.22.0-preview.260918.1` package at `net8.0`, plus 6,750 test method declarations from 45 upstream test assemblies. API package metadata retain version provenance under `dotnet`; test assemblies record source commits, target frameworks, and hashes under `dotnet.tests`. Public APIs from every provider integration or external dependency are not included; existing out-of-scope assessments are retained without extracted declaration metadata.
+
+The [embedding package](../embedding/) ports the core embedding abstraction family from
+[Microsoft.Extensions.AI.Abstractions](https://github.com/dotnet/extensions/tree/b10f9c0a081b5dbb7755b8f5592e1d3c3f550a3a/src/Libraries/Microsoft.Extensions.AI.Abstractions/Embeddings),
+which is not currently in the extracted API or test scope. It includes generation,
+numeric and binary embeddings, options, results, embedding metadata, and generation
+helpers. Generator metadata, service-query helpers, and delegating-generator helpers
+are intentionally not implemented. Optional caching, logging, and
+dependency-injection pipelines are not included.
+
+This port uses Go interfaces rather than inheritance, slices rather than collection
+interfaces, and contexts and errors for cancellation and failures. Resource-owning
+generator implementations may expose `Close`; cleanup is not required by the
+generation interface. Each `Embedding[TVector]` holds metadata and a statically
+typed vector; numeric `VectorOf[T]` and binary vectors provide the data.
+`Of[T]` is an exact alias for `Embedding[VectorOf[T]]` for shorter numeric type names.
+`GeneratedOf[T]` aliases `Generated[*Of[T]]` for batches of numeric embedding pointers.
+`Embedding[Vector]` holds vectors polymorphically. `Generator` retains input and
+output type parameters and returns `Generated[TEmbedding]`. The output
+representation is caller-selected rather than constrained to a base class.
+`GenerateVector` accepts a generator of `*Of[T]`, infers the element
+type, and returns its slice without copying or a runtime type assertion.
+Nil batch slices represent empty input.
+Options are read-only under the Go SDK ownership convention. Unlike the upstream
+positive-only dimension setter, Go preserves explicit zero dimensions and leaves
+service-specific constraints to providers. Local JSON uses `Type` discriminators
+and Go field names, not the .NET `$type` format. `Embedding` implements the standard
+JSON interfaces, so fields, slices, and results round-trip without a separate
+decoder. Typed decoding rejects discriminator/type mismatches without changing
+the receiver; `Embedding[Vector]` selects the vector type dynamically.
+Nil interface vectors serialize as null without a discriminator; typed nil numeric
+slices serialize as null with their discriminator. Numeric JSON supports `uint8`,
+`int8`, `float32`, and `float64`; there is no built-in float16 equivalent. These adaptations
+are not a claim of exact API or serialization parity. The catalog remains unchanged
+until its declaration scope is explicitly expanded.
+
+Embedding telemetry is available through
+[`otelprovider.WrapEmbeddingGenerator`](../provider/otelprovider/embedding.go), ported
+from [OpenTelemetryEmbeddingGenerator at `6c527a8`](https://github.com/dotnet/extensions/blob/6c527a8d9a0bcc89a40c61e8365c1afc565117e8/src/Libraries/Microsoft.Extensions.AI/Embeddings/OpenTelemetryEmbeddingGenerator.cs).
+It emits GenAI v1.41 client spans, operation-duration histograms, and input-token
+histograms. Provider, endpoint, and default model metadata are configured directly,
+without service queries. Response model tags use only the first result and are
+available for `Embedding` values and pointers using `Vector` or the built-in JSON
+vector types; custom generic outputs retain usage and duration telemetry.
+A non-nil usage object reports its input count,
+including zero. Token counts retain Go's 64-bit precision, and error type names use
+the SDK's shared Go convention. Additional request/response properties are opt-in
+through configuration or `OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT=true`;
+raw inputs and vectors are not captured. Failures set the span status and duration
+error tag, preserve the original error, and optionally produce a warning through
+the configured logger. The wrapper preserves `io.Closer` only when the inner
+generator implements it, forwarding explicit close calls and their errors.
+Generation does not close the inner generator or shut down telemetry providers.
+
+[`openaiprovider.NewEmbeddingGenerator`](../provider/openaiprovider/embedding.go)
+adapts the OpenAI Embeddings API to
+`Generator[string, *Of[float32]]`. It accepts an existing OpenAI
+Go client, model and dimension defaults, and per-request options.
+The raw-options factory can supply native `openai.EmbeddingNewParams`; native
+settings take precedence over shared options and configured defaults. Results use
+float32 vectors in input order, the served model, a local UTC creation
+timestamp per embedding, and reported prompt/total usage. The default wire encoding
+is base64; native parameters can request float encoding. Base64 decoding preserves
+all float32 bit patterns, including NaN and infinity. Empty batches are rejected
+without a request. Unrecognized raw-options factory results use default parameters.
+Omitted usage counters default to zero; malformed or fractional counters return an
+error, with valid counts retained at Go's 64-bit precision. The adapter validates
+one result per input and uses unique, in-range response indexes to restore input
+order; a single-input response may omit its index. This intentionally differs
+from the upstream adapter's response-sequence enumeration so batch pairing cannot
+associate an input with another input's vector.
+It does not own the client, does not require cleanup, and can be passed to
+the optional telemetry wrapper. These behaviors were checked against
+[the .NET adapter at `6c527a8`](https://github.com/dotnet/extensions/blob/6c527a8d9a0bcc89a40c61e8365c1afc565117e8/src/Libraries/Microsoft.Extensions.AI.OpenAI/OpenAIEmbeddingGenerator.cs)
+and OpenAI .NET 2.14.0. Explicit zero dimensions and read-only shared options remain
+intentional Go adaptations.
+
+[`foundryprovider.NewEmbeddingGenerator`](../provider/foundryprovider/embedding.go)
+accepts a Foundry project or resource endpoint and embedding configuration.
+Authentication follows [`foundryprovider.NewAgent`](../provider/foundryprovider/agent.go):
+use an Azure token credential, or a nil credential with `azure.WithAPIKey` in
+`OpenAIOptions` for API-key authentication. It derives the resource origin from
+the endpoint, shares the Foundry provider's authenticated client setup, uses the resource
+`/openai/v1/embeddings` route without an `api-version` query, and delegates
+generation to the OpenAI adapter. Per-request model and dimension
+options retain the OpenAI adapter's precedence and response conversion behavior.
+The generator does not take ownership of the credential or transport.
+
+[`foundryprovider.NewOpenAIClient`](../provider/foundryprovider/client.go) exposes
+the authenticated native OpenAI SDK client. A resource endpoint supports model
+APIs such as embeddings; a project endpoint supports project-scoped operations
+such as files and vector stores. Per-request base-URL and API-version options
+support project administration calls without changing subsequent OpenAI requests.
+Both the native client and embedding generator retain the SDK's credential origin
+and redirect protections.
+
+The [vector data package](../vectordata/) is based on
+[Microsoft.Extensions.VectorData.Abstractions 10.10.0](https://github.com/dotnet/extensions/tree/294665a5ec4eceaa245388cfb70883ea01881081/src/Libraries/Microsoft.Extensions.VectorData.Abstractions).
+Go differences:
+
+- Generic collection methods require Go 1.27; `GetCollection` and
+  `DynamicCollection` also work on Go 1.26. Provider dispatch uses runtime types.
+- `Get` returns
+  `(record, found, error)`; `iter.Seq2` replaces async enumerables, and variadic
+  `Upsert` replaces separate single/batch methods.
+- Struct tags replace attributes; dynamic records use `map[string]any`.
+  [`providerservices.Build`](../vectordata/providerservices/builder.go) combines
+  typed and dynamic model construction.
+- Property accessors distinguish missing from nil, use Go assignability, and
+  clear nil-capable fields when assigned nil.
+- Built-in index and distance identifiers use lowercase snake case.
+- Embedding configuration uses explicit [`embedding.Bind`](../embedding/bind.go)
+  bindings to retain generic input/output types.
+- A portable `Filter` tree replaces LINQ expressions. Provider services are
+  experimental; CLR service lookup, obsolete filters, and the full builder,
+  serializer, and embedding-dispatch machinery are not ported.
+
+The [in-memory connector](../vectordata/inmemory/) ports
+[CommunityToolkit.VectorData.InMemory 1.0.1](https://github.com/CommunityToolkit/AI/tree/7a48d308df63d85427a772f031616889905a0fdf/MEVD/src/InMemory)
+(tag `mevd/InMemory/v1.0.1`). Additional differences:
+
+- Plain structs follow Go value semantics; use pointers or maps to observe
+  generated UUIDs on input. Keys use their declared schema type for Go equality
+  and reject nil and NaN.
+- Strings sort lexicographically. Custom comparisons use `Compare(T) int` and
+  `Equal(T) bool`; equality otherwise uses `reflect.DeepEqual`.
+- Batch dictionary updates are atomic; mutations to input records are not rolled
+  back on failure.
+- Snapshots use Go JSON and the generic `inmemory.Import` function. NaN scores are omitted; other scores
+  may differ through floating-point rounding.
+
+The [Azure AI Search connector](../provider/azureprovider/) ports the
+[Toolkit connector at the same revision](https://github.com/CommunityToolkit/AI/tree/7a48d308df63d85427a772f031616889905a0fdf/MEVD/src/AzureAISearch).
+Additional Go differences:
+
+- Uses the `azcore` REST pipeline instead of a native Search client.
+- VectorData storage names replace serializer naming configuration; only schema
+  properties are mapped. Go `int` maps to `Edm.Int64`.
+- Hybrid `IncludeVectors` is honored, and all partial batch failures are returned.
+- Nil collections serialize as empty arrays; membership filters retain empty strings.
+
+These packages remain outside the catalog's extraction scope.
+
+The [chat-history memory provider](../agent/memory/) ports
+[.NET 1.25.0](https://github.com/microsoft/agent-framework/blob/95511ff025d81cc546c44e653d4be65de5bd7f35/dotnet/src/Microsoft.Agents.AI/Memory/ChatHistoryMemoryProvider.cs).
+Go differences:
+
+- Uses the context-provider interface without a separate message-only overload.
+- Scope IDs are optional pointers; a nil `State.SearchScope` uses `StorageScope`.
+- Stored timestamps use RFC3339Nano; absent message IDs/authors use empty strings.
+- `Close` disposes the collection only when it implements `io.Closer`.
 
 The separate [dotnetsymbols command](../_catalog/cmd/dotnetsymbols/README.md) extracts an inventory from compiled .NET assemblies using `go-winmd`. By default, `go -C _catalog run ./cmd/dotnetsymbols` resolves the latest stable MAF release and downloads its prebuilt core NuGet packages, without Git or a .NET SDK. Pin a version with `-release 1.22.0` for reproducible reruns. Select additional packages with `-package` and an exact target framework with `-framework`. Package versions, hashes, source metadata, and assembly identities are recorded; the release is not assumed to match this catalog's commit baseline.
 
@@ -110,6 +260,20 @@ Normal extraction emits deterministic, transient raw schema-1 JSON with `identit
 | Refresh from a cached extraction offline | `go -C _catalog run ./cmd/dotnetsymbols -input <cached-extraction> -update-mapping dotnet-go-sdk-symbol-mapping.json` |
 
 Refreshes update only supplied assembly scopes and preserve assessment values, pairs, Go-only notes, and the original baseline. They complete existing method return labels using the existing generic parameter names; constructor/property keys and test names remain unchanged. API-only refreshes leave tests unchanged. New APIs become unreviewed placeholders, never automatic counterpart matches or assessed gaps. Metadata selection changes and refreshed packages that drop or replace recorded assemblies require separate review and fail without overwriting the catalog. Refreshing a package-owned assembly requires its recorded owning packages in the input so package and assembly provenance are updated together; local extraction can refresh only unowned assembly scopes. Refresh requires exclusive access to the catalog; concurrent updates or editor writes are not supported. The extractor is Go-only and never builds .NET projects; do not redirect its transient stdout onto the maintained catalog.
+
+## Composite agent harness
+
+The [harness usage guide](./agent-harness.md) documents `AgentConfig`,
+automatic file-memory cleanup, the stable defaults/options assessment, provider-specific settings,
+ownership, and the boundaries of model tracing. The implementation was reviewed
+against .NET revision `ebcf4db7f9462ef6c377761e0b3159c4c5a73027`.
+`HarnessAgent`, `HarnessAgentOptions`, and `ChatClientHarnessExtensions` now have
+source-reviewed assessments in the catalog. Their `Microsoft.Agents.AI.Harness`
+assembly is outside the current binary-extraction scope, so these mappings do
+not claim a new extraction snapshot or change the original baseline.
+Experimental members are recorded as intentional exclusions. Stable mappings
+record Go composition and provider-configuration differences rather than
+claiming identical API shapes or prompts.
 
 ## Reconcile the Inventories
 
@@ -143,7 +307,7 @@ Reconciliation states are separate from mapping statuses:
 
 Unresolved assessments never consume an unreviewed declaration. The queue includes type declarations even when only members have assessments. Experimental markers and compiler-generated/delegate machinery are identified separately. `suggested_go` contains name-based candidates, preferably under an existing type mapping; candidates are not assessments and can be unrelated APIs.
 
-`reconcile -file` selects a different catalog; there is no `-inventory` flag. `go` and `reconcile` accept `-go-root` to select a Go checkout. The standalone `go` subcommand discovers its module from that checkout, without reading the mapping catalog; `reconcile` also checks that the module matches the catalog baseline. Repeat `-go-package` to replace the default agent/message/tool/provider/workflow package set, and use `-tags` for an explicit build-tag selection. The report records the effective platform, architecture, CGO setting, Go version, tags, Git commit and dirty state. It describes one build configuration, not the union of all platforms. Missing dependencies or invalid packages fail indexing rather than producing misleading missing-symbol results.
+`reconcile -file` selects a different catalog; there is no `-inventory` flag. `go` and `reconcile` accept `-go-root` to select a Go checkout. The standalone `go` subcommand discovers its module from that checkout, without reading the mapping catalog; `reconcile` also checks that the module matches the catalog baseline. Repeat `-go-package` to replace the default agent/format/message/tool/provider/workflow package set, and use `-tags` for an explicit build-tag selection. The root format packages are included when present so older checkouts remain indexable. The report records the effective platform, architecture, CGO setting, Go version, tags, Git commit and dirty state. It describes one build configuration, not the union of all platforms. Missing dependencies or invalid packages fail indexing rather than producing misleading missing-symbol results.
 
 Indexing requires the local Go toolchain and cached SDK dependencies, prepared with `go mod download` from the repository root. Preload the separate tooling module with `go -C _catalog mod download`. The indexer disables module/toolchain downloads and uses read-only module loading. The outer `go run` itself follows the caller's ordinary Go environment. Configured custom tool/cache programs are rejected by the indexer. No .NET SDK is used.
 

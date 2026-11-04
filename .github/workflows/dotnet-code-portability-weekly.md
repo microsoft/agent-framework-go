@@ -2,7 +2,6 @@
 description: Weekly audit for evidence-backed .NET-to-Go portability improvements without public API or behavior changes
 intent: Reduce maintainer effort when porting .NET changes to Go without cosmetic churn or duplicate work.
 tracker-id: dotnet-code-portability-weekly
-model: "gpt-5.5"
 engine:
    id: copilot
 sandbox:

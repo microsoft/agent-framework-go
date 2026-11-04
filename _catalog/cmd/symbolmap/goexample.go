@@ -73,15 +73,15 @@ var goExampleVariables = map[string]bool{
 
 // checkGoExample type-checks without evaluating source or loading packages.
 // Imports must already be present in the indexed package graph.
-func checkGoExample(code string, api goInventory) error {
-	err := checkGoExampleMode(code, api, false)
+func checkGoExample(code string, api goInventory, targets []string) error {
+	err := checkGoExampleMode(code, api, targets, false)
 	if err != nil && strings.Contains(err.Error(), "multiple-value") && strings.Contains(err.Error(), "in single-value context") {
-		return checkGoExampleMode(code, api, true)
+		return checkGoExampleMode(code, api, targets, true)
 	}
 	return err
 }
 
-func checkGoExampleMode(code string, api goInventory, callStatement bool) error {
+func checkGoExampleMode(code string, api goInventory, targets []string, callStatement bool) error {
 	fset, file, err := symbolcatalog.ParseGoExample(code, callStatement)
 	if err != nil {
 		return err
@@ -103,7 +103,7 @@ func checkGoExampleMode(code string, api goInventory, callStatement bool) error 
 		}
 		return true
 	})
-	imports, err := resolveGoExampleImports(used, api.packages)
+	imports, err := resolveGoExampleImports(used, api, targets)
 	if err != nil {
 		return err
 	}
@@ -151,11 +151,16 @@ func checkGoExampleMode(code string, api goInventory, callStatement bool) error 
 	return checkErr
 }
 
-func resolveGoExampleImports(used map[string]map[string]bool, packages map[string]*types.Package) (map[string]string, error) {
+func resolveGoExampleImports(used map[string]map[string]bool, api goInventory, targets []string) (map[string]string, error) {
 	imports := make(map[string]string, len(used))
+	targetPackages := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		pkg, _, _ := strings.Cut(target, ".")
+		targetPackages[pkg] = true
+	}
 	for alias, names := range used {
 		if importPath := goExampleStandardImports[alias]; importPath != "" {
-			pkg := packages[importPath]
+			pkg := api.packages[importPath]
 			if pkg == nil {
 				return nil, fmt.Errorf("resolve Go example import %q: preferred package %q is not indexed", alias, importPath)
 			}
@@ -168,7 +173,7 @@ func resolveGoExampleImports(used map[string]map[string]bool, packages map[strin
 			continue
 		}
 		var namedPackages []string
-		for importPath, pkg := range packages {
+		for importPath, pkg := range api.packages {
 			if pkg.Name() == alias {
 				namedPackages = append(namedPackages, importPath)
 			}
@@ -179,7 +184,7 @@ func resolveGoExampleImports(used map[string]map[string]bool, packages map[strin
 		}
 		var candidates []string
 		for _, importPath := range namedPackages {
-			pkg := packages[importPath]
+			pkg := api.packages[importPath]
 			matches := true
 			for name := range names {
 				if object := pkg.Scope().Lookup(name); object == nil || !object.Exported() {
@@ -192,6 +197,17 @@ func resolveGoExampleImports(used map[string]map[string]bool, packages map[strin
 			}
 		}
 		slices.Sort(candidates)
+		if len(candidates) > 1 {
+			var referenced []string
+			for _, importPath := range candidates {
+				if targetPackages[goIndexPackageName(importPath, api.Module)] {
+					referenced = append(referenced, importPath)
+				}
+			}
+			if len(referenced) == 1 {
+				candidates = referenced
+			}
+		}
 		if len(candidates) > 1 {
 			public := slices.DeleteFunc(slices.Clone(candidates), func(importPath string) bool {
 				return slices.Contains(strings.Split(importPath, "/"), "internal")

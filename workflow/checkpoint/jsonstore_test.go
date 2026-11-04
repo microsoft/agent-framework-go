@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -87,6 +88,59 @@ func pathIsUnder(root, candidate string) bool {
 			return false
 		}
 		candidate = parent
+	}
+}
+
+func TestJSONManager_FileStoreLatestIsLastCommitted(t *testing.T) {
+	store := newFileSystemJSONStore(t, t.TempDir())
+	manager := checkpoint.NewJSONManager(store)
+	const sessionID = "session-latest"
+	var committed []workflow.CheckpointInfo
+	var parent *workflow.CheckpointInfo
+	for i := 0; i < 8; i++ {
+		value, err := json.Marshal(fmt.Sprintf("checkpoint-%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, err := store.CreateCheckpoint(t.Context(), sessionID, value, parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		committed = append(committed, info)
+		parent = new(info)
+	}
+	index, err := store.RetrieveIndex(t.Context(), sessionID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	latest, err := manager.LatestCheckpoint(t.Context(), sessionID)
+	if err != nil || latest == nil || *latest != committed[len(committed)-1] || !slices.Equal(index, committed) {
+		t.Fatalf("index/latest = %v/%v, %v, want committed order and final checkpoint", index, latest, err)
+	}
+}
+
+func TestFileSystemJSONStore_RetrieveIndexIsSessionScoped(t *testing.T) {
+	dir := t.TempDir()
+	store := newFileSystemJSONStore(t, dir)
+	first, err := store.CreateCheckpoint(t.Context(), "first-session", json.RawMessage(`{"test":"data"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.CreateCheckpoint(t.Context(), "second-session", json.RawMessage(`{"test":"data"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	index, err := store.RetrieveIndex(t.Context(), "first-session", nil)
+	if err != nil || !slices.Equal(index, []workflow.CheckpointInfo{first}) || slices.Contains(index, second) {
+		t.Fatalf("first session index = %v, %v", index, err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := newFileSystemJSONStore(t, dir)
+	index, err = reopened.RetrieveIndex(t.Context(), "second-session", nil)
+	if err != nil || !slices.Equal(index, []workflow.CheckpointInfo{second}) || slices.Contains(index, first) {
+		t.Fatalf("second session index = %v, %v", index, err)
 	}
 }
 
@@ -360,6 +414,14 @@ func TestFileSystemJSONStore_ParentTracking(t *testing.T) {
 		if slices.Contains(children, root) {
 			t.Errorf("children contains root checkpoint %+v", root)
 		}
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened := newFileSystemJSONStore(t, dir)
+	children, err = reopened.RetrieveIndex(ctx, sessionID, &info1)
+	if err != nil || !slices.Equal(children, []workflow.CheckpointInfo{info2}) {
+		t.Fatalf("reopened child index = %v, %v, want [%v]", children, err, info2)
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -30,6 +31,131 @@ type panicPayload struct {
 
 func (panicPayload) MarshalJSON() ([]byte, error) {
 	panic("marshal panic")
+}
+
+func telemetryPortWorkflow(t *testing.T, tracer observability.Tracer, options workflow.TelemetryOptions, reverse bool) *workflow.Workflow {
+	t.Helper()
+	uppercase := workflow.NewExecutor("UppercaseExecutor", strings.ToUpper).SetCrossRunShareable(true).Bind()
+	builder := workflow.NewBuilder(uppercase).WithOutputFrom(uppercase)
+	if reverse {
+		reverser := workflow.NewExecutor("ReverseTextExecutor", func(input string) string {
+			runes := []rune(input)
+			slices.Reverse(runes)
+			return string(runes)
+		}).SetCrossRunShareable(true).Bind()
+		builder = workflow.NewBuilder(uppercase).AddEdge(uppercase, reverser).WithOutputFrom(reverser)
+	}
+	wf, err := builder.WithTelemetry(tracer, options).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wf
+}
+
+func assertTelemetryPortEndToEnd(t *testing.T, environment *inproc.ExecutionEnvironment) {
+	t.Helper()
+	tracer := workflowtest.NewRecordingTracer()
+	wf := telemetryPortWorkflow(t, tracer, workflow.TelemetryOptions{}, true)
+	runWorkflow(t, environment, wf, "Hello, World!")
+	spans := tracer.Spans()
+	if len(spans) != 9 {
+		t.Fatalf("span count = %d, want 9", len(spans))
+	}
+	for prefix, count := range map[string]int{
+		"workflow.build": 1, "workflow.session": 1, "workflow_invoke": 1,
+		"edge_group.process": 2, "executor.process": 2, "message.send": 2,
+	} {
+		if got := workflowtest.CountSpansWithPrefix(spans, prefix); got != count {
+			t.Errorf("%s count = %d, want %d", prefix, got, count)
+		}
+	}
+	invoke := workflowtest.FindSpanWithPrefix(t, spans, "workflow_invoke")
+	invoke.RequireEvent(t, "workflow.started")
+	invoke.RequireEvent(t, "workflow.completed")
+}
+
+func TestObservability_EndToEndOffThreadActivities(t *testing.T) {
+	assertTelemetryPortEndToEnd(t, inproc.OffThread)
+}
+
+func TestObservability_EndToEndConcurrentActivities(t *testing.T) {
+	assertTelemetryPortEndToEnd(t, inproc.Concurrent)
+}
+
+func TestObservability_EndToEndLockstepActivities(t *testing.T) {
+	assertTelemetryPortEndToEnd(t, inproc.Lockstep)
+}
+
+func TestObservability_DisablingBuildPreventsBuildActivity(t *testing.T) {
+	tracer := workflowtest.NewRecordingTracer()
+	uppercase := workflow.NewExecutor("UppercaseExecutor", strings.ToUpper).Bind()
+	if _, err := workflow.NewBuilder(uppercase).WithTelemetry(tracer, workflow.TelemetryOptions{DisableWorkflowBuild: true}).Build(); err != nil {
+		t.Fatal(err)
+	}
+	if count := workflowtest.CountSpansWithPrefix(tracer.Spans(), "workflow.build"); count != 0 {
+		t.Fatalf("build span count = %d, want 0", count)
+	}
+}
+
+func TestObservability_DisablingRunPreventsRunAndSessionActivities(t *testing.T) {
+	tracer := workflowtest.NewRecordingTracer()
+	wf := telemetryPortWorkflow(t, tracer, workflow.TelemetryOptions{DisableWorkflowRun: true}, false)
+	runWorkflow(t, inproc.Default, wf, "Hello")
+	spans := tracer.Spans()
+	if workflowtest.CountSpansWithPrefix(spans, "workflow_invoke") != 0 || workflowtest.CountSpansWithPrefix(spans, "workflow.session") != 0 ||
+		workflowtest.CountSpansWithPrefix(spans, "workflow.build") == 0 {
+		t.Fatalf("span names = %v, want build without invoke/session", workflowtest.SpanNames(spans))
+	}
+}
+
+func TestObservability_DisablingExecutorPreventsExecutorActivities(t *testing.T) {
+	tracer := workflowtest.NewRecordingTracer()
+	wf := telemetryPortWorkflow(t, tracer, workflow.TelemetryOptions{DisableExecutorProcess: true}, false)
+	runWorkflow(t, inproc.Default, wf, "Hello")
+	spans := tracer.Spans()
+	if workflowtest.CountSpansWithPrefix(spans, "executor.process") != 0 || workflowtest.CountSpansWithPrefix(spans, "workflow_invoke") == 0 {
+		t.Fatalf("span names = %v, want invoke without executor", workflowtest.SpanNames(spans))
+	}
+}
+
+func TestObservability_SensitiveExecutorInputAndOutput(t *testing.T) {
+	tracer := workflowtest.NewRecordingTracer()
+	wf := telemetryPortWorkflow(t, tracer, workflow.TelemetryOptions{EnableSensitiveData: true}, false)
+	runWorkflow(t, inproc.Default, wf, "hello")
+	span := workflowtest.FindSpanWithPrefix(t, tracer.Spans(), "executor.process")
+	span.RequireOptionalStringAttribute(t, "executor.input", true, "hello")
+	span.RequireOptionalStringAttribute(t, "executor.output", true, "HELLO")
+}
+
+func TestObservability_DisabledSensitiveExecutorInputAndOutput(t *testing.T) {
+	tracer := workflowtest.NewRecordingTracer()
+	wf := telemetryPortWorkflow(t, tracer, workflow.TelemetryOptions{}, false)
+	runWorkflow(t, inproc.Default, wf, "hello")
+	span := workflowtest.FindSpanWithPrefix(t, tracer.Spans(), "executor.process")
+	span.RequireOptionalStringAttribute(t, "executor.input", false, "")
+	span.RequireOptionalStringAttribute(t, "executor.output", false, "")
+}
+
+func TestObservability_DisabledSensitiveMessageContent(t *testing.T) {
+	tracer := workflowtest.NewRecordingTracer()
+	wf := telemetryPortWorkflow(t, tracer, workflow.TelemetryOptions{}, true)
+	runWorkflow(t, inproc.Default, wf, "hello")
+	span := workflowtest.FindSpanWithPrefix(t, tracer.Spans(), "message.send")
+	span.RequireAttribute(t, "message.source_id")
+	span.RequireOptionalStringAttribute(t, "message.content", false, "")
+}
+
+func TestObservability_OffThreadRunEndsSessionAndInvokeActivities(t *testing.T) {
+	tracer := workflowtest.NewRecordingTracer()
+	wf := telemetryPortWorkflow(t, tracer, workflow.TelemetryOptions{}, true)
+	runWorkflow(t, inproc.OffThread, wf, "Hello, World!")
+	spans := tracer.Spans()
+	for _, prefix := range []string{"workflow.session", "workflow_invoke"} {
+		if got := workflowtest.CountSpansWithPrefix(spans, prefix); got != 1 {
+			t.Fatalf("%s count = %d, want 1", prefix, got)
+		}
+		workflowtest.FindSpanWithPrefix(t, spans, prefix).RequireEnded(t)
+	}
 }
 
 func TestObservability_CreatesWorkflowEndToEndSpans(t *testing.T) {

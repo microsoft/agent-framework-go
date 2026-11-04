@@ -153,6 +153,11 @@ func TestRepositoryIndexedViews(t *testing.T) {
 	if goReport.Module != "github.com/microsoft/agent-framework-go" || goReport.ExportedSymbols == 0 || len(goReport.Packages) == 0 {
 		t.Fatalf("Go inventory is incomplete: %+v", goReport)
 	}
+	for _, pkg := range []string{"format", "format/jsonformat"} {
+		if !slices.Contains(goReport.Packages, pkg) {
+			t.Fatalf("Go inventory does not include %q", pkg)
+		}
+	}
 	var goPage goInventory
 	decodeOutput(t, commandOutput(t, "go", "-go-root", root, "-symbol", "agent.Session"), &goPage)
 	if goPage.Page == nil || goPage.Page.Total < len(goPage.Symbols) || goPage.Page.Returned != len(goPage.Symbols) || goPage.Page.Limit != defaultPageLimit {
@@ -174,7 +179,7 @@ func TestRepositoryIndexedViews(t *testing.T) {
 		}
 		var queue reconciliationReport
 		decodeOutput(t, commandOutput(t, "reconcile", "-state", "unreviewed", "-area", "workflows"), &queue)
-		if queue.Page == nil || queue.Page.Total <= defaultPageLimit || queue.Page.Returned != defaultPageLimit || len(queue.Rows) != defaultPageLimit || queue.Counts["unreviewed"] != queue.Page.Total {
+		if queue.Page == nil || queue.Page.Offset != 0 || queue.Page.Limit != defaultPageLimit || queue.Page.Returned != min(queue.Page.Total, defaultPageLimit) || len(queue.Rows) != queue.Page.Returned || queue.Counts["unreviewed"] != queue.Page.Total {
 			t.Fatalf("default review queue page is incomplete: page=%+v rows=%d counts=%v", queue.Page, len(queue.Rows), queue.Counts)
 		}
 	})
@@ -313,6 +318,44 @@ func TestReconcileStates(t *testing.T) {
 				if row.State == "linked" && (!reflect.DeepEqual(row.ReviewSourceChanged, test.sourceChanged) || !reflect.DeepEqual(row.ReviewGoChanged, test.goChanged)) {
 					t.Fatalf("commit comparisons did not use the original baseline: %+v", row)
 				}
+			}
+		})
+	}
+}
+
+func TestReconciliationReviewQueuePages(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		total, returned int
+		nextOffset      *int
+	}{
+		{"empty", 0, 0, nil},
+		{"partial", 1, 1, nil},
+		{"full", defaultPageLimit, defaultPageLimit, nil},
+		{"multiple", defaultPageLimit + 1, defaultPageLimit, new(defaultPageLimit)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			report := reconciliationReport{
+				Rows: []reconciliationRow{{Area: "workflows", State: "linked"}},
+			}
+			for i := range test.total {
+				report.Rows = append(report.Rows, reconciliationRow{
+					Namespace: "Example", Type: fmt.Sprintf("Pending%d", i),
+					Area: "workflows", Kind: "type", State: "unreviewed",
+				})
+			}
+			summarizeReconciliation(&report)
+			var out bytes.Buffer
+			if err := writeReconciliation(&out, report, reportFilter{Area: "workflows", State: "unreviewed"}, pageOptions{Limit: defaultPageLimit}, true, false, false); err != nil {
+				t.Fatal(err)
+			}
+			var got reconciliationReport
+			decodeOutput(t, out.String(), &got)
+			wantPage := &pageInfo{
+				Total: test.total, Limit: defaultPageLimit, Returned: test.returned, NextOffset: test.nextOffset,
+			}
+			if !reflect.DeepEqual(got.Page, wantPage) || got.Rows == nil || len(got.Rows) != test.returned || got.Counts["unreviewed"] != test.total || got.Counts["linked"] != 0 {
+				t.Fatalf("review queue page = %+v, rows=%d counts=%v, want page=%+v", got.Page, len(got.Rows), got.Counts, wantPage)
 			}
 		})
 	}
@@ -500,6 +543,30 @@ func TestMappingPages(t *testing.T) {
 	gaps := readMappingsView(t, "gaps", "-file", file, "-limit", "2")
 	if gaps.Page == nil || gaps.Page.Total != 3 || gaps.Page.Returned != 2 || gaps.Page.NextOffset == nil || *gaps.Page.NextOffset != 2 {
 		t.Fatalf("filtered gaps page = %+v", gaps.Page)
+	}
+}
+
+func TestGoInventoryDefaultPackages(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+	for _, withFormat := range []bool{false, true} {
+		t.Run(fmt.Sprintf("format=%v", withFormat), func(t *testing.T) {
+			files := make(map[string]string)
+			packages := []string{"agent", "message", "provider", "tool", "workflow"}
+			for _, pkg := range packages {
+				files[pkg+"/package.go"] = "package " + pkg + "\ntype Value struct{}\n"
+			}
+			if withFormat {
+				files["format/format.go"] = "package format\ntype ResponseFormat struct{}\n"
+				packages = append(packages, "format")
+			}
+			slices.Sort(packages)
+			root := writeGoCheckout(t, "example.org/sdk", files)
+			var got reconciliationGoInventory
+			decodeOutput(t, commandOutput(t, "go", "-go-root", root, "-summary"), &got)
+			if !slices.Equal(got.Packages, packages) {
+				t.Fatalf("indexed packages = %v, want %v", got.Packages, packages)
+			}
+		})
 	}
 }
 
@@ -1132,13 +1199,13 @@ func TestGoExampleFreeVariables(t *testing.T) {
 		GoVersion: runtime.Version(),
 		packages:  map[string]*types.Package{pkg.Path(): pkg},
 	}
-	if err := checkGoExample("sdk.Call(ctx); client.Call(ctx)", api); err != nil {
+	if err := checkGoExample("sdk.Call(ctx); client.Call(ctx)", api, nil); err != nil {
 		t.Fatalf("check concise example: %v", err)
 	}
-	if err := checkGoExample("sdk.Pair(ctx)", api); err != nil {
+	if err := checkGoExample("sdk.Pair(ctx)", api, nil); err != nil {
 		t.Fatalf("check multi-result call: %v", err)
 	}
-	if err := checkGoExample("sdk.Missing(ctx)", api); err == nil {
+	if err := checkGoExample("sdk.Missing(ctx)", api, nil); err == nil {
 		t.Fatal("missing package member must not be treated as a free variable")
 	}
 }
@@ -1152,7 +1219,8 @@ func TestResolveGoExampleStandardImport(t *testing.T) {
 	dependency.MarkComplete()
 	imports, err := resolveGoExampleImports(
 		map[string]map[string]bool{"json": {"Unmarshal": true}},
-		map[string]*types.Package{standard.Path(): standard, dependency.Path(): dependency},
+		goInventory{packages: map[string]*types.Package{standard.Path(): standard, dependency.Path(): dependency}},
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1170,12 +1238,51 @@ func TestResolveGoExamplePublicImport(t *testing.T) {
 		pkg.MarkComplete()
 		packages[path] = pkg
 	}
-	imports, err := resolveGoExampleImports(map[string]map[string]bool{"checkpoint": {"Manager": true}}, packages)
+	imports, err := resolveGoExampleImports(map[string]map[string]bool{"checkpoint": {"Manager": true}}, goInventory{packages: packages}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if imports["checkpoint"] != "example.org/sdk/checkpoint" {
 		t.Fatalf("checkpoint import = %q, want public package", imports["checkpoint"])
+	}
+}
+
+func TestResolveGoExampleTargetImport(t *testing.T) {
+	const module = "example.org/sdk"
+	packages := make(map[string]*types.Package)
+	for _, path := range []string{"agent/format/jsonformat", "format/jsonformat"} {
+		pkg := types.NewPackage(module+"/"+path, "jsonformat")
+		pkg.Scope().Insert(types.NewFunc(token.NoPos, pkg, "For", types.NewSignatureType(nil, nil, nil, nil, nil, false)))
+		pkg.MarkComplete()
+		packages[pkg.Path()] = pkg
+	}
+	api := goInventory{Module: module, packages: packages}
+	for _, test := range []struct {
+		name    string
+		targets []string
+		want    string
+	}{
+		{"legacy target", []string{"agent.Response.String", "agent/format/jsonformat.For"}, "agent/format/jsonformat"},
+		{"canonical target", []string{"format/jsonformat.For"}, "format/jsonformat"},
+		{"no targets", nil, ""},
+		{"unrelated target", []string{"agent.Response.String"}, ""},
+		{"both targets", []string{"agent/format/jsonformat.For", "format/jsonformat.For"}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			imports, err := resolveGoExampleImports(map[string]map[string]bool{"jsonformat": {"For": true}}, api, test.targets)
+			if test.want == "" {
+				if err == nil || !strings.Contains(err.Error(), "found 2 matching packages") {
+					t.Fatalf("ambiguous import error = %v, want matching-package error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := module + "/" + test.want; imports["jsonformat"] != want {
+				t.Fatalf("jsonformat import = %q, want %q", imports["jsonformat"], want)
+			}
+		})
 	}
 }
 

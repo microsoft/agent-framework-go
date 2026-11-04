@@ -8,6 +8,7 @@ import (
 	"iter"
 	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -70,6 +71,162 @@ func buildSequentialWorkflow(t *testing.T, a *agent.Agent) *workflow.Workflow {
 		t.Fatalf("Build: %v", err)
 	}
 	return wf
+}
+
+func portSequentialWorkflow(t *testing.T, name string) *workflow.Workflow {
+	t.Helper()
+	wf, err := agentworkflow.NewSequentialWorkflowBuilder(newEchoAgent(name)).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wf
+}
+
+func portSequentialStreamEvents(t *testing.T, environment *inproc.ExecutionEnvironment) []workflow.Event {
+	t.Helper()
+	wf := portSequentialWorkflow(t, "test-agent")
+	stream, err := environment.RunStreaming(t.Context(), wf, []*message.Message{message.NewText("Hello")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.Close(t.Context()) }()
+	sendStreamMessage(t, stream, t.Context(), workflow.TurnToken{EmitEvents: new(true)})
+	var events []workflow.Event
+	for event, err := range stream.WatchStream(t.Context()) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	return events
+}
+
+func TestAgentWorkflow_StartedEventPrecedesFirstSuperStep(t *testing.T) {
+	events := portSequentialStreamEvents(t, inproc.Default)
+	started, step := -1, -1
+	for i, event := range events {
+		switch event.(type) {
+		case workflow.StartedEvent:
+			if started < 0 {
+				started = i
+			}
+		case workflow.SuperStepStartedEvent:
+			if step < 0 {
+				step = i
+			}
+		}
+	}
+	if len(events) == 0 || started < 0 || step < 0 || started >= step {
+		t.Fatalf("started/step indexes = %d/%d in %v", started, step, events)
+	}
+}
+
+func TestAgentWorkflow_LockstepEmitsStartedEvent(t *testing.T) {
+	events := portSequentialStreamEvents(t, inproc.Lockstep)
+	if len(events) == 0 || !slices.ContainsFunc(events, func(event workflow.Event) bool { _, ok := event.(workflow.StartedEvent); return ok }) {
+		t.Fatalf("expected workflow started event, got %v", events)
+	}
+}
+
+func TestInProcessWorkflow_RunExecutesSequentialAgent(t *testing.T) {
+	wf := portSequentialWorkflow(t, "test-agent")
+	run, err := inproc.Default.Run(t.Context(), wf, []*message.Message{message.NewText("Hello")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = run.Close(t.Context()) }()
+	status, err := run.GetStatus(t.Context())
+	if err != nil || status != inproc.RunStatusIdle {
+		t.Fatalf("status = %v, %v, want idle", status, err)
+	}
+	events := slices.Collect(run.OutgoingEvents())
+	if len(events) == 0 || !containsOutputPayloadType[*agent.ResponseUpdate](events) || len(outputEventsWithPayloadType[[]*message.Message](events)) == 0 {
+		t.Fatalf("events = %v, want agent updates and workflow outputs", events)
+	}
+}
+
+func TestInProcessWorkflow_StreamingTurnExecutesSequentialAgent(t *testing.T) {
+	wf := portSequentialWorkflow(t, "test-agent")
+	stream, err := inproc.Default.RunStreaming(t.Context(), wf, []*message.Message{message.NewText("Hello")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.Close(t.Context()) }()
+	sendStreamMessage(t, stream, t.Context(), workflow.TurnToken{EmitEvents: new(true)})
+	var events []workflow.Event
+	for event, err := range stream.WatchStream(t.Context()) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	status, err := stream.GetStatus(t.Context())
+	if err != nil || status != inproc.RunStatusIdle {
+		t.Fatalf("status = %v, %v, want idle", status, err)
+	}
+	if len(events) == 0 || !containsOutputPayloadType[*agent.ResponseUpdate](events) || len(outputEventsWithPayloadType[[]*message.Message](events)) == 0 {
+		t.Fatalf("events = %v, want agent updates and workflow outputs", events)
+	}
+}
+
+func TestInProcessWorkflow_RunAndStreamProduceSimilarResults(t *testing.T) {
+	first := portSequentialWorkflow(t, "test-agent-1")
+	second := portSequentialWorkflow(t, "test-agent-2")
+	input := []*message.Message{message.NewText("Test message")}
+	run, err := inproc.Default.Run(t.Context(), first, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = run.Close(t.Context()) }()
+	nonStreaming := slices.Collect(run.OutgoingEvents())
+	stream, err := inproc.Default.RunStreaming(t.Context(), second, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.Close(t.Context()) }()
+	sendStreamMessage(t, stream, t.Context(), workflow.TurnToken{EmitEvents: new(true)})
+	var streaming []workflow.Event
+	for event, err := range stream.WatchStream(t.Context()) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		streaming = append(streaming, event)
+	}
+	if len(streaming) == 0 || len(nonStreaming) == 0 {
+		t.Fatal("both entrypoints must produce events")
+	}
+	if got, want := countOutputPayloadType[*agent.ResponseUpdate](nonStreaming), countOutputPayloadType[*agent.ResponseUpdate](streaming); got != want {
+		t.Fatalf("update counts = %d/%d, want equal", got, want)
+	}
+}
+
+func TestInProcessWorkflow_IdleBeforeTakingStream(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		wf := portSequentialWorkflow(t, "test-agent")
+		stream, err := inproc.Default.RunStreaming(t.Context(), wf, []*message.Message{message.NewText("Hello")})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = stream.Close(t.Context()) }()
+		sendStreamMessage(t, stream, t.Context(), workflow.TurnToken{EmitEvents: new(true)})
+		synctest.Wait()
+		if status, err := stream.GetStatus(t.Context()); err != nil || status != inproc.RunStatusIdle {
+			t.Fatalf("status before watch = %v, %v, want idle", status, err)
+		}
+		var events []workflow.Event
+		for event, err := range stream.WatchStream(t.Context()) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			events = append(events, event)
+		}
+		if status, err := stream.GetStatus(t.Context()); err != nil || status != inproc.RunStatusIdle {
+			t.Fatalf("status after watch = %v, %v, want idle", status, err)
+		}
+		if len(events) == 0 || !containsOutputPayloadType[*agent.ResponseUpdate](events) || len(outputEventsWithPayloadType[[]*message.Message](events)) == 0 {
+			t.Fatalf("events = %v, want retained updates and outputs", events)
+		}
+	})
 }
 
 func TestRunAsync_ExecutesWorkflow(t *testing.T) {

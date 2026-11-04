@@ -43,5 +43,9 @@ samples/getting_started/openai/chat_cli_enhanced/chat_cli_enhanced
 tmp/
 temp/
 
+# Sample memory files
+/agent-memory/
+/agent-file-memory/
+
 # VS Code settings
 .vscode/settings.json

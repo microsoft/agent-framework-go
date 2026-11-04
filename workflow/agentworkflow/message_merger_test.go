@@ -10,6 +10,68 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
+func TestMessageMerger_AssemblesMessage(t *testing.T) {
+	creationTime := time.Now().Add(-time.Second)
+	merger := newMessageMerger()
+	for _, word := range []string{"Hello ", "Agent ", "Framework ", "Workflows!"} {
+		merger.AddUpdate(&agent.ResponseUpdate{
+			AgentID: "TestAgent1", AuthorName: "Assistant1", ResponseID: "response", MessageID: "message",
+			Role: message.RoleAssistant, CreatedAt: creationTime,
+			Contents: message.Contents{&message.TextContent{Text: word}},
+		})
+	}
+	response := merger.ComputeMerged("response", "", "")
+	if len(response.Messages) != 1 {
+		t.Fatalf("messages = %v, want one", response.Messages)
+	}
+	msg := response.Messages[0]
+	if msg.Role != message.RoleAssistant || msg.AuthorName != "Assistant1" || response.AgentID != "TestAgent1" {
+		t.Fatalf("message/response identities = %#v/%#v", msg, response)
+	}
+	if response.CreatedAt.IsZero() || response.CreatedAt.Before(creationTime) ||
+		response.CreatedAt.Before(creationTime.Add(-5*time.Second)) || response.CreatedAt.After(creationTime.Add(5*time.Second)) {
+		t.Fatalf("response creation time = %v, want within five seconds of %v", response.CreatedAt, creationTime)
+	}
+	if !msg.CreatedAt.Equal(creationTime) || len(msg.Contents) != 1 || response.FinishReason != "" {
+		t.Fatalf("message = %#v, finish reason = %q", msg, response.FinishReason)
+	}
+}
+
+func TestMessageMerger_PropagatesFinishReason(t *testing.T) {
+	merger := newMessageMerger()
+	addTextUpdate(merger, "response", "Hello", "message", time.Time{})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: "response", MessageID: "message", Role: message.RoleAssistant, FinishReason: "content_filter",
+	})
+	response := merger.ComputeMerged("response", "", "")
+	if response.FinishReason != "content_filter" {
+		t.Fatalf("finish reason = %q, want content_filter", response.FinishReason)
+	}
+}
+
+func TestMessageMerger_AggregatesUsageAndAdditionalCounts(t *testing.T) {
+	merger := newMessageMerger()
+	addTextUpdate(merger, "response-1", "first", "message-1", time.Time{})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		Role: message.RoleAssistant, ResponseID: "response-1", MessageID: "message-1",
+		Contents: message.Contents{&message.UsageContent{Details: message.UsageDetails{
+			InputTokenCount: 2, OutputTokenCount: 3, TotalTokenCount: 5, AdditionalCounts: map[string]int64{"cached": 7, "reasoning": 11},
+		}}},
+	})
+	addTextUpdate(merger, "response-2", "second", "message-2", time.Time{})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		Role: message.RoleAssistant, ResponseID: "response-2", MessageID: "message-2",
+		Contents: message.Contents{&message.UsageContent{Details: message.UsageDetails{
+			InputTokenCount: 29, OutputTokenCount: 7, TotalTokenCount: 36, AdditionalCounts: map[string]int64{"cached": 13, "audio": 17},
+		}}},
+	})
+	usage := merger.ComputeMerged("response-1", "", "").Usage()
+	if usage.InputTokenCount != 31 || usage.OutputTokenCount != 10 || usage.TotalTokenCount != 41 ||
+		usage.AdditionalCounts["cached"] != 20 || usage.AdditionalCounts["reasoning"] != 11 || usage.AdditionalCounts["audio"] != 17 {
+		t.Fatalf("merged usage = %#v", usage)
+	}
+}
+
 func TestMessageMerger_PreservesFirstSeenMessageOrder(t *testing.T) {
 	responseID := "response"
 	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)

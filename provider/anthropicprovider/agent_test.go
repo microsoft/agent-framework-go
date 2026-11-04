@@ -499,6 +499,145 @@ func TestConfigInstructions(t *testing.T) {
 	}
 }
 
+func TestAgentConfigWithToolsAssignsTools(t *testing.T) {
+	fn := functool.MustNew(functool.Config{Name: "TestFunction", Description: "A test function"},
+		func(context.Context, struct{}) (string, error) { return "test result", nil })
+	a, request := captureAgentConfigRequest(t, anthropicprovider.AgentConfig{
+		Model:  "test-model",
+		Config: agent.Config{Name: "Test Agent", Tools: []tool.Tool{fn}},
+	})
+	if a.Name() != "Test Agent" {
+		t.Fatalf("Name = %q, want Test Agent", a.Name())
+	}
+	if _, ok := request["system"]; ok {
+		t.Fatalf("unexpected instructions: %#v", request["system"])
+	}
+	tools, ok := request["tools"].([]any)
+	if !ok || len(tools) != 1 || tools[0].(map[string]any)["name"] != "TestFunction" {
+		t.Fatalf("tools = %#v, want TestFunction", request["tools"])
+	}
+}
+
+func TestAgentConfigWithToolsAndInstructionsAssignsBoth(t *testing.T) {
+	fn := functool.MustNew(functool.Config{Name: "TestFunction", Description: "A test function"},
+		func(context.Context, struct{}) (string, error) { return "test result", nil })
+	a, request := captureAgentConfigRequest(t, anthropicprovider.AgentConfig{
+		Model:        "test-model",
+		Instructions: "Test instructions",
+		Config:       agent.Config{Name: "Test Agent", Tools: []tool.Tool{fn}},
+	})
+	if a.Name() != "Test Agent" {
+		t.Fatalf("Name = %q, want Test Agent", a.Name())
+	}
+	system, ok := request["system"].([]any)
+	if !ok || len(system) != 1 || system[0].(map[string]any)["text"] != "Test instructions" {
+		t.Fatalf("system = %#v, want Test instructions", request["system"])
+	}
+	tools, ok := request["tools"].([]any)
+	if !ok || len(tools) != 1 || tools[0].(map[string]any)["name"] != "TestFunction" {
+		t.Fatalf("tools = %#v, want TestFunction", request["tools"])
+	}
+}
+
+func TestAgentConfigWithoutInstructionsDoesNotSetSystem(t *testing.T) {
+	a, request := captureAgentConfigRequest(t, anthropicprovider.AgentConfig{
+		Model:  "test-model",
+		Config: agent.Config{Name: "Test Agent"},
+	})
+	if a.Name() != "Test Agent" {
+		t.Fatalf("Name = %q, want Test Agent", a.Name())
+	}
+	if _, ok := request["system"]; ok {
+		t.Fatalf("unexpected instructions: %#v", request["system"])
+	}
+}
+
+func TestAgentConfigWithWhitespaceInstructionsDoesNotSetSystem(t *testing.T) {
+	a, request := captureAgentConfigRequest(t, anthropicprovider.AgentConfig{
+		Model:        "test-model",
+		Instructions: "   ",
+		Config:       agent.Config{Name: "Test Agent"},
+	})
+	if a.Name() != "Test Agent" {
+		t.Fatalf("Name = %q, want Test Agent", a.Name())
+	}
+	if _, ok := request["system"]; ok {
+		t.Fatalf("unexpected instructions: %#v", request["system"])
+	}
+}
+
+func TestAgentConfigExplicitMaxTokensUsesProvidedValue(t *testing.T) {
+	requests := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		requests <- request
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"test"}}`)
+	}))
+	defer server.Close()
+	a := anthropicprovider.NewAgent(anthropic.NewClient(
+		option.WithBaseURL(server.URL), option.WithAPIKey("test-key"), option.WithMaxRetries(0),
+	), anthropicprovider.AgentConfig{
+		Model: "claude-haiku-4-5",
+		Config: agent.Config{Name: "Test Agent", RunOptions: []agent.Option{
+			anthropicprovider.MessageNewParams(anthropic.MessageNewParams{MaxTokens: 8192}),
+		}},
+	})
+	session, err := a.CreateSession(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = a.RunText(t.Context(), "Test message", agent.WithSession(session)).Collect()
+	var apiError *anthropic.Error
+	if !errors.As(err, &apiError) || apiError.StatusCode != http.StatusBadRequest {
+		t.Fatalf("error = %v, want HTTP 400", err)
+	}
+	select {
+	case request := <-requests:
+		if request["max_tokens"] != float64(8192) {
+			t.Fatalf("max_tokens = %#v, want 8192", request["max_tokens"])
+		}
+	default:
+		t.Fatal("no request captured")
+	}
+}
+
+func captureAgentConfigRequest(t *testing.T, config anthropicprovider.AgentConfig) (*agent.Agent, map[string]any) {
+	t.Helper()
+	requests := make(chan map[string]any, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Error(err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		requests <- request
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, minimalMessageResponse("test result"))
+	}))
+	defer server.Close()
+	a := anthropicprovider.NewAgent(anthropic.NewClient(
+		option.WithBaseURL(server.URL), option.WithAPIKey("test"), option.WithMaxRetries(0),
+	), config)
+	if _, err := a.RunText(t.Context(), "Test message").Collect(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case request := <-requests:
+		return a, request
+	default:
+		t.Fatal("no request captured")
+		return nil, nil
+	}
+}
+
 func TestTextCitationsBecomeAnnotations(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -931,6 +1070,86 @@ func TestStructuredOutput_NonStreaming(t *testing.T) {
 	}
 	if out.Age != 30 {
 		t.Errorf("out.Age = %d, want %d", out.Age, 30)
+	}
+}
+
+func TestStructuredOutput_NonObject(t *testing.T) {
+	type species string
+	for _, tc := range []struct {
+		name, payload, wantJSON, schemaType string
+		newTarget                           func() any
+	}{
+		{name: "integer", payload: `{"data":42}`, wantJSON: `42`, schemaType: "integer", newTarget: func() any { return new(int) }},
+		{name: "array", payload: `{"data":["a","b"]}`, wantJSON: `["a","b"]`, schemaType: "array", newTarget: func() any { return new([]string) }},
+		{name: "enum", payload: `{"data":"Tiger"}`, wantJSON: `"Tiger"`, schemaType: "string", newTarget: func() any { return new(species) }},
+	} {
+		for _, streaming := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/streaming=%v", tc.name, streaming), func(t *testing.T) {
+				bodyCh := make(chan []byte, 1)
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Errorf("read request body: %v", err)
+						http.Error(w, "internal error", http.StatusInternalServerError)
+						return
+					}
+					bodyCh <- body
+					if streaming {
+						w.Header().Set("Content-Type", "text/event-stream")
+						_, _ = io.WriteString(w, minimalStreamingResponse(tc.payload))
+					} else {
+						w.Header().Set("Content-Type", "application/json")
+						_, _ = io.WriteString(w, minimalMessageResponse(tc.payload))
+					}
+				}))
+				defer server.Close()
+
+				out := tc.newTarget()
+				response, err := newTestClient(t, server).RunText(t.Context(), "get result", agent.WithStructuredOutput(out), agent.Stream(streaming)).Collect()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if response.String() != tc.payload {
+					t.Errorf("response text = %q, want %q", response.String(), tc.payload)
+				}
+				data, err := json.Marshal(out)
+				if err != nil || string(data) != tc.wantJSON {
+					t.Errorf("decoded output = %s, err = %v; want %s", data, err, tc.wantJSON)
+				}
+				var request struct {
+					OutputConfig struct {
+						Format struct {
+							Schema struct {
+								Type                 string                     `json:"type"`
+								Properties           map[string]json.RawMessage `json:"properties"`
+								Required             []string                   `json:"required"`
+								AdditionalProperties *bool                      `json:"additionalProperties"`
+							} `json:"schema"`
+						} `json:"format"`
+					} `json:"output_config"`
+				}
+				body := <-bodyCh
+				if err := json.Unmarshal(body, &request); err != nil {
+					t.Fatal(err)
+				}
+				schema := request.OutputConfig.Format.Schema
+				if schema.Type != "object" || schema.AdditionalProperties == nil || *schema.AdditionalProperties ||
+					!slices.Equal(schema.Required, []string{"data"}) {
+					t.Fatalf("wire schema = %+v, want closed object with required data; request = %s", schema, body)
+				}
+				var property struct{ Type any }
+				if err := json.Unmarshal(schema.Properties["data"], &property); err != nil {
+					t.Fatal(err)
+				}
+				if types, ok := property.Type.([]any); ok {
+					if !slices.Contains(types, any(tc.schemaType)) {
+						t.Errorf("data type = %v, want %s", types, tc.schemaType)
+					}
+				} else if property.Type != tc.schemaType {
+					t.Errorf("data type = %v, want %s", property.Type, tc.schemaType)
+				}
+			})
+		}
 	}
 }
 

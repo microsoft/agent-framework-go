@@ -19,8 +19,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/internal/modelcall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
@@ -74,7 +76,7 @@ func NewAgent(gclient *genai.Client, config AgentConfig) *agent.Agent {
 	}
 	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
-		Run:          c.run,
+		Run:          modelcall.Wrap(c.run, func([]agent.Option) string { return config.Model }),
 		ProviderName: "gcp.gemini",
 		Middlewares:  providerMiddlewares,
 		Format:       c.formatOf,
@@ -82,16 +84,20 @@ func NewAgent(gclient *genai.Client, config AgentConfig) *agent.Agent {
 	}, config.Config)
 }
 
-func (a *client) formatOf(v any) (agent.ResponseFormat, error) {
-	return jsonformat.ForType(reflect.TypeOf(v))
+func (a *client) formatOf(v any) (format.ResponseFormat, error) {
+	responseFormat, err := jsonformat.ForType(reflect.TypeOf(v))
+	if err != nil {
+		return format.ResponseFormat{}, err
+	}
+	return jsonformat.WrapNonObjectSchema(responseFormat)
 }
 
-func (a *client) unmarshal(f agent.ResponseFormat, data []byte, v any) error {
+func (a *client) unmarshal(f format.ResponseFormat, data []byte, v any) error {
 	format, err := jsonformat.FromResponseFormat(f)
 	if err != nil {
 		return err
 	}
-	return format.Unmarshal(data, v)
+	return format.UnmarshalStructuredOutput(data, v)
 }
 
 func (a *client) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -101,7 +107,6 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			yield(nil, err)
 		}
 	}
-
 	if stream, _ := agent.GetOption(options, agent.Stream); !stream {
 		resp, err := a.client.Models.GenerateContent(ctx, a.config.Model, contents, cfg)
 		if err != nil {
@@ -109,6 +114,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				yield(nil, err)
 			}
 		}
+		modelcall.RecordResponse(ctx, resp.ModelVersion, resp.ResponseID)
 		var responseContents []message.Content
 		var finishReason string
 		if len(resp.Candidates) > 0 {
@@ -157,6 +163,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				yield(nil, err)
 				return
 			}
+			modelcall.RecordResponse(ctx, resp.ModelVersion, resp.ResponseID)
 			var streamContents []message.Content
 			var finishReason string
 			if len(resp.Candidates) > 0 {

@@ -19,8 +19,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/internal/modelcall"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
@@ -56,10 +59,16 @@ func NewResponsesAgent(oclient openai.Client, config AgentConfig) *agent.Agent {
 	return agent.New(
 		agent.ProviderConfig{
 			ProviderName: cmp.Or(config.ProviderName, "openai"),
-			Run:          c.run,
-			Middlewares:  providerMiddlewares,
-			Format:       c.formatOf,
-			Unmarshal:    c.unmarshal,
+			Run: modelcall.Wrap(c.run, func(options []agent.Option) string {
+				if token, _ := agent.GetOption(options, agent.WithContinuationToken); token != "" {
+					return ""
+				}
+				params, _ := agent.GetOption(options, ResponsesNewParams)
+				return cmp.Or(params.Model, config.Model)
+			}),
+			Middlewares: providerMiddlewares,
+			Format:      c.formatOf,
+			Unmarshal:   c.unmarshal,
 		}, config.Config,
 	)
 }
@@ -94,20 +103,26 @@ func ResponsesIncludeReasoningEncryptedContent(enabled bool) agent.Option {
 	return responsesIncludeReasoningEncryptedContentOpt(enabled)
 }
 
-func (a *responsesClient) formatOf(v any) (agent.ResponseFormat, error) {
-	return jsonformat.ForType(reflect.TypeOf(v))
+func (a *responsesClient) formatOf(v any) (format.ResponseFormat, error) {
+	responseFormat, err := jsonformat.ForType(reflect.TypeOf(v))
+	if err != nil {
+		return format.ResponseFormat{}, err
+	}
+	return jsonformat.WrapNonObjectSchema(responseFormat)
 }
 
-func (a *responsesClient) unmarshal(format agent.ResponseFormat, data []byte, v any) error {
+func (a *responsesClient) unmarshal(format format.ResponseFormat, data []byte, v any) error {
 	jsonFormat, err := jsonformat.FromResponseFormat(format)
 	if err != nil {
 		return err
 	}
-	return jsonFormat.Unmarshal(data, v)
+	return jsonFormat.UnmarshalStructuredOutput(data, v)
 }
 
 func (a *responsesClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		telemetry.MarkUsed(telemetry.FeatureOpenAI)
+		telemetryOption := telemetryRequestOption(a.config.ProviderName)
 		stream, _ := agent.GetOption(options, agent.Stream)
 
 		body, err := responsesBuildCompletionParams(a.config, messages, options)
@@ -139,7 +154,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 				// Get streaming response
 				streamResp := a.client.Responses.GetStreaming(ctx, ct.ResponseID, responses.ResponseGetParams{
 					StartingAfter: openai.Int(ct.SequenceNumber),
-				}, telemetryRequestOption)
+				}, telemetryOption)
 				defer func() { _ = streamResp.Close() }()
 				streamState := &responsesStreamState{}
 				storeDisabled := disableStoreOutput
@@ -155,6 +170,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 						return
 					}
 					if resp := responsesEventResponse(event); resp != nil {
+						modelcall.RecordResponse(ctx, resp.Model, resp.ID)
 						storeDisabled = storeDisabled || resp.JSON.ExtraFields["store"].Raw() == "false"
 						conversationID = responsesConversationID(resp, requestConversationID, storeDisabled)
 					}
@@ -170,11 +186,12 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 				}
 			} else {
 				// Get complete response
-				resp, err := a.client.Responses.Get(ctx, ct.ResponseID, responses.ResponseGetParams{}, telemetryRequestOption)
+				resp, err := a.client.Responses.Get(ctx, ct.ResponseID, responses.ResponseGetParams{}, telemetryOption)
 				if err != nil {
 					yield(nil, err)
 					return
 				}
+				modelcall.RecordResponse(ctx, resp.Model, resp.ID)
 				conversationID := responsesConversationID(resp, requestConversationID, disableStoreOutput)
 				responsesProcessResponse(resp, ct.SequenceNumber, func(update *agent.ResponseUpdate, err error) bool {
 					if update != nil {
@@ -188,7 +205,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 
 		if stream {
 			// Create streaming response
-			streamResp := a.client.Responses.NewStreaming(ctx, body, telemetryRequestOption)
+			streamResp := a.client.Responses.NewStreaming(ctx, body, telemetryOption)
 			defer func() { _ = streamResp.Close() }()
 			responseID := ""
 			createdAt := time.Time{}
@@ -204,6 +221,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 					return
 				}
 				if resp := responsesEventResponse(event); resp != nil {
+					modelcall.RecordResponse(ctx, resp.Model, resp.ID)
 					storeDisabled = storeDisabled || resp.JSON.ExtraFields["store"].Raw() == "false"
 					conversationID = responsesConversationID(resp, requestConversationID, storeDisabled)
 				}
@@ -233,11 +251,12 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 			}
 		} else {
 			// Create complete response
-			resp, err := a.client.Responses.New(ctx, body, telemetryRequestOption)
+			resp, err := a.client.Responses.New(ctx, body, telemetryOption)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
+			modelcall.RecordResponse(ctx, resp.Model, resp.ID)
 			conversationID := responsesConversationID(resp, requestConversationID, disableStoreOutput)
 			responsesProcessResponse(resp, 0, func(update *agent.ResponseUpdate, err error) bool {
 				if update != nil {
@@ -452,6 +471,11 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			variant.Headers = tl.Headers
 			if tl.Authorization != "" {
 				variant.Authorization = openai.String(tl.Authorization)
+			}
+			// Honor the caller's approval mode. When unset, the Responses API
+			// defaults require_approval to "always".
+			if tl.ApprovalMode != "" {
+				variant.RequireApproval.OfMcpToolApprovalSetting = openai.String(string(tl.ApprovalMode))
 			}
 			params.Tools = append(params.Tools, responses.ToolUnionParam{
 				OfMcp: &variant,

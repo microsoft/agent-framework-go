@@ -1,0 +1,67 @@
+area:agent:
+  - changed-files:
+      - any-glob-to-any-file: ['agent/**']
+
+area:workflow:
+  - changed-files:
+      - any-glob-to-any-file: ['workflow/**']
+
+area:message:
+  - changed-files:
+      - any-glob-to-any-file: ['message/**']
+
+area:tool:
+  - changed-files:
+      - any-glob-to-any-file: ['tool/**']
+
+area:provider:
+  - changed-files:
+      - any-glob-to-any-file: ['provider/**']
+
+area:provider/a2a:
+  - changed-files:
+      - any-glob-to-any-file: ['provider/a2aprovider/**']
+
+area:provider/agui:
+  - changed-files:
+      - any-glob-to-any-file: ['provider/aguiprovider/**']
+
+area:provider/anthropic:
+  - changed-files:
+      - any-glob-to-any-file: ['provider/anthropicprovider/**']
+
+area:provider/copilot:
+  - changed-files:
+      - any-glob-to-any-file: ['provider/copilotprovider/**']
+
+area:provider/foundry:
+  - changed-files:
+      - any-glob-to-any-file: ['provider/foundryprovider/**']
+
+area:provider/gemini:
+  - changed-files:
+      - any-glob-to-any-file: ['provider/geminiprovider/**']
+
+area:provider/openai:
+  - changed-files:
+      - any-glob-to-any-file: ['provider/openaiprovider/**']
+
+area:provider/otel:
+  - changed-files:
+      - any-glob-to-any-file: ['provider/otelprovider/**']
+
+area:internal:
+  - changed-files:
+      - any-glob-to-any-file: ['internal/**']
+
+area:tooling:
+  - changed-files:
+      - any-glob-to-any-file: ['cmd/**']
+
+area:examples:
+  - changed-files:
+      - any-glob-to-any-file: ['examples/**', 'cmd/verifyexamples/examples.go']
+
+area:github:
+  - changed-files:
+      - any-glob-to-any-file: ['.github/**']

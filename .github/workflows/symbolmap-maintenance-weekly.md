@@ -4,7 +4,6 @@ description: Audit assessed mappings and record counterparts implemented by rece
 intent: Keep .NET-to-Go assessments accurate and record newly implemented counterparts, without maintaining the .NET inventory
 tracker-id: symbolmap-maintenance-weekly
 strict: true
-model: "gpt-5.5"
 sandbox:
    agent:
       version: v0.28.25

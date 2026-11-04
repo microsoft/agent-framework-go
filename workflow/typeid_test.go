@@ -4,6 +4,7 @@ package workflow_test
 
 import (
 	"encoding/json"
+	"hash/maphash"
 	"reflect"
 	"testing"
 	"unsafe"
@@ -56,6 +57,26 @@ func (typeIDValueMarkerValue) valueMarker() {}
 type typeIDCustomError struct{}
 
 func (*typeIDCustomError) Error() string { return "type id error" }
+
+func TestTypeID_EqualsIdenticalInstances(t *testing.T) {
+	a := workflow.NewTypeID(reflect.TypeFor[typeIDPayload]())
+	b := workflow.NewTypeID(reflect.TypeFor[typeIDPayload]())
+	if a != b {
+		t.Fatalf("identical type identities differ: %+v, %+v", a, b)
+	}
+	seed := maphash.MakeSeed()
+	if maphash.Comparable(seed, a) != maphash.Comparable(seed, b) {
+		t.Fatal("equal type identities must hash equally")
+	}
+}
+
+func TestTypeID_EqualsRejectsDifferentTypeName(t *testing.T) {
+	a := workflow.NewTypeID(reflect.TypeFor[typeIDPayload]())
+	b := workflow.TypeID{PackageName: a.PackageName, TypeName: "Some.Other.Type"}
+	if a == b {
+		t.Fatal("different type names must not compare equal")
+	}
+}
 
 func TestTypeIDNewTypeIDIdentifiesNamedAndBuiltinTypes(t *testing.T) {
 	cases := []struct {
