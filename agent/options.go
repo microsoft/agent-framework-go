@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
@@ -21,7 +22,7 @@ type Option interface {
 }
 
 type (
-	responseFormatOpt    struct{ ResponseFormat }
+	responseFormatOpt    struct{ format.ResponseFormat }
 	continuationTokenOpt string
 	instructionsOpt      string
 	serviceIDOpt         string
@@ -104,7 +105,14 @@ func WithServiceID(id string) Option {
 	return serviceIDOpt(id)
 }
 
-// WithStructuredOutput sets the variable pointed to by v to the structured output produced by the agent.
+// WithStructuredOutput sets the variable pointed to by v to the structured
+// output produced by the agent. The final response message is decoded after
+// automatic tool execution completes successfully.
+//
+// Providers that require object-root schemas wrap non-object results in a "data"
+// property on the wire, but assign the unwrapped value to v. The response text
+// retains the provider's JSON. Use
+// [WithResponseFormat] to pass an explicit schema without this wrapping.
 func WithStructuredOutput(v any) Option {
 	return structuredOutputOpt{v}
 }
@@ -125,7 +133,7 @@ func Stream(stream bool) Option {
 }
 
 // WithResponseFormat sets the desired response format for the agent run.
-func WithResponseFormat(format ResponseFormat) Option {
+func WithResponseFormat(format format.ResponseFormat) Option {
 	return responseFormatOpt{format}
 }
 

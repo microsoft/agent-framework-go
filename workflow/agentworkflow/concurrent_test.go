@@ -160,6 +160,9 @@ func TestConcurrentWorkflowBuilder_ExplicitOutputDesignationRejectsNonParticipan
 			if !strings.Contains(err.Error(), "not a participant") {
 				t.Fatalf("error = %q, want it to mention not a participant", err.Error())
 			}
+			if !strings.Contains(err.Error(), nonParticipant.Name()) {
+				t.Fatalf("error = %q, want it to name non-participant %q", err.Error(), nonParticipant.Name())
+			}
 		})
 	}
 }
@@ -256,7 +259,11 @@ func TestConcurrentWorkflowBuilder_AgentsRunInParallel(t *testing.T) {
 			t.Fatalf("abc update count = %d in %q, want 4", count, updateText)
 		}
 
-		resultTexts := collectMessageTexts(collectOutputMessages(events))
+		resultMessages := collectOutputMessages(events)
+		if len(resultMessages) != 2 {
+			t.Fatalf("result message count = %d, want 2", len(resultMessages))
+		}
+		resultTexts := collectMessageTexts(resultMessages)
 		if len(resultTexts) != 2 {
 			t.Fatalf("result texts = %v, want 2 messages", resultTexts)
 		}
@@ -265,5 +272,18 @@ func TestConcurrentWorkflowBuilder_AgentsRunInParallel(t *testing.T) {
 				t.Fatalf("result texts = %v, missing %q", resultTexts, want)
 			}
 		}
+	}
+}
+
+func TestConcurrentWorkflowBuilder_NoArgWithOutputFromIsAnError(t *testing.T) {
+	a := newLabeledEchoAgent("a", "A", "from-a")
+	b := newLabeledEchoAgent("b", "B", "from-b")
+	// An explicit output designation with no agents (e.g. spreading an
+	// accidentally empty slice) is a caller error: Build must reject it rather
+	// than silently zeroing all output or guessing a default. Matches Python's
+	// hard error for an explicit-but-empty output designation.
+	_, err := agentworkflow.NewConcurrentWorkflowBuilder(a, b).WithOutputFrom().Build()
+	if err == nil {
+		t.Fatal("no-arg WithOutputFrom() should error, got nil")
 	}
 }

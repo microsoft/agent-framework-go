@@ -3,6 +3,7 @@
 package telemetry
 
 import (
+	"fmt"
 	"maps"
 	"net/http"
 	"os"
@@ -129,6 +130,7 @@ func detectVersion() string {
 	if !ok {
 		return "v0.0.0"
 	}
+
 	if info.Main.Path == modulePath && info.Main.Version != "" && info.Main.Version != "(devel)" {
 		return info.Main.Version
 	}
@@ -138,4 +140,14 @@ func detectVersion() string {
 		}
 	}
 	return "v0.0.0"
+}
+
+// ErrorTypeName returns the unqualified concrete type name of err for the
+// error.type telemetry attribute.
+func ErrorTypeName(err error) string {
+	t := fmt.Sprintf("%T", err)
+	if i := strings.LastIndexByte(t, '.'); i >= 0 {
+		t = t[i+1:]
+	}
+	return t
 }
