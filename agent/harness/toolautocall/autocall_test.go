@@ -1383,6 +1383,83 @@ func TestFunctionInvoking_MaximumFunctionCallsCapsSingleCallsPerIteration(t *tes
 	}
 }
 
+func TestFunctionInvoking_MaximumFunctionCallsIndependentRunsWithBackgroundContext(t *testing.T) {
+	maxCalls := 1
+	actualCallCount := 0
+
+	tools := []tool.Tool{
+		functool.MustNew(functool.Config{Name: "DoWork"},
+			func(ctx context.Context, args struct{}) (string, error) {
+				actualCallCount++
+				return "Work done", nil
+			}),
+	}
+
+	session := &agent.Session{}
+	bgCtx := context.Background()
+
+	cfg := toolautocall.Config{
+		MaximumFunctionCallsPerRequest: &maxCalls,
+	}
+	middleware := toolautocall.New(cfg)
+
+	// Turn 1 with context.Background(): executes 1 call
+	nextTurn1 := func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		var round int
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			round++
+			if round == 1 {
+				yield(&agent.ResponseUpdate{
+					Role:     message.RoleAssistant,
+					Contents: []message.Content{&message.FunctionCallContent{CallID: "c1", Name: "DoWork"}},
+				}, nil)
+				return
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "turn 1 done"}},
+			}, nil)
+		}
+	}
+	for update, err := range middleware.Run(nextTurn1, bgCtx, []*message.Message{message.NewText("run 1")}, agent.WithSession(session), agent.WithTool(tools[0])) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = update
+	}
+	if actualCallCount != 1 {
+		t.Fatalf("expected 1 call in turn 1, got %d", actualCallCount)
+	}
+
+	// Turn 2 with same context.Background() and same session: MUST get a fresh budget of 1!
+	nextTurn2 := func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		var round int
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			round++
+			if round == 1 {
+				yield(&agent.ResponseUpdate{
+					Role:     message.RoleAssistant,
+					Contents: []message.Content{&message.FunctionCallContent{CallID: "c2", Name: "DoWork"}},
+				}, nil)
+				return
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "turn 2 done"}},
+			}, nil)
+		}
+	}
+	for update, err := range middleware.Run(nextTurn2, bgCtx, []*message.Message{message.NewText("run 2")}, agent.WithSession(session), agent.WithTool(tools[0])) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = update
+	}
+	if actualCallCount != 2 {
+		t.Fatalf("expected 2 total calls across independent turns with context.Background(), got %d", actualCallCount)
+	}
+}
+
 func TestFunctionInvoking_MaximumFunctionCallsAllowsCurrentBatchToFinish(t *testing.T) {
 	maxCalls := 2
 	actualCallCount := 0

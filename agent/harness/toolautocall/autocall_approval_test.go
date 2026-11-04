@@ -2644,3 +2644,77 @@ func TestFunctionInvoking_HostedToolApprovalPreservesLocalBudgetWithoutCountingH
 		t.Fatalf("unexpected final response: %q", text)
 	}
 }
+
+func TestFunctionInvoking_SafeToolsNotConvertedToApprovalsAtBudgetLimit(t *testing.T) {
+	safeTool := functool.MustNew(functool.Config{Name: "safe_tool"}, func(ctx context.Context, _ struct{}) (string, error) {
+		return "safe result", nil
+	})
+	sensitiveTool := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "sensitive_tool"}, func(ctx context.Context, _ struct{}) (string, error) {
+		return "sensitive result", nil
+	}))
+
+	// Set budget = 1, and configure tools as AdditionalTools so they remain available
+	maxCalls := 1
+	cfg := toolautocall.Config{
+		MaximumFunctionCallsPerRequest: &maxCalls,
+		AdditionalTools:                []tool.Tool{safeTool, sensitiveTool},
+	}
+	middleware := toolautocall.New(cfg)
+
+	// Turn 1, Iteration 0: model calls safe_tool -> executed, consumes 1 call (reaches budget).
+	// Turn 1, Iteration 1: model returns both safe_tool and sensitive_tool.
+	// Because sensitive_tool requires approval, middleware pauses and prepares approvals.
+	// safe_tool must NOT be converted to an approval request even though budget has been reached.
+	var round int
+	next := func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		round++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if round == 1 {
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "call-safe-1", Name: "safe_tool"},
+					},
+				}, nil)
+				return
+			}
+			if round == 2 {
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "call-safe-2", Name: "safe_tool"},
+						&message.FunctionCallContent{CallID: "call-sensitive-1", Name: "sensitive_tool"},
+					},
+				}, nil)
+				return
+			}
+		}
+	}
+
+	session := &agent.Session{}
+	var approvalRequests []*message.ToolApprovalRequestContent
+
+	for update, err := range middleware.Run(next, t.Context(), []*message.Message{message.NewText("hello")}, agent.WithSession(session)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range update.Contents {
+			if req, ok := c.(*message.ToolApprovalRequestContent); ok {
+				approvalRequests = append(approvalRequests, req)
+			}
+		}
+	}
+
+	if len(approvalRequests) != 1 {
+		t.Fatalf("expected exactly 1 approval request, got %d", len(approvalRequests))
+	}
+	fcc, ok := approvalRequests[0].ToolCall.(*message.FunctionCallContent)
+	if !ok || fcc.CallID != "call-sensitive-1" {
+		t.Fatalf("expected approval request for call-sensitive-1, got %v", approvalRequests[0].ToolCall)
+	}
+	for _, req := range approvalRequests {
+		if fc, ok := req.ToolCall.(*message.FunctionCallContent); ok && fc.Name == "safe_tool" {
+			t.Fatalf("safe_tool was unexpectedly converted to an approval request: %+v", req)
+		}
+	}
+}

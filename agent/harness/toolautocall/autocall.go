@@ -29,7 +29,6 @@ const (
 	defaultMaximumIterationsPerRequest        = 40
 	pendingApprovalRequestsStateKey           = "toolautocall.pendingApprovalRequests"
 	pendingAutoApprovedCallsStateKey          = "toolautocall.pendingAutoApprovedCalls"
-	budgetConsumedCallsStateKey               = "toolautocall.consumedFunctionCalls"
 )
 
 // Tracer instruments individual tool invocations without depending on a tracing
@@ -127,13 +126,19 @@ type Config struct {
 	MaximumIterationsPerRequest *int
 
 	// MaximumFunctionCallsPerRequest is the maximum number of tool invocations allowed
-	// in a single run. The limit is evaluated before each batch of function calls; if
-	// the limit has not been reached, the entire active batch is executed, which may
-	// cause the total invocations to exceed this value. When the limit is reached,
-	// the middleware makes a final provider request without schema tools so no more
-	// local function calls are requested. When nil, no call-count limit is enforced.
-	// Zero allows the model to run without invoking any automatic function calls.
-	// Negative values are invalid.
+	// for a single provider tool-calling request.
+	//
+	// The limit is evaluated before each batch of function calls; if the limit has not
+	// been reached, the entire active batch is executed, which may cause the total
+	// invocations to exceed this value. When the limit is reached, the middleware makes
+	// a final provider request without schema tools so no further function calls are requested.
+	//
+	// When a function call requires human approval, execution is suspended and any prior
+	// invocations within the active turn are carried forward to the resumed approval request.
+	// Independent user turns receive a fresh budget.
+	//
+	// When nil, no call-count limit is enforced. Zero allows the model to run without
+	// invoking any automatic function calls. Negative values are invalid.
 	MaximumFunctionCallsPerRequest *int
 
 	// NewID generates synthetic IDs for generated tool-result messages and
@@ -320,12 +325,7 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			}
 			messagesCloned = messagesCloned || changed
 		}
-		var err error
-		totalFunctionCalls, err = f.loadBudgetConsumedCalls(session, ctx, messages, restoredApprovalConsumed)
-		if err != nil {
-			yield(nil, err)
-			return
-		}
+		totalFunctionCalls = restoredApprovalConsumed
 		tools, _ := f.createToolsMap(opts)
 
 		// This is a synthetic ID since we're generating the tool messages instead of getting them from
@@ -382,7 +382,6 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 				// Invoke approved approval responses, which generates some additional FRC wrapped in ChatMessage.
 				newMsg, executedCount, errCount, err = f.invokeApprovedToolApprovalResponses(ctx, notInvokedMsgs, tools, 0)
 				totalFunctionCalls += executedCount
-				f.saveBudgetConsumedCalls(session, ctx, totalFunctionCalls)
 			}
 			if newMsg != nil {
 				opts = updateOptionsForNextIteration(opts)
@@ -471,14 +470,13 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 				hasApprovalRequiringFcc, lastApprovalCheckedFCCIdx = checkForApprovalRequiringFCC(functionCallContents, tools, hasApprovalRequiringFcc, lastApprovalCheckedFCCIdx)
 				if hasApprovalRequiringFcc {
 					pendingApprovalProduced = true
-					f.saveBudgetConsumedCalls(session, ctx, totalFunctionCalls)
 					// If we've encountered a function call content that requires approval,
 					// we need to ask for approval for all functions, since we cannot mix and match.
 					// Convert all function call contents into approval requests from the last yielded update index
 					// and yield all those updates.
 					for ; lastYieldedUpdateIdx < len(updates); lastYieldedUpdateIdx++ {
 						updateToYield := updates[lastYieldedUpdateIdx]
-						updatedContent, err := f.prepareApprovalContents(ctx, updateToYield.Contents, tools, session, totalFunctionCalls)
+						updatedContent, err := f.prepareApprovalContents(ctx, updateToYield.Contents, tools, session)
 						if err != nil {
 							yield(nil, err)
 							return
@@ -523,7 +521,6 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			var err error
 			newMsg, executedCount, errCount, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount)
 			totalFunctionCalls += executedCount
-			f.saveBudgetConsumedCalls(session, ctx, totalFunctionCalls)
 
 			// Stream any generated function results. This mirrors what's done for ResponseAsync, where the returned messages
 			// includes all activities, including generated function results.
@@ -565,7 +562,7 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 	}
 }
 
-func (f *autocall) prepareApprovalContents(ctx context.Context, contents message.Contents, tools map[string]tool.SchemaTool, session *agent.Session, totalFunctionCalls int) (message.Contents, error) {
+func (f *autocall) prepareApprovalContents(ctx context.Context, contents message.Contents, tools map[string]tool.SchemaTool, session *agent.Session) (message.Contents, error) {
 	var updated message.Contents
 	var autoApproved []*message.FunctionCallContent
 	for i, c := range contents {
@@ -575,8 +572,7 @@ func (f *autocall) prepareApprovalContents(ctx context.Context, contents message
 			}
 			declaration, known := tools[fcc.Name]
 			_, invocable := declaration.(tool.FuncTool)
-			atBudgetLimit := f.maximumFunctionCallsPerRequest != nil && totalFunctionCalls >= *f.maximumFunctionCallsPerRequest
-			if !f.disableApprovalNotRequiredBypassing && session != nil && known && invocable && !toolRequiresApproval(declaration) && !atBudgetLimit {
+			if !f.disableApprovalNotRequiredBypassing && session != nil && known && invocable && !toolRequiresApproval(declaration) {
 				autoApproved = append(autoApproved, snapshotFunctionCall(fcc))
 				updated[i] = nil
 				continue
@@ -912,17 +908,6 @@ func approvalResponseNeedsProcessingByRequestID(msgs []*message.Message) map[str
 	return result
 }
 
-type budgetConsumedCallsState struct {
-	RunKey   string `json:"runKey,omitempty"`
-	Consumed int    `json:"consumed"`
-}
-
-func runKey(ctx context.Context) string {
-	if ctx == nil {
-		return ""
-	}
-	return fmt.Sprintf("%p", ctx)
-}
 
 func hasAnyApprovalResponse(msgs []*message.Message) bool {
 	for _, msg := range msgs {
@@ -938,39 +923,6 @@ func hasAnyApprovalResponse(msgs []*message.Message) bool {
 	return false
 }
 
-func (f *autocall) loadBudgetConsumedCalls(session *agent.Session, ctx context.Context, messages []*message.Message, restoredApprovalConsumed int) (int, error) {
-	if session == nil {
-		return 0, nil
-	}
-	currentRunKey := runKey(ctx)
-	var active budgetConsumedCallsState
-	ok, err := session.Get(budgetConsumedCallsStateKey, &active)
-	if err != nil {
-		return 0, err
-	}
-	if ok && active.RunKey != "" && active.RunKey == currentRunKey {
-		return active.Consumed, nil
-	}
-	if restoredApprovalConsumed > 0 {
-		return restoredApprovalConsumed, nil
-	}
-	if hasAnyApprovalResponse(messages) {
-		var state pendingApprovalRequestsState
-		if found, _ := session.Get(pendingApprovalRequestsStateKey, &state); found {
-			return state.Consumed, nil
-		}
-	}
-	return 0, nil
-}
-
-func (f *autocall) saveBudgetConsumedCalls(session *agent.Session, ctx context.Context, consumed int) {
-	if session != nil {
-		session.Set(budgetConsumedCallsStateKey, budgetConsumedCallsState{
-			RunKey:   runKey(ctx),
-			Consumed: consumed,
-		})
-	}
-}
 
 type pendingApprovalRequestsState struct {
 	Requests []*message.ToolApprovalRequestContent `json:"requests,omitempty"`
