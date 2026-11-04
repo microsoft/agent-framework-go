@@ -15,8 +15,10 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/internal/modelcall"
 	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -26,10 +28,16 @@ import (
 	"github.com/openai/openai-go/v3/shared"
 )
 
-var telemetryRequestOption = option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-	req.Header = telemetry.PrependAgentFrameworkToHTTPHeader(req.Header)
-	return next(req)
-})
+func telemetryRequestOption(providerName string) option.RequestOption {
+	apply := telemetry.ApplyToHTTPRequest
+	if providerName == "microsoft.foundry" {
+		apply = telemetry.ApplyToFoundryHTTPRequest
+	}
+	return option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+		apply(req)
+		return next(req)
+	})
+}
 
 type chatClient struct {
 	client openai.Client
@@ -90,26 +98,35 @@ func NewChatCompletionsAgent(oclient openai.Client, config AgentConfig) *agent.A
 	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
 		ProviderName: cmp.Or(config.ProviderName, "openai"),
-		Run:          c.run,
-		Middlewares:  providerMiddlewares,
-		Format:       c.formatOf,
-		Unmarshal:    c.unmarshal,
+		Run: modelcall.Wrap(c.run, func(options []agent.Option) string {
+			params, _ := agent.GetOption(options, ChatCompletionNewParams)
+			return cmp.Or(params.Model, config.Model)
+		}),
+		Middlewares: providerMiddlewares,
+		Format:      c.formatOf,
+		Unmarshal:   c.unmarshal,
 	}, config.Config)
 }
 
-func (a *chatClient) formatOf(v any) (agent.ResponseFormat, error) {
-	return jsonformat.ForType(reflect.TypeOf(v))
+func (a *chatClient) formatOf(v any) (format.ResponseFormat, error) {
+	responseFormat, err := jsonformat.ForType(reflect.TypeOf(v))
+	if err != nil {
+		return format.ResponseFormat{}, err
+	}
+	return jsonformat.WrapNonObjectSchema(responseFormat)
 }
 
-func (a *chatClient) unmarshal(format agent.ResponseFormat, data []byte, v any) error {
+func (a *chatClient) unmarshal(format format.ResponseFormat, data []byte, v any) error {
 	jsonFormat, err := jsonformat.FromResponseFormat(format)
 	if err != nil {
 		return err
 	}
-	return jsonFormat.Unmarshal(data, v)
+	return jsonFormat.UnmarshalStructuredOutput(data, v)
 }
 
 func (a *chatClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	telemetry.MarkUsed(telemetry.FeatureOpenAI)
+	telemetryOption := telemetryRequestOption(a.config.ProviderName)
 	body, err := buildCompletionParams(a.config.Model, messages, options)
 	if err != nil {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -117,12 +134,13 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		}
 	}
 	if stream, _ := agent.GetOption(options, agent.Stream); !stream {
-		resp, err := a.client.Chat.Completions.New(ctx, body, telemetryRequestOption)
+		resp, err := a.client.Chat.Completions.New(ctx, body, telemetryOption)
 		if err != nil {
 			return func(yield func(*agent.ResponseUpdate, error) bool) {
 				yield(nil, err)
 			}
 		}
+		modelcall.RecordResponse(ctx, resp.Model, resp.ID)
 		// Some services return a successful response with no choices, e.g.
 		// Azure OpenAI when the prompt is blocked by a content filter (the
 		// response carries prompt_filter_results and usage instead). Tolerate
@@ -177,25 +195,20 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		body.StreamOptions.IncludeUsage = openai.Bool(true)
 	}
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
-		stream := a.client.Chat.Completions.NewStreaming(ctx, body, telemetryRequestOption)
+		stream := a.client.Chat.Completions.NewStreaming(ctx, body, telemetryOption)
 		defer func() { _ = stream.Close() }()
 		var acc openai.ChatCompletionAccumulator
+		var created int64
 		for stream.Next() {
 			chunk := stream.Current()
+			modelcall.RecordResponse(ctx, chunk.Model, chunk.ID)
 			if !acc.AddChunk(chunk) {
 				continue
 			}
+			if created <= 0 && chunk.Created > 0 {
+				created = chunk.Created
+			}
 			var contents []message.Content
-			if tc, ok := acc.JustFinishedToolCall(); ok {
-				contents = append(contents, &message.FunctionCallContent{
-					CallID:    tc.ID,
-					Name:      tc.Name,
-					Arguments: tc.Arguments,
-				})
-			}
-			if refusal, ok := acc.JustFinishedRefusal(); ok {
-				contents = append(contents, &message.ErrorContent{Message: refusal, ErrorCode: "Refusal"})
-			}
 			role := message.RoleAssistant
 			if len(chunk.Choices) > 0 {
 				choice := chunk.Choices[0]
@@ -224,8 +237,34 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				return
 			}
 		}
-		if stream.Err() != nil {
-			yield(nil, stream.Err())
+		if err := stream.Err(); err != nil {
+			yield(nil, err)
+			return
+		}
+		if len(acc.Choices) == 0 {
+			return
+		}
+		choice := acc.Choices[0]
+		var contents []message.Content
+		for _, tc := range choice.Message.ToolCalls {
+			contents = append(contents, &message.FunctionCallContent{
+				CallID:    tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			})
+		}
+		if choice.Message.Refusal != "" {
+			contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal, ErrorCode: "Refusal"})
+		}
+		if len(contents) > 0 {
+			yield(&agent.ResponseUpdate{
+				Contents:     contents,
+				Role:         mapRole(string(choice.Message.Role)),
+				ResponseID:   acc.ID,
+				MessageID:    acc.ID,
+				FinishReason: normalizeChatFinishReason(choice.FinishReason),
+				CreatedAt:    time.Unix(created, 0),
+			}, nil)
 		}
 	}
 }
@@ -641,6 +680,7 @@ func addUsage(contents message.Contents, usage openai.CompletionUsage) message.C
 		}
 		details.AdditionalCounts[k] = v
 	}
+	add("PromptTokensDetails.CacheWriteTokens", usage.PromptTokensDetails.CacheWriteTokens)
 	add("PromptTokensDetails.AudioTokens", usage.PromptTokensDetails.AudioTokens)
 	add("CompletionTokensDetails.AudioTokens", usage.CompletionTokensDetails.AudioTokens)
 	add("CompletionTokensDetails.AcceptedPredictionTokens", usage.CompletionTokensDetails.AcceptedPredictionTokens)

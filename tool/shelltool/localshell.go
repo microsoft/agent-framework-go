@@ -17,6 +17,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
@@ -199,6 +200,7 @@ func (t *Local) Run(ctx context.Context, command string) (Result, error) {
 	if err := t.exec.opts.validate(); err != nil {
 		return Result{}, err
 	}
+	telemetry.MarkUsed(telemetry.FeatureShell)
 	request := ShellRequest{Command: command, WorkingDirectory: t.exec.opts.WorkingDirectory}
 	if allowed, reason := t.exec.opts.Policy.Evaluate(request); !allowed {
 		return Result{}, fmt.Errorf("%w: %s", errCommandRejected, reason)
@@ -253,6 +255,7 @@ func (e *localShellExecutor) initialize(ctx context.Context) error {
 	if e.opts.Mode != ModePersistent {
 		return nil
 	}
+	telemetry.MarkUsed(telemetry.FeatureShell)
 	shell, err := e.opts.resolvedShell()
 	if err != nil {
 		return err

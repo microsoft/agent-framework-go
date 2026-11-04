@@ -3,7 +3,9 @@
 package compaction_test
 
 import (
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent/compaction"
@@ -16,8 +18,7 @@ type charCounter struct{}
 func (charCounter) CountTokens(text string) int { return len(text) }
 
 // buildToolCallMessages creates a sequence of user + tool-call + tool-result + assistant messages.
-// Each turn produces a group of 3 messages (assistant call, tool result, and assistant reply),
-// preceded by a user message.
+// Each turn produces three groups: user, atomic tool call/result, and assistant reply.
 func buildToolCallMessages(n int) []*message.Message {
 	msgs := make([]*message.Message, 0, n*4)
 	for i := range n {
@@ -55,6 +56,7 @@ func TestContextWindowStrategy_InvalidMaxOutputTokens(t *testing.T) {
 	}{
 		{"negative", 1000, -1},
 		{"equal", 1000, 1000},
+		{"immediately_above", 1000, 1001},
 		{"greater", 1000, 1500},
 	}
 	for _, tc := range cases {
@@ -67,6 +69,9 @@ func TestContextWindowStrategy_InvalidMaxOutputTokens(t *testing.T) {
 			_, err := s.Compact(t.Context(), index)
 			if err == nil {
 				t.Fatalf("expected error for MaxOutputTokens=%d with MaxContextWindowTokens=%d", tc.maxOutput, tc.maxCtx)
+			}
+			if !strings.Contains(err.Error(), "MaxOutputTokens") {
+				t.Fatalf("expected MaxOutputTokens validation error, got %v", err)
 			}
 		})
 	}
@@ -107,7 +112,7 @@ func TestContextWindowStrategy_InvalidThresholds(t *testing.T) {
 }
 
 func TestContextWindowStrategy_NoCompactionWhenUnderBudget(t *testing.T) {
-	// Build messages with a tiny token footprint; budget is set very large.
+	// Keep removable tool groups so the preservation floor cannot mask threshold gating.
 	msgs := buildToolCallMessages(3)
 	index := compaction.CreateMessageIndex(msgs, charCounter{})
 	initialCount := index.IncludedGroupCount()
@@ -129,21 +134,18 @@ func TestContextWindowStrategy_NoCompactionWhenUnderBudget(t *testing.T) {
 }
 
 func TestContextWindowStrategy_EvictsToolResultsBeforeTruncating(t *testing.T) {
-	// Each "u" and "a" message is 1 char each; tool call/result are 1 char too.
-	// With charCounter each token = 1 character.
-	// Build enough messages so the index exceeds the tool-eviction threshold.
+	// Text uses charCounter; tool-call/result contents still use byte-count estimates.
 	msgs := buildToolCallMessages(5)
 	msgs = append(msgs, textMessage(message.RoleUser, "final"))
 
 	index := compaction.CreateMessageIndex(msgs, charCounter{})
-	totalTokens := index.IncludedTokenCount()
 
-	// Set budget such that tool-eviction fires (threshold = 0.1 so even a small count triggers).
+	// Eviction fires above 10 tokens; the expanded summaries stay below truncation's 990.
 	s := &compaction.ContextWindowStrategy{
-		MaxContextWindowTokens: totalTokens + 1,
+		MaxContextWindowTokens: 1000,
 		MaxOutputTokens:        0,
-		ToolEvictionThreshold:  0.01, // always fires
-		TruncationThreshold:    0.99, // never fires on this dataset
+		ToolEvictionThreshold:  0.01,
+		TruncationThreshold:    0.99,
 	}
 	compacted, err := s.Compact(t.Context(), index)
 	if err != nil {
@@ -255,5 +257,129 @@ func TestContextWindowStrategy_DefaultThresholdsUsedWhenZero(t *testing.T) {
 	got2 := index2.IncludedGroupCount()
 	if got1 != got2 {
 		t.Fatalf("zero-threshold (%d groups) != explicit (%d groups)", got1, got2)
+	}
+}
+
+func TestContextWindowStrategy_Constructor_CustomThresholds_SetsProperties(t *testing.T) {
+	strategy := &compaction.ContextWindowStrategy{
+		MaxContextWindowTokens: 1_000_000,
+		MaxOutputTokens:        100_000,
+		ToolEvictionThreshold:  0.3,
+		TruncationThreshold:    0.6,
+	}
+	compactIndex(t, strategy, compaction.CreateMessageIndex(nil, nil))
+	if budget := strategy.MaxContextWindowTokens - strategy.MaxOutputTokens; budget != 900_000 {
+		t.Fatalf("input budget = %d, want 900000", budget)
+	}
+	if strategy.ToolEvictionThreshold != 0.3 || strategy.TruncationThreshold != 0.6 {
+		t.Fatalf("thresholds = %g/%g, want 0.3/0.6", strategy.ToolEvictionThreshold, strategy.TruncationThreshold)
+	}
+}
+
+func TestContextWindowStrategy_Constructor_InvalidContextWindow_Throws(t *testing.T) {
+	for _, contextWindow := range []int{0, -1} {
+		t.Run(fmt.Sprint(contextWindow), func(t *testing.T) {
+			strategy := &compaction.ContextWindowStrategy{MaxContextWindowTokens: contextWindow, MaxOutputTokens: 100}
+			_, err := strategy.Compact(t.Context(), compaction.CreateMessageIndex(nil, nil))
+			if err == nil || !strings.Contains(err.Error(), "MaxContextWindowTokens") {
+				t.Fatalf("Compact error = %v, want invalid context-window error", err)
+			}
+		})
+	}
+}
+
+func TestContextWindowStrategy_Constructor_InvalidOutputTokens_Throws(t *testing.T) {
+	for _, maxOutput := range []int{-1, 1000, 1001} {
+		t.Run(fmt.Sprint(maxOutput), func(t *testing.T) {
+			strategy := &compaction.ContextWindowStrategy{MaxContextWindowTokens: 1000, MaxOutputTokens: maxOutput}
+			_, err := strategy.Compact(t.Context(), compaction.CreateMessageIndex(nil, nil))
+			if err == nil || !strings.Contains(err.Error(), "MaxOutputTokens") {
+				t.Fatalf("Compact error = %v, want invalid output-token error", err)
+			}
+		})
+	}
+}
+
+func TestContextWindowStrategy_CompactAsync_BelowToolEvictionThreshold_NoCompactionAsync(t *testing.T) {
+	strategy := &compaction.ContextWindowStrategy{MaxContextWindowTokens: 1000, MaxOutputTokens: 100}
+	index := compaction.CreateMessageIndex([]*message.Message{
+		textMessage(message.RoleUser, "Hello"),
+		textMessage(message.RoleAssistant, "Hi there!"),
+	}, nil)
+	if compactIndex(t, strategy, index) {
+		t.Fatal("unexpected compaction below the tool-eviction threshold")
+	}
+	if got := index.IncludedGroupCount(); got != 2 {
+		t.Fatalf("IncludedGroupCount = %d, want 2", got)
+	}
+}
+
+func TestContextWindowStrategy_CompactAsync_AboveTruncationThreshold_TruncatesOldestAsync(t *testing.T) {
+	strategy := &compaction.ContextWindowStrategy{
+		MaxContextWindowTokens: 10,
+		MaxOutputTokens:        5,
+		ToolEvictionThreshold:  0.5,
+		TruncationThreshold:    0.8,
+	}
+	if budget := strategy.MaxContextWindowTokens - strategy.MaxOutputTokens; budget != 5 {
+		t.Fatalf("input budget = %d, want 5", budget)
+	}
+	index := compaction.CreateMessageIndex([]*message.Message{
+		textMessage(message.RoleUser, "First user message"),
+		textMessage(message.RoleAssistant, "First response"),
+		textMessage(message.RoleUser, "Second user message"),
+		textMessage(message.RoleAssistant, "Second response"),
+	}, nil)
+	groupsBefore := index.IncludedGroupCount()
+	tokensBefore := index.IncludedTokenCount()
+	if tokensBefore <= 4 || groupsBefore <= 1 {
+		t.Fatalf("tokens/groups before = %d/%d, want >4/>1", tokensBefore, groupsBefore)
+	}
+	if !compactIndex(t, strategy, index) {
+		t.Fatal("expected truncation above the token threshold")
+	}
+	if got := index.IncludedGroupCount(); got >= groupsBefore {
+		t.Fatalf("included groups = %d, want fewer than %d", got, groupsBefore)
+	}
+}
+
+func TestContextWindowStrategy_CompactAsync_ToolCallsAboveEvictionThreshold_CollapsesToolCallsAsync(t *testing.T) {
+	strategy := &compaction.ContextWindowStrategy{
+		MaxContextWindowTokens: 10,
+		MaxOutputTokens:        5,
+		ToolEvictionThreshold:  0.5,
+		TruncationThreshold:    0.9,
+	}
+	index := compaction.CreateMessageIndex([]*message.Message{
+		{Role: message.RoleAssistant, Contents: message.Contents{
+			&message.FunctionCallContent{CallID: "call1", Name: "get_data", Arguments: `{"query":"test"}`},
+		}},
+		functionResultMessage("call1", "Here is a long result with many words to ensure we exceed the token threshold"),
+		textMessage(message.RoleUser, "What did you find?"),
+		textMessage(message.RoleAssistant, "Based on the results I found information."),
+	}, nil)
+	if !compactIndex(t, strategy, index) {
+		t.Fatal("expected compaction above the tool-eviction threshold")
+	}
+}
+
+func TestContextWindowStrategy_Constructor_EqualThresholds_Succeeds(t *testing.T) {
+	strategy := &compaction.ContextWindowStrategy{
+		MaxContextWindowTokens: 1000,
+		MaxOutputTokens:        100,
+		ToolEvictionThreshold:  0.7,
+		TruncationThreshold:    0.7,
+	}
+	compactIndex(t, strategy, compaction.CreateMessageIndex(nil, nil))
+	if strategy.ToolEvictionThreshold != 0.7 || strategy.TruncationThreshold != 0.7 {
+		t.Fatalf("thresholds = %g/%g, want 0.7/0.7", strategy.ToolEvictionThreshold, strategy.TruncationThreshold)
+	}
+}
+
+func TestContextWindowStrategy_Constructor_ZeroMaxOutputTokens_FullBudget(t *testing.T) {
+	strategy := &compaction.ContextWindowStrategy{MaxContextWindowTokens: 1_000_000, MaxOutputTokens: 0}
+	compactIndex(t, strategy, compaction.CreateMessageIndex(nil, nil))
+	if budget := strategy.MaxContextWindowTokens - strategy.MaxOutputTokens; budget != 1_000_000 {
+		t.Fatalf("input budget = %d, want 1000000", budget)
 	}
 }

@@ -54,10 +54,20 @@ For a detailed .NET-to-Go feature comparison, see the [.NET and Go SDK feature c
 - **Microsoft Foundry Agents**: Build project-backed Foundry agents, invoke existing server-side Foundry agents, pass Foundry client headers, capture served-model metadata, and use Foundry memory. Foundry-hosted deployment is not implemented yet in the Go SDK.
   - [Foundry examples](./examples/02-agents/providers/foundry/) | [Foundry provider](./provider/foundryprovider/)
 - **Observability**: OpenTelemetry integration for distributed tracing, monitoring, and debugging.
-  - [Agent OpenTelemetry](./provider/otelprovider/) | [Workflow OpenTelemetry](./workflow/observability/opentelemetry/)
+  - [Agent and embedding OpenTelemetry](./provider/otelprovider/) | [Workflow OpenTelemetry](./workflow/observability/opentelemetry/)
 - **Declarative Agents**: Not implemented yet in the Go SDK.
 - **Agent Skills**: Build domain-specific knowledge bases from files, inline definitions, and scripts for agents to discover and use.
   - [Skills examples](./examples/02-agents/skills/) | [Skills package](./agent/skills/)
+- **Text Search (RAG)**: Retrieve and cite external knowledge automatically before agent runs or through an on-demand search tool, with optional session-backed recent-message memory.
+  - [Text search package](./agent/textsearch/) | [RAG examples](./examples/02-agents/rag/)
+- **Chat History Memory**: Store conversations in a vector store and retrieve scoped memories automatically or through an on-demand tool.
+  - [Memory package](./agent/memory/) | [Memory examples](./examples/02-agents/memory/)
+- **Persistent Chat History**: Store scoped conversations in Cosmos DB with session-backed routing, configurable retention, and history count and clearing.
+  - [Cosmos DB chat history](./provider/azureprovider/README.md#cosmos-db-chat-history)
+- **Embeddings**: Provider-independent batch generation, numeric and binary vectors, request options, usage metadata, and single-input/vector/batch-pair helpers, with an OpenAI/Foundry adapter and opt-in OpenTelemetry instrumentation.
+  - [Embedding package](./embedding/) | [OpenAI embedding generator](./provider/openaiprovider/embedding.go) | [Foundry embedding generator](./provider/foundryprovider/embedding.go)
+- **Vector Data**: Vector stores with typed and dynamic collections, CRUD helpers, and vector/hybrid search options with portable filters. Includes Azure AI Search and an in-memory connector with exact vector search, batch embedding generation, and JSON snapshots.
+  - [Vector data package](./vectordata/) | [Azure AI Search](./provider/azureprovider/) | [In-memory connector](./vectordata/inmemory/) | [Experimental provider services](./vectordata/providerservices/)
 - **AF Labs**: Not implemented yet in the Go SDK.
 - **DevUI**: Not implemented yet in the Go SDK.
 
@@ -149,6 +159,8 @@ func main() {
 
 - [Getting Started](./examples/01-get-started): progressive tutorial from hello world to workflows
 - [Agent Concepts](./examples/02-agents): deep-dive samples by topic, including tools, middleware, providers, observability, A2A, AG-UI, MCP, and skills
+- [File memory](./examples/02-agents/agents/step24_filememory): persist per-user memories across separate conversations. Run `go run ./examples/02-agents/agents/step24_filememory` from the repository root with `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL` set, after authenticating with `az login`. Files remain in `agent-memory/users/UID1` between runs.
+- [Agent harness](./docs/agent-harness.md): use `harness.AgentConfig` for preconfigured memory, skills, Todo, modes, approvals, history, and tracing with the normal provider constructors. Includes a [Foundry example](./examples/02-agents/harness/step04_composite_harness).
 - [Workflows](./examples/03-workflows): multi-agent patterns, routing, checkpointing, observability, and workflow orchestration
 - [End-to-End](./examples/05-end-to-end): full applications and demos
 - [Feature Comparison](./docs/dotnet-go-sdk-feature-comparison.md): .NET and Go SDK feature parity notes
@@ -194,7 +206,11 @@ For environment variable configuration specific to each sample, refer to the REA
 
 ### Telemetry and data collection
 
-This repository does not configure Microsoft telemetry collection by default. Some packages and samples include optional OpenTelemetry instrumentation or connect to Microsoft-hosted services. To turn off framework instrumentation, do not configure OpenTelemetry exporters or telemetry middleware in your application. Service telemetry, if any, is governed by the services you choose to call.
+This repository does not configure a Microsoft telemetry exporter. The OpenAI/Foundry adapters include SDK identity/version in their User-Agent and append a process-wide feature-usage bitmask only on approved HTTPS Azure/Foundry destinations. The mask records which framework capabilities were exercised, not invocation counts, prompts, arguments, or user data. It is not sent to third-party destinations or added to OpenTelemetry.
+
+Set `AGENT_FRAMEWORK_FEATURE_MASK_DISABLED=true` or `1` before first use to disable feature tracking and emission while retaining the base SDK User-Agent. Set `AGENT_FRAMEWORK_USER_AGENT_DISABLED=true` or `1` to suppress the framework's entire User-Agent contribution, including the feature mask. See the [feature-usage registry and emission policy](./docs/feature-usage-telemetry.md).
+
+Some packages and samples include optional OpenTelemetry instrumentation or connect to Microsoft-hosted services. To turn off that instrumentation, do not configure OpenTelemetry exporters or telemetry middleware in your application. Service telemetry, if any, is governed by the services you choose to call.
 
 ### Preview status
 

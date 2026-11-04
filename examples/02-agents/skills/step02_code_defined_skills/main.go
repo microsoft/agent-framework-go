@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -21,7 +22,7 @@ const unitConverterInstructions = `Use this skill when the user asks to convert 
 
 1. Review the conversion-table resource to find the factor for the requested conversion.
 2. Check the conversion-policy resource for rounding and formatting rules.
-3. Use the convert script, passing the value and factor as two positional arguments: ["<value>", "<factor>"].`
+3. Use the convert script with named JSON arguments: {"value": <value>, "factor": <factor>}.`
 
 const conversionTable = `# Conversion Tables
 
@@ -64,18 +65,21 @@ var unitConverterSkill = &skills.Skill{
 	},
 	Scripts: []skills.Script{
 		{
-			Name:        "convert",
-			Description: "Multiplies a value by a conversion factor and returns the result as JSON. Pass value and factor as two positional string arguments: [\"<value>\", \"<factor>\"].",
-			Run: func(_ context.Context, _ *skills.Skill, args []string) (any, error) {
-				value, err := skillhelpers.NumberArg(args, 0)
-				if err != nil {
+			Name:             "convert",
+			Description:      "Multiplies a numeric value by a conversion factor. Arguments are a JSON object with value and factor fields.",
+			ParametersSchema: `{"type":"object","properties":{"value":{"type":"number"},"factor":{"type":"number"}},"required":["value","factor"],"additionalProperties":false}`,
+			Run: func(_ context.Context, _ *skills.Skill, args json.RawMessage) (any, error) {
+				var input struct {
+					Value  *float64 `json:"value"`
+					Factor *float64 `json:"factor"`
+				}
+				if err := json.Unmarshal(args, &input); err != nil {
 					return nil, err
 				}
-				factor, err := skillhelpers.NumberArg(args, 1)
-				if err != nil {
-					return nil, err
+				if input.Value == nil || input.Factor == nil {
+					return nil, fmt.Errorf("arguments must contain numeric value and factor")
 				}
-				return skillhelpers.MultiplyConversion(value, factor, 4), nil
+				return skillhelpers.MultiplyConversion(*input.Value, *input.Factor, 4), nil
 			},
 		},
 	},

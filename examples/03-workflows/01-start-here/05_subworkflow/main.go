@@ -44,7 +44,7 @@ func main() {
 	prefix := textTransformExecutor("PrefixExecutor", func(input string) string {
 		return "INPUT: " + input
 	})
-	textProcessingExecutor := inproc.BindSubworkflowAsExecutor(textProcessing, "TextProcessingSubWorkflow")
+	textProcessingExecutor := inproc.BindSubworkflowAsExecutor(textProcessing, "TextProcessingSubWorkflow", inproc.SubworkflowConfig{})
 	postProcess := textTransformExecutor("PostProcessExecutor", func(input string) string {
 		return "[FINAL] " + input + " [END]"
 	})

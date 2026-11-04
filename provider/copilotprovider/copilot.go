@@ -19,6 +19,7 @@ import (
 
 	copilot "github.com/github/copilot-sdk/go"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -73,6 +74,11 @@ func (p *provider) run(ctx context.Context, messages []*message.Message, options
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		if p.client == nil {
 			yield(nil, errors.New("copilotprovider: client cannot be nil"))
+			return
+		}
+		telemetry.MarkUsed(telemetry.FeatureGitHubCopilot)
+		if err := ctx.Err(); err != nil {
+			yield(nil, err)
 			return
 		}
 
@@ -349,7 +355,6 @@ func copyResumeSessionConfig(source *copilot.SessionConfig) copilot.ResumeSessio
 		Memory:                             source.Memory,
 		GitHubMCPToolConfig:                source.GitHubMCPToolConfig,
 		GitHubToken:                        source.GitHubToken,
-		RemoteSession:                      source.RemoteSession,
 		ManagedSettings:                    source.ManagedSettings,
 		Streaming:                          copyBoolDefaultTrue(source.Streaming),
 	}
@@ -846,6 +851,15 @@ func (p *provider) assistantUsageUpdate(event copilot.SessionEvent, data *copilo
 		update.FinishReason = "content_filter"
 	case data.FinishReason != nil:
 		update.FinishReason = *data.FinishReason
+	}
+	// Surface which model actually served the request, matching the Python
+	// client which carries it as additional_properties["model"]. Initialize the
+	// map lazily so existing/future properties are not overwritten.
+	if data.Model != "" {
+		if update.AdditionalProperties == nil {
+			update.AdditionalProperties = make(map[string]any)
+		}
+		update.AdditionalProperties["model"] = data.Model
 	}
 	return update
 }
