@@ -4,26 +4,47 @@ package otelprovider_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"iter"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
+	azfake "github.com/Azure/azure-sdk-for-go/sdk/azcore/fake"
+	"github.com/anthropics/anthropic-sdk-go"
+	anthropicoption "github.com/anthropics/anthropic-sdk-go/option"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
+	"github.com/microsoft/agent-framework-go/internal/modelcall"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
+	"github.com/microsoft/agent-framework-go/provider/anthropicprovider"
+	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
+	"github.com/microsoft/agent-framework-go/provider/geminiprovider"
+	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/microsoft/agent-framework-go/provider/otelprovider"
 	"github.com/microsoft/agent-framework-go/tool"
+	"github.com/microsoft/agent-framework-go/tool/agenttool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
+	"github.com/openai/openai-go/v3"
+	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/responses"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/genai"
 
 	otellib "go.opentelemetry.io/otel"
 )
@@ -95,6 +116,937 @@ func hasMetric(resourceMetrics metricdata.ResourceMetrics, name string) bool {
 func metricAttribute(set attribute.Set, key string) (string, bool) {
 	value, ok := set.Value(attribute.Key(key))
 	return value.AsString(), ok
+}
+
+func TestOtel_ModelTracing_Adapters(t *testing.T) {
+	sse := func(event, data string) string {
+		return "event: " + event + "\ndata: " + data + "\n\n"
+	}
+	response := `{"id":"response-1","object":"response","created_at":1,"model":"served-model","status":"completed","output":[{"type":"message","id":"message-1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"done","annotations":[]}]}],"usage":{"input_tokens":11,"output_tokens":5,"total_tokens":16}}`
+	responseEvents := sse("response.created", `{"type":"response.created","response":{"id":"response-1","model":"served-model","status":"in_progress"}}`) +
+		sse("response.output_item.added", `{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"message-1","role":"assistant","content":[]}}`) +
+		sse("response.output_text.delta", `{"type":"response.output_text.delta","item_id":"message-1","output_index":0,"content_index":0,"delta":"done"}`) +
+		sse("response.completed", `{"type":"response.completed","response":`+response+`}`)
+	for _, tc := range []struct {
+		adapter  string
+		provider string
+		body     string
+		events   string
+	}{
+		{
+			adapter: "chat", provider: "openai",
+			body:   `{"id":"response-1","object":"chat.completion","created":1,"model":"served-model","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":5,"total_tokens":16}}`,
+			events: "data: " + `{"id":"response-1","object":"chat.completion.chunk","created":1,"model":"served-model","choices":[{"index":0,"delta":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":5,"total_tokens":16}}` + "\n\ndata: [DONE]\n\n",
+		},
+		{adapter: "responses", provider: "openai", body: response, events: responseEvents},
+		{adapter: "foundry", provider: "microsoft.foundry", body: response, events: responseEvents},
+		{
+			adapter: "anthropic", provider: "anthropic",
+			body: `{"id":"response-1","type":"message","role":"assistant","model":"served-model","content":[{"type":"text","text":"done"}],"stop_reason":"end_turn","usage":{"input_tokens":11,"output_tokens":5}}`,
+			events: sse("message_start", `{"type":"message_start","message":{"id":"response-1","type":"message","role":"assistant","model":"served-model","content":[],"usage":{"input_tokens":11,"output_tokens":0}}}`) +
+				sse("content_block_start", `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`) +
+				sse("content_block_delta", `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}`) +
+				sse("content_block_stop", `{"type":"content_block_stop","index":0}`) +
+				sse("message_delta", `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`) +
+				sse("message_stop", `{"type":"message_stop"}`),
+		},
+		{
+			adapter: "gemini", provider: "gcp.gemini",
+			body:   `{"responseId":"response-1","modelVersion":"served-model","candidates":[{"content":{"role":"model","parts":[{"text":"done"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":5,"totalTokenCount":16}}`,
+			events: "data: " + `{"responseId":"response-1","modelVersion":"served-model","candidates":[{"content":{"role":"model","parts":[{"text":"done"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":5,"totalTokenCount":16}}` + "\n\n",
+		},
+	} {
+		for _, stream := range []bool{false, true} {
+			for _, disabled := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/stream=%v/models-disabled=%v", tc.adapter, stream, disabled), func(t *testing.T) {
+					exporter := setupTracer(t)
+					reader := setupMeter(t)
+					var requests atomic.Int32
+					server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						requests.Add(1)
+						var body map[string]any
+						if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+							t.Error(err)
+							http.Error(w, err.Error(), http.StatusBadRequest)
+							return
+						}
+						if tc.adapter == "gemini" {
+							if !strings.Contains(r.URL.Path, "request-model") {
+								t.Errorf("model request path = %q", r.URL.Path)
+							}
+						} else if body["model"] != "request-model" {
+							t.Errorf("request model = %v", body["model"])
+						}
+						contentType, data := "application/json", tc.body
+						if stream {
+							contentType, data = "text/event-stream", tc.events
+						}
+						w.Header().Set("Content-Type", contentType)
+						if _, err := fmt.Fprint(w, data); err != nil {
+							t.Error(err)
+						}
+					}))
+					defer server.Close()
+					cfg := agent.Config{
+						Name: "ModelTest",
+						Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{
+							SourceName: "model-test", DisableModelTracing: disabled,
+						})},
+					}
+					a := modelTestAgent(t, tc.adapter, server, cfg)
+					options := []agent.Option{agent.Stream(stream)}
+					switch tc.adapter {
+					case "chat":
+						options = append(options, openaiprovider.ChatCompletionNewParams(openai.ChatCompletionNewParams{Model: "request-model"}))
+					case "responses", "foundry":
+						options = append(options, openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Model: "request-model"}))
+					case "anthropic":
+						options = append(options, anthropicprovider.MessageNewParams(anthropic.MessageNewParams{Model: "request-model"}))
+					}
+					run := a.RunText(t.Context(), "Private prompt contents.", options...)
+					if requests.Load() != 0 || len(exporter.GetSpans()) != 0 {
+						t.Fatal("unconsumed run started model tracing or a request")
+					}
+					got, err := run.Collect()
+					if err != nil || got.String() != "done" {
+						t.Fatalf("response = %v, %v", got, err)
+					}
+					if requests.Load() != 1 || got.Usage().InputTokenCount != 11 || got.Usage().OutputTokenCount != 5 {
+						t.Fatalf("requests = %d, usage = %+v", requests.Load(), got.Usage())
+					}
+					spans := spansInScope(exporter.GetSpans(), "model-test")
+					if disabled {
+						if len(spans) != 1 {
+							t.Fatalf("model opt-out emitted %d spans, want one agent span", len(spans))
+						}
+						for _, scope := range collectMetrics(t, reader).ScopeMetrics {
+							if scope.Scope.Name != "model-test" {
+								continue
+							}
+							for _, metric := range scope.Metrics {
+								switch histogram := metric.Data.(type) {
+								case metricdata.Histogram[float64]:
+									for _, point := range histogram.DataPoints {
+										if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation == "chat" {
+											t.Errorf("model opt-out emitted %s", metric.Name)
+										}
+									}
+								case metricdata.Histogram[int64]:
+									for _, point := range histogram.DataPoints {
+										if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation == "chat" {
+											t.Errorf("model opt-out emitted %s", metric.Name)
+										}
+									}
+								}
+							}
+						}
+						return
+					}
+					if len(spans) != 2 {
+						t.Fatalf("spans = %d, want one agent and one model span", len(spans))
+					}
+					agentSpan := findSpanByOperation(t, spans, "invoke_agent")
+					modelSpan := findSpanByOperation(t, spans, "chat")
+					if !strings.HasPrefix(agentSpan.Name, "invoke_agent") {
+						t.Fatalf("agent span name = %q, want invoke_agent prefix", agentSpan.Name)
+					}
+					if modelSpan.Name != "chat request-model" || modelSpan.SpanKind != trace.SpanKindClient ||
+						modelSpan.Parent.SpanID() != agentSpan.SpanContext.SpanID() ||
+						modelSpan.SpanContext.TraceID() != agentSpan.SpanContext.TraceID() ||
+						modelSpan.InstrumentationScope.Name != "model-test" {
+						t.Fatalf("model span = %+v", modelSpan)
+					}
+					attrs := modelSpanAttributes(modelSpan)
+					for key, want := range map[string]string{
+						"gen_ai.provider.name": tc.provider, "gen_ai.request.model": "request-model",
+						"gen_ai.response.model": "served-model", "gen_ai.response.id": "response-1",
+					} {
+						if attrs[key].AsString() != want {
+							t.Errorf("%s = %v, want %q", key, attrs[key], want)
+						}
+					}
+					if attrs["gen_ai.usage.input_tokens"].AsInt64() != 11 ||
+						attrs["gen_ai.usage.output_tokens"].AsInt64() != 5 ||
+						!slices.Equal(attrs["gen_ai.response.finish_reasons"].AsStringSlice(), []string{"stop"}) {
+						t.Fatalf("model response attributes = %v", attrs)
+					}
+					if strings.Contains(fmt.Sprint(modelSpan.Attributes), "Private prompt contents.") {
+						t.Fatal("model span captured prompt contents")
+					}
+					duration := collectMetric(t, reader, "gen_ai.client.operation.duration").(metricdata.Histogram[float64])
+					var modelPoints int
+					for _, point := range duration.DataPoints {
+						if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation == "chat" {
+							modelPoints++
+							if point.Count != 1 || point.Sum != modelSpan.EndTime.Sub(modelSpan.StartTime).Seconds() {
+								t.Errorf("model duration point = %+v", point)
+							}
+						}
+					}
+					if modelPoints != 1 {
+						t.Fatalf("model duration points = %d, want 1", modelPoints)
+					}
+					tokens := collectMetric(t, reader, "gen_ai.client.token.usage").(metricdata.Histogram[int64])
+					var inputs, outputs int
+					for _, point := range tokens.DataPoints {
+						if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation != "chat" {
+							continue
+						}
+						switch kind, _ := metricAttribute(point.Attributes, "gen_ai.token.type"); kind {
+						case "input":
+							inputs++
+							if point.Sum != 11 {
+								t.Errorf("model input token sum = %d", point.Sum)
+							}
+						case "output":
+							outputs++
+							if point.Sum != 5 {
+								t.Errorf("model output token sum = %d", point.Sum)
+							}
+						}
+					}
+					if inputs != 1 || outputs != 1 {
+						t.Fatalf("model input/output token points = %d/%d, want 1/1", inputs, outputs)
+					}
+				})
+			}
+		}
+	}
+}
+
+func newAutoWireChatClient(t *testing.T) openai.Client {
+	t.Helper()
+	client := &http.Client{Transport: modelTestTransport(func(r *http.Request) (*http.Response, error) {
+		var request struct {
+			Stream bool `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			return nil, err
+		}
+		contentType := "application/json"
+		data := `{"id":"response-1","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`
+		if request.Stream {
+			contentType = "text/event-stream"
+			data = "data: " + `{"id":"response-1","object":"chat.completion.chunk","created":1,"model":"test-model","choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{contentType}},
+			Body:       &modelTestBody{Reader: strings.NewReader(data)},
+			Request:    r,
+		}, nil
+	})}
+	return openai.NewClient(option.WithAPIKey("test"), option.WithHTTPClient(client), option.WithMaxRetries(0))
+}
+
+func TestOtel_AutoWire_StreamingEmitsChatSpan(t *testing.T) {
+	exporter := setupTracer(t)
+	a := openaiprovider.NewChatCompletionsAgent(newAutoWireChatClient(t), openaiprovider.AgentConfig{
+		Model: "test-model",
+		Config: agent.Config{Middlewares: []agent.Middleware{
+			otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "auto-wire-stream"}),
+		}},
+	})
+	for _, err := range a.RunText(t.Context(), "hi", agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 2 {
+		t.Fatalf("spans = %d, want invoke_agent and chat", len(spans))
+	}
+	if span := findSpanByOperation(t, spans, "invoke_agent"); !strings.HasPrefix(span.Name, "invoke_agent") {
+		t.Fatalf("agent span name = %q", span.Name)
+	}
+	_ = findSpanByOperation(t, spans, "chat")
+}
+
+func TestOtel_AutoWire_DisabledOmitsChatSpan(t *testing.T) {
+	exporter := setupTracer(t)
+	a := openaiprovider.NewChatCompletionsAgent(newAutoWireChatClient(t), openaiprovider.AgentConfig{
+		Model: "test-model",
+		Config: agent.Config{Middlewares: []agent.Middleware{
+			otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "auto-wire-disabled", DisableModelTracing: true}),
+		}},
+	})
+	if _, err := a.RunText(t.Context(), "hi").Collect(); err != nil {
+		t.Fatal(err)
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 1 || !strings.HasPrefix(spans[0].Name, "invoke_agent") {
+		t.Fatalf("disabled auto-wire spans = %v, want only invoke_agent", spans)
+	}
+}
+
+func TestOtel_AutoWire_StreamingDisabledOmitsChatSpan(t *testing.T) {
+	exporter := setupTracer(t)
+	a := openaiprovider.NewChatCompletionsAgent(newAutoWireChatClient(t), openaiprovider.AgentConfig{
+		Model: "test-model",
+		Config: agent.Config{Middlewares: []agent.Middleware{
+			otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "auto-wire-stream-disabled", DisableModelTracing: true}),
+		}},
+	})
+	for _, err := range a.RunText(t.Context(), "hi", agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 1 || !strings.HasPrefix(spans[0].Name, "invoke_agent") {
+		t.Fatalf("disabled streaming spans = %v, want only invoke_agent", spans)
+	}
+}
+
+func TestOtel_AutoWire_NonModelRunPreservesAbsentOptions(t *testing.T) {
+	var observed []agent.Option
+	calls := 0
+	next := func(_ context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		observed = options
+		calls++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.NewText("ok").Contents}, nil)
+		}
+	}
+	middleware := otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})
+	for _, err := range middleware.Run(next, t.Context(), []*message.Message{message.NewText("hi")}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls != 1 || observed != nil {
+		t.Fatalf("non-model run calls = %d, options = %v; want one call and nil options", calls, observed)
+	}
+}
+
+func TestOtel_AutoWire_ExecuteToolSpanHasAgentParentAndModelSpans(t *testing.T) {
+	exporter := setupTracer(t)
+	const sourceName = "auto-wire-tools"
+	var calls atomic.Int32
+	client := &http.Client{Transport: modelTestTransport(func(r *http.Request) (*http.Response, error) {
+		data := `{"id":"response-2","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`
+		if calls.Add(1) == 1 {
+			data = `{"id":"response-1","object":"chat.completion","created":1,"model":"test-model","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       &modelTestBody{Reader: strings.NewReader(data)},
+			Request:    r,
+		}, nil
+	})}
+	getWeather := functool.MustNew(functool.Config{Name: "get_weather"}, func(context.Context, struct{}) (string, error) {
+		return "sunny", nil
+	})
+	a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(
+		option.WithAPIKey("test"), option.WithHTTPClient(client), option.WithMaxRetries(0),
+	), openaiprovider.AgentConfig{
+		Model: "test-model",
+		Config: agent.Config{
+			Tools: []tool.Tool{getWeather},
+			Middlewares: []agent.Middleware{
+				otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: sourceName}),
+			},
+		},
+	})
+	if _, err := a.RunText(t.Context(), "weather?").Collect(); err != nil {
+		t.Fatal(err)
+	}
+	spans := exporter.GetSpans()
+	var agentSpans, toolSpans, chatSpans int
+	for _, span := range spans {
+		if strings.HasPrefix(span.Name, "invoke_agent") {
+			agentSpans++
+		}
+		if strings.HasPrefix(span.Name, "execute_tool") {
+			toolSpans++
+		}
+		if modelSpanAttributes(span)["gen_ai.operation.name"].AsString() == "chat" {
+			chatSpans++
+		}
+	}
+	if agentSpans != 1 || toolSpans != 1 || chatSpans == 0 || calls.Load() != 2 {
+		t.Fatalf("agent/tool/chat spans = %d/%d/%d, model calls = %d", agentSpans, toolSpans, chatSpans, calls.Load())
+	}
+	invokeAgent := findSpanByOperation(t, spans, "invoke_agent")
+	executeTool := findSpanByOperation(t, spans, "execute_tool")
+	if executeTool.InstrumentationScope.Name != sourceName || executeTool.Parent.SpanID() != invokeAgent.SpanContext.SpanID() {
+		t.Fatalf("execute_tool source = %q, parent = %v; want %q and %v",
+			executeTool.InstrumentationScope.Name, executeTool.Parent.SpanID(), sourceName, invokeAgent.SpanContext.SpanID())
+	}
+}
+
+func modelTestAgent(t *testing.T, adapter string, server *httptest.Server, cfg agent.Config) *agent.Agent {
+	t.Helper()
+	client := openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test"), option.WithHTTPClient(server.Client()), option.WithMaxRetries(0))
+	switch adapter {
+	case "chat":
+		return openaiprovider.NewChatCompletionsAgent(client, openaiprovider.AgentConfig{Config: cfg, Model: "default-model"})
+	case "responses":
+		return openaiprovider.NewResponsesAgent(client, openaiprovider.AgentConfig{Config: cfg, Model: "default-model", DisableStoreOutput: true})
+	case "foundry":
+		return foundryprovider.NewAgent(server.URL, &azfake.TokenCredential{}, foundryprovider.ModelDeployment("default-model"), foundryprovider.AgentConfig{
+			Config: cfg, DisableStoreOutput: true,
+			OpenAIOptions: []option.RequestOption{option.WithHTTPClient(server.Client()), option.WithMaxRetries(0)},
+		})
+	case "anthropic":
+		return anthropicprovider.NewAgent(anthropic.NewClient(
+			anthropicoption.WithBaseURL(server.URL), anthropicoption.WithAPIKey("test"),
+			anthropicoption.WithHTTPClient(server.Client()), anthropicoption.WithMaxRetries(0),
+		), anthropicprovider.AgentConfig{Config: cfg, Model: "default-model"})
+	case "gemini":
+		client, err := genai.NewClient(t.Context(), &genai.ClientConfig{
+			Backend: genai.BackendGeminiAPI, APIKey: "test", HTTPClient: server.Client(),
+			HTTPOptions: genai.HTTPOptions{BaseURL: server.URL},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return geminiprovider.NewAgent(client, geminiprovider.AgentConfig{Config: cfg, Model: "request-model"})
+	default:
+		t.Fatalf("unknown model adapter %q", adapter)
+		return nil
+	}
+}
+
+func TestOtel_ModelTracing_Lifecycle(t *testing.T) {
+	failure := errors.New("model failed")
+	for _, tc := range []struct {
+		name      string
+		stopEarly bool
+		cancel    bool
+		err       error
+		usage     *message.UsageDetails
+	}{
+		{name: "empty"},
+		{name: "no usage"},
+		{name: "zero usage", usage: &message.UsageDetails{}},
+		{name: "usage", usage: &message.UsageDetails{InputTokenCount: 7, OutputTokenCount: 3, CachedInputTokenCount: 2, ReasoningTokenCount: 1}},
+		{name: "failure", err: failure},
+		{name: "cancelled", cancel: true, err: context.Canceled},
+		{name: "failure wins over cancellation", cancel: true, err: failure},
+		{name: "early stop", stopEarly: true},
+		{name: "cancelled early stop", stopEarly: true, cancel: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exporter := setupTracer(t)
+			reader := setupMeter(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var released bool
+			update := &agent.ResponseUpdate{Contents: message.NewText("partial").Contents}
+			if tc.usage != nil {
+				update.Contents = append(update.Contents, &message.UsageContent{Details: *tc.usage})
+			}
+			a := agent.New(agent.ProviderConfig{
+				ProviderName: "test-provider",
+				Run: modelcall.Wrap(func(ctx context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return func(yield func(*agent.ResponseUpdate, error) bool) {
+						defer func() { released = true }()
+						if tc.cancel {
+							cancel()
+						}
+						if tc.err != nil {
+							yield(nil, tc.err)
+							return
+						}
+						if tc.name == "empty" {
+							return
+						}
+						modelcall.RecordResponse(ctx, "served-model", "response-id")
+						if !yield(update, nil) {
+							return
+						}
+						if tc.stopEarly {
+							t.Error("provider continued after early stop")
+						}
+					}
+				}, func([]agent.Option) string { return "request-model" }),
+			}, agent.Config{
+				Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "model-test"})},
+			})
+			var gotErr error
+			for got, err := range a.RunText(ctx, "request", agent.Stream(true)) {
+				if err != nil {
+					gotErr = err
+					break
+				}
+				if got != nil && got != update {
+					t.Error("tracing replaced the provider's response update")
+				}
+				if tc.stopEarly {
+					break
+				}
+			}
+			if !errors.Is(gotErr, tc.err) || !released {
+				t.Fatalf("error = %v, want %v; provider released = %v", gotErr, tc.err, released)
+			}
+			modelSpan := findSpanByOperation(t, exporter.GetSpans(), "chat")
+			spanErr := tc.err
+			if spanErr == nil && tc.cancel {
+				spanErr = context.Canceled
+			}
+			if modelSpan.EndTime.IsZero() || (modelSpan.Status.Code == codes.Error) != (spanErr != nil) {
+				t.Fatalf("span status = %v, want error = %v", modelSpan.Status, spanErr)
+			}
+			attrs := modelSpanAttributes(modelSpan)
+			if tc.usage == nil {
+				if _, ok := attrs["gen_ai.usage.input_tokens"]; ok {
+					t.Error("missing usage was reported as zero usage")
+				}
+			} else {
+				for key, want := range map[string]int64{
+					"gen_ai.usage.input_tokens": tc.usage.InputTokenCount, "gen_ai.usage.output_tokens": tc.usage.OutputTokenCount,
+				} {
+					value, ok := attrs[key]
+					if !ok || value.AsInt64() != want {
+						t.Errorf("%s = %v, present = %v, want %d", key, value, ok, want)
+					}
+				}
+				if tc.usage.CachedInputTokenCount > 0 && attrs["gen_ai.usage.cache_read.input_tokens"].AsInt64() != 2 {
+					t.Errorf("cached input usage = %v", attrs)
+				}
+				if tc.usage.ReasoningTokenCount > 0 && attrs["gen_ai.usage.reasoning.output_tokens"].AsInt64() != 1 {
+					t.Errorf("reasoning usage = %v", attrs)
+				}
+			}
+			duration := collectMetric(t, reader, "gen_ai.client.operation.duration").(metricdata.Histogram[float64])
+			var modelCalls uint64
+			for _, point := range duration.DataPoints {
+				if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation == "chat" {
+					modelCalls += point.Count
+					if spanErr != nil {
+						value, ok := metricAttribute(point.Attributes, "error.type")
+						if !ok || value != telemetry.ErrorTypeName(spanErr) {
+							t.Errorf("metric error type = %q, present = %v", value, ok)
+						}
+					}
+				}
+			}
+			if modelCalls != 1 {
+				t.Fatalf("recorded model calls = %d, want 1", modelCalls)
+			}
+		})
+	}
+}
+
+func TestOtel_ModelTracing_AdapterFailures(t *testing.T) {
+	for _, adapter := range []string{"chat", "responses", "foundry", "anthropic", "gemini"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%v", adapter, stream), func(t *testing.T) {
+				exporter := setupTracer(t)
+				var requests atomic.Int32
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					requests.Add(1)
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusBadRequest)
+					if _, err := fmt.Fprint(w, `{"error":{"message":"model request failed"}}`); err != nil {
+						t.Error(err)
+					}
+				}))
+				defer server.Close()
+				a := modelTestAgent(t, adapter, server, agent.Config{
+					Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "model-test"})},
+				})
+				response, err := a.RunText(t.Context(), "request", agent.Stream(stream)).Collect()
+				if err == nil || response != nil || requests.Load() != 1 {
+					t.Fatalf("response = %v, error = %v, requests = %d", response, err, requests.Load())
+				}
+				span := findSpanByOperation(t, spansInScope(exporter.GetSpans(), "model-test"), "chat")
+				attrs := modelSpanAttributes(span)
+				if span.Status.Code != codes.Error || span.EndTime.IsZero() ||
+					attrs["error.type"].AsString() != telemetry.ErrorTypeName(err) {
+					t.Fatalf("model failure span = %+v", span)
+				}
+				if _, ok := attrs["gen_ai.usage.input_tokens"]; ok {
+					t.Fatal("failed request fabricated usage")
+				}
+			})
+		}
+	}
+}
+
+func TestOtel_ModelTracing_CancellationAfterSuccessfulResponse(t *testing.T) {
+	for _, tc := range []struct {
+		stream    bool
+		stopEarly bool
+	}{
+		{},
+		{stream: true},
+		{stopEarly: true},
+	} {
+		t.Run(fmt.Sprintf("stream=%v/stop-early=%v", tc.stream, tc.stopEarly), func(t *testing.T) {
+			stream := tc.stream
+			exporter := setupTracer(t)
+			reader := setupMeter(t)
+			data := `{"id":"response-1","object":"chat.completion","created":1,"model":"served-model","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":5,"total_tokens":16}}`
+			if stream {
+				data = "data: " + `{"id":"response-1","object":"chat.completion.chunk","created":1,"model":"served-model","choices":[{"index":0,"delta":{"role":"assistant","content":"done"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":5,"total_tokens":16}}` +
+					"\n\ndata: [DONE]\n\n"
+			}
+			body := &modelTestBody{Reader: strings.NewReader(data)}
+			client := &http.Client{Transport: modelTestTransport(func(r *http.Request) (*http.Response, error) {
+				contentType := "application/json"
+				if stream {
+					contentType = "text/event-stream"
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{contentType}},
+					Body:       body,
+					Request:    r,
+				}, nil
+			})}
+			a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(
+				option.WithAPIKey("test"), option.WithHTTPClient(client), option.WithMaxRetries(0),
+			), openaiprovider.AgentConfig{
+				Model:        "request-model",
+				ToolAutoCall: &toolautocall.Config{MaximumIterationsPerRequest: new(0)},
+				Config: agent.Config{Middlewares: []agent.Middleware{
+					otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{}),
+				}},
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var response agent.Response
+			for update, err := range a.RunText(ctx, "request", agent.Stream(stream)) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				response.Update(update)
+				cancel()
+				if tc.stopEarly {
+					break
+				}
+			}
+			if response.String() != "done" || !body.closed.Load() || !errors.Is(ctx.Err(), context.Canceled) {
+				t.Fatalf("response = %q, body closed = %v, context error = %v", response.String(), body.closed.Load(), ctx.Err())
+			}
+			span := findSpanByOperation(t, exporter.GetSpans(), "chat")
+			if span.Status.Code == codes.Error || span.EndTime.IsZero() {
+				t.Errorf("successful response was recorded as an error: %+v", span.Status)
+			}
+			if _, ok := modelSpanAttributes(span)["error.type"]; ok {
+				t.Error("successful model span has an error.type attribute")
+			}
+			duration := collectMetric(t, reader, "gen_ai.client.operation.duration").(metricdata.Histogram[float64])
+			var modelCalls uint64
+			for _, point := range duration.DataPoints {
+				if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation == "chat" {
+					modelCalls += point.Count
+					if _, ok := metricAttribute(point.Attributes, "error.type"); ok {
+						t.Error("successful model duration metric has an error.type attribute")
+					}
+				}
+			}
+			if modelCalls != 1 {
+				t.Fatalf("recorded model calls = %d, want 1", modelCalls)
+			}
+		})
+	}
+}
+
+func TestOtel_ModelTracing_ProviderDeclaredFailures(t *testing.T) {
+	for _, adapter := range []string{"responses", "foundry"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%v", adapter, stream), func(t *testing.T) {
+				exporter := setupTracer(t)
+				reader := setupMeter(t)
+				payload := `{"id":"failed-response","object":"response","created_at":1,"model":"served-model","status":"failed","output":[],"error":{"code":"server_error","message":"Provider declared a failure."}}`
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					body := payload
+					if stream {
+						w.Header().Set("Content-Type", "text/event-stream")
+						body = "event: response.failed\ndata: " + `{"type":"response.failed","response":` + payload + "}\n\n"
+					} else {
+						w.Header().Set("Content-Type", "application/json")
+					}
+					if _, err := fmt.Fprint(w, body); err != nil {
+						t.Error(err)
+					}
+				}))
+				defer server.Close()
+				a := modelTestAgent(t, adapter, server, agent.Config{
+					Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{
+						SourceName: "declared-errors",
+					})},
+				})
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				var response agent.Response
+				for update, err := range a.RunText(ctx, "request", agent.Stream(stream)) {
+					if err != nil {
+						t.Fatalf("tracing changed the provider's nil iterator error: %v", err)
+					}
+					response.Update(update)
+					if update != nil {
+						for _, content := range update.Contents {
+							if _, ok := content.(*message.ErrorContent); ok {
+								cancel()
+								break
+							}
+						}
+					}
+					if ctx.Err() != nil {
+						break
+					}
+				}
+				var failure *message.ErrorContent
+				for content := range response.Contents() {
+					if value, ok := content.(*message.ErrorContent); ok {
+						failure = value
+					}
+				}
+				if failure == nil || failure.ErrorCode != "server_error" {
+					t.Fatalf("provider failure content = %+v", failure)
+				}
+				span := findSpanByOperation(t, spansInScope(exporter.GetSpans(), "declared-errors"), "chat")
+				if span.Status.Code != codes.Error || modelSpanAttributes(span)["error.type"].AsString() != failure.ErrorCode {
+					t.Fatalf("provider failure was not recorded in the model span: %+v", span)
+				}
+				duration := collectMetric(t, reader, "gen_ai.client.operation.duration").(metricdata.Histogram[float64])
+				var errorsRecorded uint64
+				for _, point := range duration.DataPoints {
+					if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation == "chat" {
+						code, _ := metricAttribute(point.Attributes, "error.type")
+						if code != failure.ErrorCode {
+							t.Errorf("model duration error.type = %q, want %q", code, failure.ErrorCode)
+						}
+						errorsRecorded += point.Count
+					}
+				}
+				if errorsRecorded != 1 {
+					t.Fatalf("model error metric count = %d, want 1", errorsRecorded)
+				}
+			})
+		}
+	}
+}
+
+func TestOtel_ModelTracing_NestedAgentsUseOwnConfiguration(t *testing.T) {
+	for _, childTracing := range []string{"none", "agent-only", "default"} {
+		t.Run(childTracing, func(t *testing.T) {
+			exporter := setupTracer(t)
+			reader := setupMeter(t)
+			childConfig := agent.Config{Name: "Child"}
+			if childTracing != "none" {
+				childConfig.Middlewares = []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{
+					SourceName: "child-scope", DisableModelTracing: childTracing == "agent-only",
+				})}
+			}
+			child := agent.New(agent.ProviderConfig{
+				ProviderName: "child-provider",
+				Run: modelcall.Wrap(func(ctx context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return func(yield func(*agent.ResponseUpdate, error) bool) {
+						modelcall.RecordResponse(ctx, "served-child", "child-response")
+						yield(&agent.ResponseUpdate{
+							Contents: message.Contents{&message.TextContent{Text: "child result"}, &message.UsageContent{
+								Details: message.UsageDetails{InputTokenCount: 2, OutputTokenCount: 1},
+							}},
+						}, nil)
+					}
+				}, func([]agent.Option) string { return "child-model" }),
+			}, childConfig)
+			runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
+				AddFunctionCall("child-call", "Child", `{"query":"child request"}`).
+				NewTurn().
+				AddText("done").
+				Build()}
+			var calls int
+			parent := agent.New(agent.ProviderConfig{
+				ProviderName: "parent-provider",
+				Run: modelcall.Wrap(func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					calls++
+					modelcall.RecordResponse(ctx, "served-parent", fmt.Sprintf("parent-%d", calls))
+					return runner.Run(ctx, messages, options...)
+				}, func([]agent.Option) string { return "parent-model" }),
+				Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{})},
+			}, agent.Config{
+				Name:  "Parent",
+				Tools: []tool.Tool{agenttool.New(child, agenttool.Config{})},
+				Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{
+					SourceName: "parent-scope",
+				})},
+			})
+			response, err := parent.RunText(t.Context(), "invoke child").Collect()
+			if err != nil || response.String() != "done" {
+				t.Fatalf("nested response = %v, %v", response, err)
+			}
+			var parents, children int
+			for _, span := range exporter.GetSpans() {
+				attrs := modelSpanAttributes(span)
+				if attrs["gen_ai.operation.name"].AsString() != "chat" {
+					continue
+				}
+				switch span.InstrumentationScope.Name {
+				case "parent-scope":
+					parents++
+					if attrs["gen_ai.response.model"].AsString() != "served-parent" || !strings.HasPrefix(attrs["gen_ai.response.id"].AsString(), "parent-") {
+						t.Errorf("child metadata escaped into a parent call: %v", attrs)
+					}
+				case "child-scope":
+					children++
+					if attrs["gen_ai.response.model"].AsString() != "served-child" {
+						t.Errorf("child response model = %v", attrs)
+					}
+				default:
+					t.Errorf("unexpected model instrumentation scope %q", span.InstrumentationScope.Name)
+				}
+			}
+			wantChildren := 0
+			if childTracing == "default" {
+				wantChildren = 1
+			}
+			if parents != 2 || children != wantChildren {
+				t.Fatalf("parent/child model spans = %d/%d, want 2/%d", parents, children, wantChildren)
+			}
+			var parentMetrics, childMetrics uint64
+			for _, scope := range collectMetrics(t, reader).ScopeMetrics {
+				for _, metric := range scope.Metrics {
+					if metric.Name != "gen_ai.client.operation.duration" {
+						continue
+					}
+					for _, point := range metric.Data.(metricdata.Histogram[float64]).DataPoints {
+						if operation, _ := metricAttribute(point.Attributes, "gen_ai.operation.name"); operation != "chat" {
+							continue
+						}
+						switch scope.Scope.Name {
+						case "parent-scope":
+							parentMetrics += point.Count
+							if model, _ := metricAttribute(point.Attributes, "gen_ai.request.model"); model != "parent-model" {
+								t.Errorf("child call used parent's instruments: %v", point.Attributes)
+							}
+						case "child-scope":
+							childMetrics += point.Count
+						}
+					}
+				}
+			}
+			if parentMetrics != 2 || childMetrics != uint64(wantChildren) {
+				t.Fatalf("parent/child model metrics = %d/%d, want 2/%d", parentMetrics, childMetrics, wantChildren)
+			}
+		})
+	}
+}
+
+func TestOtel_ModelTracing_EarlyStopClosesAdapterResponse(t *testing.T) {
+	for _, cancelled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancelled=%v", cancelled), func(t *testing.T) {
+			exporter := setupTracer(t)
+			body := &modelTestBody{Reader: strings.NewReader("data: " +
+				`{"id":"response-1","object":"chat.completion.chunk","created":1,"model":"served-model","choices":[{"index":0,"delta":{"role":"assistant","content":"partial"},"finish_reason":null}]}` +
+				"\n\ndata: [DONE]\n\n")}
+			client := &http.Client{Transport: modelTestTransport(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body:       body,
+					Request:    r,
+				}, nil
+			})}
+			a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(
+				option.WithAPIKey("test"), option.WithHTTPClient(client), option.WithMaxRetries(0),
+			), openaiprovider.AgentConfig{
+				Model: "request-model",
+				Config: agent.Config{Middlewares: []agent.Middleware{
+					otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{}),
+				}},
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var text string
+			for update, err := range a.RunText(ctx, "request", agent.Stream(true)) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if update != nil && update.String() != "" {
+					text = update.String()
+					if cancelled {
+						cancel()
+					}
+					break
+				}
+			}
+			if text != "partial" || !body.closed.Load() {
+				t.Fatalf("stream text = %q, response body closed = %v", text, body.closed.Load())
+			}
+			span := findSpanByOperation(t, exporter.GetSpans(), "chat")
+			if span.EndTime.IsZero() || (span.Status.Code == codes.Error) != cancelled {
+				t.Fatalf("model span after early stop = %+v", span)
+			}
+		})
+	}
+}
+
+func TestOtel_ModelTracing_ConcurrentCallsKeepMetadataIsolated(t *testing.T) {
+	exporter := setupTracer(t)
+	a := agent.New(agent.ProviderConfig{
+		ProviderName: "test-provider",
+		Run: modelcall.Wrap(func(ctx context.Context, _ []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				model, _ := agent.GetOption(options, agent.WithInstructions)
+				modelcall.RecordResponse(ctx, "served-"+model, "response-"+model)
+				yield(&agent.ResponseUpdate{Contents: message.NewText("done").Contents}, nil)
+			}
+		}, func(options []agent.Option) string {
+			model, _ := agent.GetOption(options, agent.WithInstructions)
+			return model
+		}),
+	}, agent.Config{Middlewares: []agent.Middleware{otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{})}})
+	var wg sync.WaitGroup
+	for i := range 20 {
+		wg.Go(func() {
+			if _, err := a.RunText(t.Context(), "request", agent.WithInstructions(fmt.Sprintf("model-%d", i))).Collect(); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	var calls int
+	for _, span := range exporter.GetSpans() {
+		attrs := modelSpanAttributes(span)
+		if attrs["gen_ai.operation.name"].AsString() != "chat" {
+			continue
+		}
+		calls++
+		request := attrs["gen_ai.request.model"].AsString()
+		if attrs["gen_ai.response.model"].AsString() != "served-"+request || attrs["gen_ai.response.id"].AsString() != "response-"+request {
+			t.Errorf("model metadata leaked between calls: %v", attrs)
+		}
+	}
+	if calls != 20 {
+		t.Fatalf("model spans = %d, want 20", calls)
+	}
+}
+
+func modelSpanAttributes(span tracetest.SpanStub) map[string]attribute.Value {
+	attrs := make(map[string]attribute.Value, len(span.Attributes))
+	for _, entry := range span.Attributes {
+		attrs[string(entry.Key)] = entry.Value
+	}
+	return attrs
+}
+
+func spansInScope(spans []tracetest.SpanStub, name string) []tracetest.SpanStub {
+	return slices.DeleteFunc(spans, func(span tracetest.SpanStub) bool {
+		return span.InstrumentationScope.Name != name
+	})
+}
+
+type modelTestTransport func(*http.Request) (*http.Response, error)
+
+func (f modelTestTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+type modelTestBody struct {
+	*strings.Reader
+	closed atomic.Bool
+}
+
+func (b *modelTestBody) Close() error {
+	b.closed.Store(true)
+	return nil
 }
 
 func TestOtel_Run_RecordsOperationDurationMetric(t *testing.T) {
@@ -223,7 +1175,10 @@ func TestOtel_Run_DoesNotRecordUnreportedTokenUsage(t *testing.T) {
 		}
 	}
 
-	for range mw.Run(next, t.Context(), nil) {
+	for _, err := range mw.Run(next, t.Context(), nil) {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	resourceMetrics := collectMetrics(t, reader)
@@ -244,7 +1199,10 @@ func TestOtel_Run_DoesNotRecordEmptyUsageContent(t *testing.T) {
 		}
 	}
 
-	for range mw.Run(next, t.Context(), nil) {
+	for _, err := range mw.Run(next, t.Context(), nil) {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	resourceMetrics := collectMetrics(t, reader)
@@ -267,7 +1225,10 @@ func TestOtel_Run_DoesNotRecordTokenMetricForOptionalCountersOnly(t *testing.T) 
 		}
 	}
 
-	for range mw.Run(next, t.Context(), nil) {
+	for _, err := range mw.Run(next, t.Context(), nil) {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	resourceMetrics := collectMetrics(t, reader)
@@ -288,7 +1249,10 @@ func TestOtel_Run_MetricErrorAttributes(t *testing.T) {
 		}
 	}
 
-	for range mw.Run(next, t.Context(), nil) {
+	for _, err := range mw.Run(next, t.Context(), nil) {
+		if !errors.Is(err, testErr) {
+			t.Fatalf("middleware error = %v, want %v", err, testErr)
+		}
 	}
 
 	resourceMetrics := collectMetrics(t, reader)
@@ -339,7 +1303,10 @@ func TestOtel_Run_RecordsMetricsOnEarlyBreak(t *testing.T) {
 		}
 	}
 
-	for range mw.Run(next, t.Context(), nil) {
+	for _, err := range mw.Run(next, t.Context(), nil) {
+		if err != nil {
+			t.Fatal(err)
+		}
 		break
 	}
 
@@ -368,7 +1335,10 @@ func TestOtel_Run_CreatesSpan(t *testing.T) {
 	messages := []*message.Message{message.NewText("test message")}
 
 	seq := mw.Run(next, t.Context(), messages)
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if !nextCalled {
@@ -592,7 +1562,10 @@ func TestOtel_Run_RecordsError(t *testing.T) {
 	messages := []*message.Message{message.NewText("test message")}
 
 	seq := mw.Run(next, t.Context(), messages)
-	for range seq {
+	for _, err := range seq {
+		if !errors.Is(err, testErr) {
+			t.Fatalf("middleware error = %v, want %v", err, testErr)
+		}
 	}
 
 	spans := exporter.GetSpans()
@@ -647,7 +1620,10 @@ func TestOtel_Run_CustomSourceName(t *testing.T) {
 	}
 
 	seq := mw.Run(next, t.Context(), []*message.Message{})
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	spans := exporter.GetSpans()
@@ -673,7 +1649,10 @@ func TestOtel_Run_DefaultSourceName(t *testing.T) {
 	}
 
 	seq := mw.Run(next, t.Context(), []*message.Message{})
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	spans := exporter.GetSpans()
@@ -701,7 +1680,10 @@ func TestOtel_Run_PropagatesContext(t *testing.T) {
 	}
 
 	seq := mw.Run(next, t.Context(), []*message.Message{})
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if capturedCtx == nil {
@@ -737,7 +1719,10 @@ func TestOtel_Run_HandlesMultipleUpdates(t *testing.T) {
 	}
 
 	seq := mw.Run(next, t.Context(), []*message.Message{})
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 		updateCount++
 	}
 
@@ -753,80 +1738,120 @@ func TestOtel_Run_HandlesMultipleUpdates(t *testing.T) {
 }
 
 func TestOtel_Run_EmitsExecuteToolSpanForAutocall(t *testing.T) {
-	exporter := setupTracer(t)
+	for _, tc := range []struct {
+		name       string
+		middleware bool
+		explicit   bool
+		source     string
+		wantSource string
+	}{
+		{name: "middleware fallback", middleware: true, wantSource: "test-source"},
+		{name: "explicit override", middleware: true, explicit: true, source: "tool-source", wantSource: "tool-source"},
+		{name: "tool only", explicit: true, source: "tool-source", wantSource: "tool-source"},
+		{name: "default source", explicit: true, wantSource: "github.com/microsoft/agent-framework-go"},
+		{name: "disabled"},
+	} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", tc.name, stream), func(t *testing.T) {
+				exporter := setupTracer(t)
+				runner := &agenttest.Runner{
+					Responses: agenttest.NewResponseBuilder().
+						Add(&agent.ResponseUpdate{
+							Role: message.RoleAssistant,
+							Contents: []message.Content{
+								&message.FunctionCallContent{CallID: "call-1", Name: "get_weather", Arguments: `{}`},
+							},
+						}).
+						NewTurn().
+						AddText("sunny").
+						Build(),
+				}
 
-	runner := &agenttest.Runner{
-		Responses: agenttest.NewResponseBuilder().
-			Add(&agent.ResponseUpdate{
-				Role: message.RoleAssistant,
-				Contents: []message.Content{
-					&message.FunctionCallContent{CallID: "call-1", Name: "get_weather", Arguments: `{}`},
-				},
-			}).
-			NewTurn().
-			AddText("sunny").
-			Build(),
-	}
+				var toolSpanContext trace.SpanContext
+				getWeather := functool.MustNew(
+					functool.Config{Name: "get_weather", Description: "Returns the current weather"},
+					func(ctx context.Context, args struct{}) (string, error) {
+						toolSpanContext = trace.SpanContextFromContext(ctx)
+						return "sunny", nil
+					},
+				)
+				var middlewares []agent.Middleware
+				var wantSpans int
+				if tc.middleware {
+					middlewares = append(middlewares, otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "test-source"}))
+					wantSpans++
+				}
+				var config toolautocall.Config
+				if tc.explicit {
+					config.Tracer = otelprovider.NewToolTracer(tc.source)
+				}
+				if tc.wantSource != "" {
+					wantSpans++
+				}
+				middlewares = append(middlewares, toolautocall.New(config))
+				a := agent.New(agent.ProviderConfig{
+					Run: runner.Run,
+				}, agent.Config{
+					ID:          "test-agent-id",
+					Name:        "test-agent",
+					Middlewares: middlewares,
+					Tools:       []tool.Tool{getWeather},
+				})
 
-	var toolSpanContext trace.SpanContext
-	getWeather := functool.MustNew(
-		functool.Config{Name: "get_weather", Description: "Returns the current weather"},
-		func(ctx context.Context, args struct{}) (string, error) {
-			toolSpanContext = trace.SpanContextFromContext(ctx)
-			return "sunny", nil
-		},
-	)
+				if _, err := a.RunText(t.Context(), "weather?", agent.Stream(stream)).Collect(); err != nil {
+					t.Fatal(err)
+				}
+				spans := exporter.GetSpans()
+				if len(spans) != wantSpans {
+					t.Fatalf("spans = %d, want %d", len(spans), wantSpans)
+				}
+				if tc.wantSource == "" {
+					if toolSpanContext.IsValid() {
+						t.Fatal("unexpected tool span context without a tracer")
+					}
+					return
+				}
+				executeToolSpan := findSpanByOperation(t, spans, "execute_tool")
+				if !toolSpanContext.IsValid() || toolSpanContext.SpanID() != executeToolSpan.SpanContext.SpanID() {
+					t.Fatal("tool did not receive its execute_tool span context")
+				}
+				if executeToolSpan.InstrumentationScope.Name != tc.wantSource {
+					t.Fatalf("execute_tool source = %q, want %q", executeToolSpan.InstrumentationScope.Name, tc.wantSource)
+				}
+				if tc.middleware {
+					invokeSpan := findSpanByOperation(t, spans, "invoke_agent")
+					if executeToolSpan.Parent.SpanID() != invokeSpan.SpanContext.SpanID() {
+						t.Fatalf("execute_tool parent = %s, want %s", executeToolSpan.Parent.SpanID(), invokeSpan.SpanContext.SpanID())
+					}
+				} else if executeToolSpan.Parent.IsValid() {
+					t.Fatal("tool-only tracing unexpectedly created a parent span")
+				}
+				if executeToolSpan.Name != "execute_tool get_weather" {
+					t.Fatalf("execute_tool span name = %q, want execute_tool get_weather", executeToolSpan.Name)
+				}
 
-	a := agent.New(agent.ProviderConfig{
-		Run: runner.Run,
-	}, agent.Config{
-		ID:   "test-agent-id",
-		Name: "test-agent",
-		Middlewares: []agent.Middleware{
-			otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "test-source"}),
-			toolautocall.New(toolautocall.Config{}),
-		},
-		Tools: []tool.Tool{getWeather},
-	})
-
-	_, err := a.RunMessage(t.Context(), message.NewText("weather?")).Collect()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !toolSpanContext.IsValid() {
-		t.Fatal("expected tool call to observe a valid span context")
-	}
-
-	spans := exporter.GetSpans()
-	if len(spans) != 2 {
-		t.Fatalf("expected 2 spans, got %d", len(spans))
-	}
-
-	invokeSpan := findSpanByOperation(t, spans, "invoke_agent")
-	executeToolSpan := findSpanByOperation(t, spans, "execute_tool")
-
-	if executeToolSpan.InstrumentationScope.Name != "test-source" {
-		t.Fatalf("expected execute_tool span scope %q, got %q", "test-source", executeToolSpan.InstrumentationScope.Name)
-	}
-	if executeToolSpan.Parent.SpanID() != invokeSpan.SpanContext.SpanID() {
-		t.Fatalf("expected execute_tool parent %s, got %s", invokeSpan.SpanContext.SpanID(), executeToolSpan.Parent.SpanID())
-	}
-	if executeToolSpan.Name != "execute_tool get_weather" {
-		t.Fatalf("expected execute_tool span name %q, got %q", "execute_tool get_weather", executeToolSpan.Name)
-	}
-
-	executeToolAttrs := make(map[string]string)
-	for _, attr := range executeToolSpan.Attributes {
-		executeToolAttrs[string(attr.Key)] = attr.Value.AsString()
-	}
-	if executeToolAttrs["gen_ai.tool.call.id"] != "call-1" {
-		t.Errorf("expected gen_ai.tool.call.id %q, got %q", "call-1", executeToolAttrs["gen_ai.tool.call.id"])
-	}
-	if executeToolAttrs["gen_ai.tool.type"] != "function" {
-		t.Errorf("expected gen_ai.tool.type %q, got %q", "function", executeToolAttrs["gen_ai.tool.type"])
-	}
-	if executeToolAttrs["gen_ai.tool.description"] != "Returns the current weather" {
-		t.Errorf("expected gen_ai.tool.description %q, got %q", "Returns the current weather", executeToolAttrs["gen_ai.tool.description"])
+				attrs := make(map[string]string)
+				for _, attr := range executeToolSpan.Attributes {
+					attrs[string(attr.Key)] = attr.Value.AsString()
+				}
+				for key, want := range map[string]string{
+					"gen_ai.tool.name":        "get_weather",
+					"gen_ai.tool.call.id":     "call-1",
+					"gen_ai.tool.type":        "function",
+					"gen_ai.tool.description": "Returns the current weather",
+				} {
+					if attrs[key] != want {
+						t.Errorf("%s = %q, want %q", key, attrs[key], want)
+					}
+				}
+				if _, ok := attrs["gen_ai.tool.call.arguments"]; ok {
+					t.Error("tool arguments should not be recorded")
+				}
+				if _, ok := attrs["gen_ai.tool.call.result"]; ok {
+					t.Error("tool results should not be recorded")
+				}
+			})
+		}
 	}
 }
 
@@ -886,66 +1911,68 @@ func TestOtel_Run_ExecuteToolSpan_EmptyCallIDFallsBackToUnknown(t *testing.T) {
 }
 
 func TestOtel_Run_ExecuteToolSpan_SetsErrorTypeOnToolError(t *testing.T) {
-	exporter := setupTracer(t)
-
 	toolErr := errors.New("tool failure")
-
-	runner := &agenttest.Runner{
-		Responses: agenttest.NewResponseBuilder().
-			Add(&agent.ResponseUpdate{
-				Role: message.RoleAssistant,
-				Contents: []message.Content{
-					&message.FunctionCallContent{CallID: "call-err", Name: "failing_tool", Arguments: `{}`},
+	for _, tc := range []struct {
+		name    string
+		err     error
+		panic   bool
+		wantErr error
+	}{
+		{name: "error", err: toolErr, wantErr: toolErr},
+		{name: "panic", err: toolErr, panic: true, wantErr: fmt.Errorf("tool execution panic: %w", toolErr)},
+		{name: "cancellation", err: context.Canceled, wantErr: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exporter := setupTracer(t)
+			runner := &agenttest.Runner{
+				Responses: agenttest.NewResponseBuilder().
+					Add(&agent.ResponseUpdate{
+						Role: message.RoleAssistant,
+						Contents: []message.Content{
+							&message.FunctionCallContent{CallID: "call-err", Name: "failing_tool", Arguments: `{}`},
+						},
+					}).
+					NewTurn().
+					AddText("done").
+					Build(),
+			}
+			failingTool := functool.MustNew(
+				functool.Config{Name: "failing_tool"},
+				func(ctx context.Context, args struct{}) (string, error) {
+					if tc.panic {
+						panic(tc.err)
+					}
+					return "", tc.err
 				},
-			}).
-			NewTurn().
-			AddText("done").
-			Build(),
-	}
-
-	failingTool := functool.MustNew(
-		functool.Config{Name: "failing_tool"},
-		func(ctx context.Context, args struct{}) (string, error) {
-			return "", toolErr
-		},
-	)
-
-	a := agent.New(agent.ProviderConfig{
-		Run: runner.Run,
-	}, agent.Config{
-		Name: "test-agent",
-		Middlewares: []agent.Middleware{
-			otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "test-source"}),
-			toolautocall.New(toolautocall.Config{}),
-		},
-		Tools: []tool.Tool{failingTool},
-	})
-
-	_, err := a.RunMessage(t.Context(), message.NewText("go")).Collect()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	spans := exporter.GetSpans()
-	executeToolSpan := findSpanByOperation(t, spans, "execute_tool")
-
-	attrs := make(map[string]string)
-	for _, attr := range executeToolSpan.Attributes {
-		attrs[string(attr.Key)] = attr.Value.AsString()
-	}
-	if attrs["error.type"] != "errorString" {
-		t.Errorf("expected error.type %q, got %q", "errorString", attrs["error.type"])
-	}
-
-	hasErrorEvent := false
-	for _, event := range executeToolSpan.Events {
-		if event.Name == "exception" {
-			hasErrorEvent = true
-			break
-		}
-	}
-	if !hasErrorEvent {
-		t.Error("expected execute_tool span to have an exception event")
+			)
+			a := agent.New(agent.ProviderConfig{
+				Run: runner.Run,
+			}, agent.Config{
+				Name: "test-agent",
+				Middlewares: []agent.Middleware{
+					otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "test-source"}),
+					toolautocall.New(toolautocall.Config{}),
+				},
+				Tools: []tool.Tool{failingTool},
+			})
+			if _, err := a.RunText(t.Context(), "go").Collect(); err != nil {
+				t.Fatal(err)
+			}
+			executeToolSpan := findSpanByOperation(t, exporter.GetSpans(), "execute_tool")
+			attrs := make(map[string]string)
+			for _, attr := range executeToolSpan.Attributes {
+				attrs[string(attr.Key)] = attr.Value.AsString()
+			}
+			if want := telemetry.ErrorTypeName(tc.wantErr); attrs["error.type"] != want {
+				t.Errorf("error.type = %q, want %q", attrs["error.type"], want)
+			}
+			if executeToolSpan.Status.Code != codes.Error || executeToolSpan.Status.Description != tc.wantErr.Error() {
+				t.Errorf("span status = %+v, want error %q", executeToolSpan.Status, tc.wantErr)
+			}
+			if !slices.ContainsFunc(executeToolSpan.Events, func(event sdktrace.Event) bool { return event.Name == "exception" }) {
+				t.Error("expected execute_tool span to have an exception event")
+			}
+		})
 	}
 }
 
@@ -980,7 +2007,10 @@ func TestOtel_Run_HandlesEarlyBreak(t *testing.T) {
 	seq := mw.Run(next, t.Context(), []*message.Message{})
 
 	count := 0
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 		count++
 		if count >= 3 {
 			break
@@ -1011,7 +2041,10 @@ func TestOtel_Run_UnknownProviderWhenNoMetadata(t *testing.T) {
 
 	// Use context without metadata
 	seq := mw.Run(next, t.Context(), []*message.Message{})
-	for range seq {
+	for _, err := range seq {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	spans := exporter.GetSpans()
@@ -1049,7 +2082,14 @@ func TestOtel_Run_RecordsMultipleErrors(t *testing.T) {
 	}
 
 	seq := mw.Run(next, t.Context(), []*message.Message{})
-	for range seq {
+	wantErrors := []error{err1, err2}
+	for _, err := range seq {
+		if callCount >= len(wantErrors) {
+			t.Fatalf("received more than %d errors", len(wantErrors))
+		}
+		if !errors.Is(err, wantErrors[callCount]) {
+			t.Errorf("error %d = %v, want %v", callCount, err, wantErrors[callCount])
+		}
 		callCount++
 	}
 

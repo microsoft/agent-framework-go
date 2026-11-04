@@ -5,7 +5,6 @@ package foundryprovider
 import (
 	"cmp"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 
@@ -14,7 +13,6 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/provider/openaiprovider"
 	"github.com/openai/openai-go/v3"
-	"github.com/openai/openai-go/v3/azure"
 	"github.com/openai/openai-go/v3/option"
 )
 
@@ -43,8 +41,9 @@ type AgentConfig struct {
 	// opt out.
 	DisableStoreOutput bool
 
-	// OpenAIOptions configure the OpenAI-compatible per-agent client. Foundry-owned
-	// endpoint, authentication, and protocol options take precedence.
+	// OpenAIOptions configure the OpenAI-compatible per-agent client, including
+	// API-key authentication when no token credential is supplied; see [NewAgent].
+	// Foundry-owned endpoint and protocol options take precedence.
 	OpenAIOptions []option.RequestOption
 }
 
@@ -67,11 +66,29 @@ func (ServerAgent) foundryAgentTarget() {}
 //
 // The endpoint must be the Foundry project endpoint. When target is [ServerAgent],
 // NewAgent builds the server-side agent endpoint from the project endpoint and agent name.
+//
+// A non-nil credential uses Microsoft Entra authentication with the Foundry audience.
+// For API-key authentication, pass a nil credential and include azure.WithAPIKey
+// in AgentConfig.OpenAIOptions:
+//
+//	a := NewAgent(endpoint, nil, ModelDeployment("model"), AgentConfig{
+//		OpenAIOptions: []option.RequestOption{azure.WithAPIKey(apiKey)},
+//	})
+//
+// The Azure API-key option sends the api-key header instead of a bearer token.
+// Do not use option.WithAPIKey, which configures OpenAI bearer-key authentication
+// and is rejected by this client.
+//
+// API-key availability depends on the target endpoint. Published Agent Applications
+// require Microsoft Entra authentication and use application endpoints that this
+// constructor does not target.
+//
+// Configure only one authentication mode. Missing or conflicting authentication
+// is reported when a request is made. Both modes retain the SDK's HTTPS and
+// credential-origin guards.
 func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTarget, config AgentConfig) *agent.Agent {
-	if credential == nil {
-		panic("credential is required")
-	}
 	var baseURL, model string
+	var serverAgent bool
 	var targetOptions []option.RequestOption
 	instructions := config.Instructions
 	switch target := target.(type) {
@@ -86,6 +103,7 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 		// reject the api-version query added by azure.WithEndpoint.
 		targetOptions = append(targetOptions, option.WithQueryDel("api-version"))
 	case ServerAgent:
+		serverAgent = true
 		projectEndpoint := normalizeAbsoluteEndpoint(endpoint)
 		agentName := strings.TrimSpace(string(target))
 		if agentName == "" {
@@ -102,42 +120,14 @@ func NewAgent(endpoint string, credential azcore.TokenCredential, target AgentTa
 		panic(fmt.Sprintf("unsupported Foundry agent target %T", target))
 	}
 
-	parsedBaseURL, err := url.Parse(baseURL)
-	if err != nil {
-		panic(fmt.Sprintf("invalid base URL %q: %v", baseURL, err))
-	}
-	basePath := strings.TrimRight(parsedBaseURL.Path, "/")
-	baseRawPath := strings.TrimRight(parsedBaseURL.EscapedPath(), "/")
-	openAIOptions := make([]option.RequestOption, 0, len(config.OpenAIOptions)+len(targetOptions)+6)
-	openAIOptions = append(openAIOptions, config.OpenAIOptions...)
-	openAIOptions = append(openAIOptions,
-		// WithTokenCredential requires the Azure endpoint marker registered by
-		// WithEndpoint. WithEndpoint also adds ?api-version=v1 and rewrites a
-		// Responses path from /responses to /openai/responses.
-		azure.WithEndpoint(baseURL, foundryDataPlaneAPIVersion),
-		// Keep the complete Foundry OpenAI-compatible route as the request root.
-		option.WithBaseURL(baseURL),
-		option.WithMiddleware(func(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
-			// Undo WithEndpoint's Azure OpenAI path prefix because baseURL already
-			// contains the complete Foundry route. Update RawPath as well so escaped
-			// server agent names remain encoded.
-			req.URL.Path = removeAzureOpenAIPrefix(req.URL.Path, basePath)
-			if req.URL.RawPath != "" {
-				req.URL.RawPath = removeAzureOpenAIPrefix(req.URL.RawPath, baseRawPath)
-			}
-			return next(req)
-		}),
-		// Use the Foundry audience while retaining the SDK's token refresh and
-		// authenticated-transport protections.
-		azure.WithTokenCredential(credential, azure.WithTokenCredentialScopes([]string{azureAIResourceScope})),
-	)
+	openAIOptions := foundryOpenAIOptions(baseURL, credential, config.OpenAIOptions)
 	openAIOptions = append(openAIOptions, targetOptions...)
 	openAIOptions = append(openAIOptions, clientHeadersRequestOption())
 	openAIOptions = append(openAIOptions, hostedAgentUserIdentityRequestOption())
 	openAIOptions = append(openAIOptions, hostedAgentSessionRequestOption())
 	openAIOptions = append(openAIOptions, servedModelRequestOption())
 	config.Middlewares = append([]agent.Middleware{
-		clientHeadersMiddleware{},
+		clientHeadersMiddleware{serverAgent: serverAgent},
 		hostedAgentUserIdentityMiddleware{},
 		hostedAgentSessionMiddleware{},
 		servedModelMiddleware{},
@@ -161,24 +151,6 @@ func projectOpenAIBaseURL(projectEndpoint string) string {
 	return strings.TrimRight(projectEndpoint, "/") + "/openai/v1/"
 }
 
-// removeAzureOpenAIPrefix removes the Azure path prefix after the configured
-// base route, or a leading root-level prefix when the path has no base route.
-func removeAzureOpenAIPrefix(path, basePath string) string {
-	if basePath != "" && path == basePath+"/openai" {
-		return basePath
-	}
-	if relativePath, ok := strings.CutPrefix(path, basePath+"/openai/"); ok {
-		return basePath + "/" + relativePath
-	}
-	if path == "/openai" {
-		return "/"
-	}
-	if relativePath, ok := strings.CutPrefix(path, "/openai/"); ok {
-		return "/" + relativePath
-	}
-	return path
-}
-
 func serverAgentEndpoint(projectEndpoint string, agentName string) string {
 	endpoint, err := url.JoinPath(projectEndpoint, "agents", url.PathEscape(agentName), "endpoint", "protocols", "openai")
 	if err != nil {
@@ -199,8 +171,9 @@ func normalizeAbsoluteEndpoint(rawEndpoint string) string {
 	if endpoint.Scheme == "" || endpoint.Host == "" {
 		panic("endpoint must be an absolute URL")
 	}
+	escapedPath := strings.TrimRight(endpoint.EscapedPath(), "/")
 	endpoint.Path = strings.TrimRight(endpoint.Path, "/")
-	endpoint.RawPath = strings.TrimRight(endpoint.EscapedPath(), "/")
+	endpoint.RawPath = escapedPath
 	endpoint.RawQuery = ""
 	endpoint.Fragment = ""
 	return endpoint.String()

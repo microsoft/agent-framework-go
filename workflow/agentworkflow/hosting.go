@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"reflect"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -487,7 +488,7 @@ func stampHostedUpdateMessageID(update *agent.ResponseUpdate, state *generatedHo
 	if update == nil {
 		return nil
 	}
-	if update.MessageID != "" {
+	if strings.TrimSpace(update.MessageID) != "" {
 		if state != nil {
 			*state = generatedHostedMessageState{}
 		}

@@ -71,6 +71,85 @@ func newPlaceholder(id string) workflow.ExecutorBinding {
 	return workflow.ExecutorBinding{ID: id}
 }
 
+func TestBuilder_SwitchCreatesFanOutWithCasesAndDefault(t *testing.T) {
+	source := newNoOpExecutor("start")
+	stringTarget, intTarget, defaultTarget := newNoOpExecutor("string-target"), newNoOpExecutor("int-target"), newNoOpExecutor("default-target")
+	builder := workflow.NewBuilder(newPlaceholder(source.ID))
+	builder.AddSwitch(source).
+		AddCase(func(value any) bool { text, ok := value.(string); return ok && text == "match" }, stringTarget).
+		AddCase(func(value any) bool { number, ok := value.(int); return ok && number > 0 }, intTarget).
+		WithDefault(defaultTarget).
+		AddToBuilder(builder)
+	wf, err := builder.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	edges := wf.Edges()[source.ID]
+	if len(edges) != 1 {
+		t.Fatalf("edges = %v, want one fan-out", edges)
+	}
+	edge := edges[0]
+	if !slices.Equal(edge.Connection.SourceIDs, []string{source.ID}) ||
+		!slices.Equal(edge.Connection.SinkIDs, []string{stringTarget.ID, intTarget.ID, defaultTarget.ID}) || edge.Assigner == nil {
+		t.Fatalf("switch edge = %#v", edge)
+	}
+	for _, test := range []struct {
+		input any
+		want  []int
+	}{{"match", []int{0}}, {2, []int{1}}, {"other", []int{2}}} {
+		if got := slices.Collect(edge.Assigner(3, test.input)); !slices.Equal(got, test.want) {
+			t.Errorf("selection for %v = %v, want %v", test.input, got, test.want)
+		}
+	}
+}
+
+func TestBuilder_IntermediateOutputAddsIntermediateTag(t *testing.T) {
+	a, b := newNoOpExecutor("a"), newNoOpExecutor("b")
+	wf, err := workflow.NewBuilder(newPlaceholder("a")).AddEdge(a, b).WithIntermediateOutputFrom(b).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wf.OutputExecutors()["b"]; !slices.Equal(got, []workflow.OutputTag{workflow.OutputTagIntermediate}) {
+		t.Fatalf("tags = %v", got)
+	}
+}
+
+func TestBuilder_RepeatedIntermediateDesignationDedupes(t *testing.T) {
+	a, b := newNoOpExecutor("a"), newNoOpExecutor("b")
+	wf, err := workflow.NewBuilder(newPlaceholder("a")).AddEdge(a, b).WithIntermediateOutputFrom(b).WithIntermediateOutputFrom(b).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wf.OutputExecutors()["b"]; !slices.Equal(got, []workflow.OutputTag{workflow.OutputTagIntermediate}) {
+		t.Fatalf("tags = %v", got)
+	}
+}
+
+func TestBuilder_MultipleTerminalExecutorsAreUntagged(t *testing.T) {
+	a, b, c := newNoOpExecutor("a"), newNoOpExecutor("b"), newNoOpExecutor("c")
+	wf, err := workflow.NewBuilder(newPlaceholder("a")).AddEdge(a, b).AddEdge(a, c).WithOutputFrom(b, c).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputs := wf.OutputExecutors()
+	if len(outputs) != 2 || len(outputs["b"]) != 0 || len(outputs["c"]) != 0 {
+		t.Fatalf("output designations = %v, want two untagged executors", outputs)
+	}
+}
+
+func TestBuilder_OutputDesignationTracksPlaceholderBinding(t *testing.T) {
+	a, future := newNoOpExecutor("a"), newNoOpExecutor("future")
+	wf, err := workflow.NewBuilder(newPlaceholder("a")).AddEdge(a, newPlaceholder("future")).
+		WithIntermediateOutputFrom(newPlaceholder("future")).BindExecutor(future).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tags, ok := wf.OutputExecutors()["future"]
+	if !ok || !slices.Equal(tags, []workflow.OutputTag{workflow.OutputTagIntermediate}) {
+		t.Fatalf("future tags = %v, %t", tags, ok)
+	}
+}
+
 func TestBuilder_InfersEmptyImplementationID(t *testing.T) {
 	binding := workflow.ExecutorBinding{
 		ID: "start",
@@ -202,6 +281,41 @@ func TestBuilder_Validation_FailsWhenUnreachableExecutors(t *testing.T) {
 	}
 }
 
+func TestBuilder_BuildWithOptionsCanSkipOrphanValidation(t *testing.T) {
+	wf, err := workflow.NewBuilder(newPlaceholder("start")).
+		BindExecutor(newNoOpExecutor("start")).
+		AddEdge(newNoOpExecutor("unreachable"), newNoOpExecutor("also-unreachable")).
+		BuildWithOptions(workflow.BuildOptions{DisableOrphanValidation: true})
+	if err != nil {
+		t.Fatalf("BuildWithOptions() error = %v, want nil", err)
+	}
+	if wf == nil {
+		t.Fatal("BuildWithOptions() workflow = nil, want workflow")
+	}
+}
+
+func TestBuilder_BuildWithOptionsValidatesOrphansByDefault(t *testing.T) {
+	_, err := workflow.NewBuilder(newPlaceholder("start")).
+		BindExecutor(newNoOpExecutor("start")).
+		AddEdge(newNoOpExecutor("unreachable"), newNoOpExecutor("also-unreachable")).
+		BuildWithOptions(workflow.BuildOptions{})
+	if err == nil || !strings.Contains(err.Error(), "orphaned executors") {
+		t.Fatalf("BuildWithOptions() error = %v, want orphaned executors error", err)
+	}
+}
+
+func TestBuilder_BuildWithOptionsStillValidatesTypeCompatibility(t *testing.T) {
+	source := newTypedExecutor[string, int]("unreachable")
+	target := newTypedExecutor[string, string]("also-unreachable")
+
+	_, err := workflow.NewBuilder(newNoOpExecutor("start")).
+		AddEdge(source, target).
+		BuildWithOptions(workflow.BuildOptions{DisableOrphanValidation: true})
+	if err == nil || !strings.Contains(err.Error(), "type incompatibility") {
+		t.Fatalf("BuildWithOptions() error = %v, want type incompatibility error", err)
+	}
+}
+
 func TestBuilder_Validation_AddEdgesOutOfOrderDoesNotImpactReachability(t *testing.T) {
 	wf, err := workflow.NewBuilder(newPlaceholder("start")).
 		BindExecutor(newNoOpExecutor("start")).
@@ -260,28 +374,43 @@ func TestBuilder_LateBinding_Executor(t *testing.T) {
 
 func TestBuilder_LateImplicitBinding_Executor(t *testing.T) {
 	start := newNoOpExecutor("start")
-	wf, err := workflow.NewBuilder(newPlaceholder("start")).
-		AddEdge(start, start).
-		Build()
+	shared, err := start.CreateInstance("session")
 	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+		t.Fatalf("CreateInstance: %v", err)
 	}
 
-	if wf.StartExecutorID() != "start" {
-		t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID())
-	}
+	for _, tc := range []struct {
+		name           string
+		source, target workflow.ExecutorBinding
+	}{
+		{name: "factory binding", source: start, target: start},
+		{name: "shared executor instance", source: shared.Bind(), target: shared.Bind()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wf, err := workflow.NewBuilder(newPlaceholder("start")).
+				AddEdge(tc.source, tc.target).
+				Build()
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
 
-	bindings := wf.ReflectExecutors()
-	if len(bindings) != 1 {
-		t.Errorf("expected 1 executor binding, got %d", len(bindings))
-	}
+			if wf.StartExecutorID() != "start" {
+				t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID())
+			}
 
-	if binding, ok := bindings["start"]; !ok {
-		t.Error("expected binding for start")
-	} else {
-		if binding.ImplementationID != "*noOpExecutor" {
-			t.Errorf("expected implementation ID *noOpExecutor")
-		}
+			bindings := wf.ReflectExecutors()
+			if len(bindings) != 1 {
+				t.Errorf("expected 1 executor binding, got %d", len(bindings))
+			}
+
+			if binding, ok := bindings["start"]; !ok {
+				t.Error("expected binding for start")
+			} else {
+				if binding.ImplementationID != "*noOpExecutor" {
+					t.Errorf("expected implementation ID *noOpExecutor")
+				}
+			}
+		})
 	}
 }
 
@@ -315,29 +444,43 @@ func TestBuilder_RejectsNonComparableRawValue(t *testing.T) {
 
 func TestBuilder_RebindToSameish_Allowed(t *testing.T) {
 	executor1 := newNoOpExecutor("start")
-
-	wf, err := workflow.NewBuilder(newPlaceholder("start")).
-		AddEdge(executor1, executor1).
-		Build()
+	shared, err := executor1.CreateInstance("session")
 	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
+		t.Fatalf("CreateInstance: %v", err)
 	}
 
-	if wf.StartExecutorID() != "start" {
-		t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID())
-	}
+	for _, tc := range []struct {
+		name           string
+		source, target workflow.ExecutorBinding
+	}{
+		{name: "factory binding", source: executor1, target: executor1},
+		{name: "shared executor instance", source: shared.Bind(), target: shared.Bind()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			wf, err := workflow.NewBuilder(newPlaceholder("start")).
+				AddEdge(tc.source, tc.target).
+				Build()
+			if err != nil {
+				t.Fatalf("expected no error, got %v", err)
+			}
 
-	bindings := wf.ReflectExecutors()
-	if len(bindings) != 1 {
-		t.Errorf("expected 1 executor binding, got %d", len(bindings))
-	}
+			if wf.StartExecutorID() != "start" {
+				t.Errorf("expected start executor ID 'start', got %s", wf.StartExecutorID())
+			}
 
-	if binding, ok := bindings["start"]; !ok {
-		t.Error("expected binding for start")
-	} else {
-		if binding.ImplementationID != "*noOpExecutor" {
-			t.Errorf("expected implementation ID *noOpExecutor")
-		}
+			bindings := wf.ReflectExecutors()
+			if len(bindings) != 1 {
+				t.Errorf("expected 1 executor binding, got %d", len(bindings))
+			}
+
+			if binding, ok := bindings["start"]; !ok {
+				t.Error("expected binding for start")
+			} else {
+				if binding.ImplementationID != "*noOpExecutor" {
+					t.Errorf("expected implementation ID *noOpExecutor")
+				}
+			}
+		})
 	}
 }
 
@@ -426,6 +569,18 @@ func TestAddChain_ConnectsExecutorsInOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
+	for _, connection := range []workflow.EdgeConnection{
+		{SourceIDs: []string{a.ID}, SinkIDs: []string{b.ID}},
+		{SourceIDs: []string{b.ID}, SinkIDs: []string{c.ID}},
+	} {
+		edges := wf.OutgoingEdges(connection.SourceIDs[0])
+		if len(edges) != 1 {
+			t.Fatalf("OutgoingEdges(%q) count = %d, want 1", connection.SourceIDs[0], len(edges))
+		}
+		if !edges[0].Connection.Equal(connection) {
+			t.Fatalf("edge connection = %+v, want %+v", edges[0].Connection, connection)
+		}
+	}
 	if _, err := inproc.Default.Run(context.Background(), wf, "x"); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -439,11 +594,25 @@ func TestAddChain_RejectsRepetitionByDefault(t *testing.T) {
 	a := recordingBinding("a", new([]string))
 	b := recordingBinding("b", new([]string))
 
-	_, err := workflow.NewBuilder(a).
-		AddChain(a, []workflow.ExecutorBinding{b, b}, false).
-		Build()
-	if err == nil {
-		t.Fatal("expected error for repeated executor")
+	for _, tc := range []struct {
+		name        string
+		executors   []workflow.ExecutorBinding
+		duplicateID string
+	}{
+		{name: "repeated tail", executors: []workflow.ExecutorBinding{b, b}, duplicateID: b.ID},
+		{name: "repeated source", executors: []workflow.ExecutorBinding{b, a}, duplicateID: a.ID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := workflow.NewBuilder(a).
+				AddChain(a, tc.executors, false).
+				Build()
+			if err == nil {
+				t.Fatal("expected error for repeated executor")
+			}
+			if !strings.Contains(err.Error(), "already in the chain") || !strings.Contains(err.Error(), `"`+tc.duplicateID+`"`) {
+				t.Fatalf("Build() error = %v, want chain repetition error for executor %q", err, tc.duplicateID)
+			}
+		})
 	}
 }
 
@@ -657,18 +826,23 @@ func TestBuilder_Validation_FailsWhenOutputExecutorNotInGraph(t *testing.T) {
 }
 
 func TestBuilder_Validation_OutputExecutorNotBound(t *testing.T) {
-	// Directly test the output executor validation: if we somehow register
-	// an output executor that is not in executorsBindings, the build must
-	// fail with a clear error.
+	// WithOutputFrom registers a reachable executor without output tags.
 	start := newNoOpExecutor("start")
 	target := newNoOpExecutor("target")
 
-	_, err := workflow.NewBuilder(start).
+	wf, err := workflow.NewBuilder(start).
 		AddEdge(start, target).
 		WithOutputFrom(target).
 		Build()
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
+	}
+	tags, ok := wf.OutputExecutors()[target.ID]
+	if !ok {
+		t.Fatalf("output executor %q is not registered", target.ID)
+	}
+	if len(tags) != 0 {
+		t.Fatalf("tags = %v, want empty", tags)
 	}
 }
 

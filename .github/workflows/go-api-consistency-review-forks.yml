@@ -20,7 +20,6 @@ on:
 
 permissions:
   actions: write
-  contents: read
 
 concurrency:
   group: dispatch-fork-api-consistency-review-${{ github.event.pull_request.number }}
