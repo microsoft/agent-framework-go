@@ -247,6 +247,25 @@ func TestStreamingUsage_DoesNotDoubleCountOutputTokens(t *testing.T) {
 
 // minimalStreamingResponse returns an SSE stream that delivers payload as a
 // single text delta.
+// A streamed run collected via ResponseStream.Collect must surface the model
+// that produced the response on Response.ModelID, matching the non-streaming
+// path. The model arrives on the message_start event.
+func TestStreamingModelIDSurfaced(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, minimalStreamingResponse("hi"))
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "hello", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	if resp.ModelID != "claude-3-5-sonnet-20241022" {
+		t.Errorf("ModelID = %q, want claude-3-5-sonnet-20241022", resp.ModelID)
+	}
+}
+
 func minimalStreamingResponse(payload string) string {
 	payloadJSON, _ := json.Marshal(payload)
 	return "" +

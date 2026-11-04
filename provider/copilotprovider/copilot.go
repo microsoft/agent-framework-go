@@ -856,6 +856,10 @@ func (p *provider) assistantUsageUpdate(event copilot.SessionEvent, data *copilo
 	// client which carries it as additional_properties["model"]. Initialize the
 	// map lazily so existing/future properties are not overwritten.
 	if data.Model != "" {
+		// Surface the served model on the canonical ModelID field as well, so
+		// callers do not need a provider-specific fallback, while retaining the
+		// additional property for compatibility.
+		update.ModelID = data.Model
 		if update.AdditionalProperties == nil {
 			update.AdditionalProperties = make(map[string]any)
 		}

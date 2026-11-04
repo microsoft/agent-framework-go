@@ -236,6 +236,38 @@ func TestResponse_Update_EmptyResponse(t *testing.T) {
 	}
 }
 
+func TestResponse_Update_MetadataOnlyDoesNotCreateMessage(t *testing.T) {
+	resp := &agent.Response{}
+	// A metadata-only update (response-level ModelID, no message content) must
+	// apply the response field without materializing an empty message.
+	resp.Update(&agent.ResponseUpdate{ModelID: "gpt-4o"})
+
+	if len(resp.Messages) != 0 {
+		t.Fatalf("expected no messages, got %d", len(resp.Messages))
+	}
+	if resp.ModelID != "gpt-4o" {
+		t.Errorf("expected ModelID 'gpt-4o', got %q", resp.ModelID)
+	}
+}
+
+func TestResponse_ToUpdates_ModelIDRoundTripNoMessages(t *testing.T) {
+	// A response that carries only a model identifier (no messages) must survive
+	// a ToUpdates -> Update round-trip: ModelID preserved, Messages still empty.
+	orig := &agent.Response{ModelID: "gpt-4o"}
+
+	rebuilt := &agent.Response{}
+	for _, u := range orig.ToUpdates() {
+		rebuilt.Update(u)
+	}
+
+	if len(rebuilt.Messages) != 0 {
+		t.Fatalf("round-trip created %d messages, want 0", len(rebuilt.Messages))
+	}
+	if rebuilt.ModelID != "gpt-4o" {
+		t.Errorf("round-trip ModelID = %q, want %q", rebuilt.ModelID, "gpt-4o")
+	}
+}
+
 func TestResponse_Update_SameMessage(t *testing.T) {
 	resp := &agent.Response{}
 
@@ -659,6 +691,26 @@ func TestResponse_CreatedAt(t *testing.T) {
 
 	if !resp.CreatedAt.Equal(time1) {
 		t.Errorf("expected resp.CreatedAt to remain %v, got %v", time1, resp.CreatedAt)
+	}
+}
+
+// ModelID folds onto the response from later updates and round-trips through
+// ToUpdates, matching how ResponseID/FinishReason are handled.
+func TestResponse_Update_ModelID(t *testing.T) {
+	resp := &agent.Response{}
+	resp.Update(&agent.ResponseUpdate{MessageID: "m1", Contents: message.Contents{&message.TextContent{Text: "hi"}}})
+	resp.Update(&agent.ResponseUpdate{MessageID: "m1", ModelID: "gpt-4o-mini-2024-07-18"})
+	if resp.ModelID != "gpt-4o-mini-2024-07-18" {
+		t.Fatalf("ModelID = %q, want gpt-4o-mini-2024-07-18", resp.ModelID)
+	}
+
+	// Round-trip: ToUpdates carries ModelID, and re-collecting preserves it.
+	var collected agent.Response
+	for _, u := range resp.ToUpdates() {
+		collected.Update(u)
+	}
+	if collected.ModelID != resp.ModelID {
+		t.Errorf("round-tripped ModelID = %q, want %q", collected.ModelID, resp.ModelID)
 	}
 }
 
