@@ -1136,8 +1136,11 @@ func (t *WebSearchToolResultContent) MarshalJSON() ([]byte, error) {
 
 func (t WebSearchToolResultContent) kind() contentKind { return "webSearchToolResult" }
 
-// Coalesce combines adjacent compatible content elements and returns the
-// resulting slice. It may reuse and modify the receiver's backing array.
+// Coalesce combines compatible content elements and returns the resulting
+// slice: adjacent runs of text, reasoning, and data content, plus
+// image-generation results, web-search calls, and code-interpreter calls and
+// results that share a call ID regardless of position. It may reuse and modify
+// the receiver's backing array.
 func (contents Contents) Coalesce() Contents {
 	var sb strings.Builder
 	mergeText := func(contents []Content, start, end int) string {

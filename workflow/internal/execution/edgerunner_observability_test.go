@@ -149,15 +149,18 @@ func TestPrepareDeliveryForFanInEdgeConcurrentProcessing(t *testing.T) {
 	for iteration := range iterations {
 		start := make(chan struct{})
 		results := make(chan deliveryResult, sourceCount)
-		var wg sync.WaitGroup
+		var ready, wg sync.WaitGroup
+		ready.Add(sourceCount)
 		for _, sourceID := range sourceIDs {
-			envelope := mustEnvelopeTarget(t, "msg-from-"+sourceID, sourceID, "")
+			envelope := mustEnvelopeTarget(t, fmt.Sprintf("iteration-%d-msg-from-%s", iteration, sourceID), sourceID, "")
 			wg.Go(func() {
+				ready.Done()
 				<-start
 				mapping, err := runner.PrepareDeliveryForEdge(context.Background(), edge, envelope)
 				results <- deliveryResult{mapping: mapping, err: err}
 			})
 		}
+		ready.Wait()
 		close(start)
 		wg.Wait()
 		close(results)
@@ -176,7 +179,7 @@ func TestPrepareDeliveryForFanInEdgeConcurrentProcessing(t *testing.T) {
 		}
 		expectedMessages := make([]string, 0, sourceCount)
 		for _, sourceID := range sourceIDs {
-			expectedMessages = append(expectedMessages, "msg-from-"+sourceID)
+			expectedMessages = append(expectedMessages, fmt.Sprintf("iteration-%d-msg-from-%s", iteration, sourceID))
 		}
 		requireMapping(t, delivered[0], []string{"sink"}, expectedMessages)
 	}

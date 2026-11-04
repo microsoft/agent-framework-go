@@ -8,10 +8,12 @@ import (
 	"log/slog"
 	"runtime"
 	"slices"
+	"strings"
 	"sync"
 	"weak"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messagefilter"
 )
@@ -42,7 +44,7 @@ type HistoryProviderConfig struct {
 	SourceID string
 
 	// StateKey identifies where provider state is stored in the session.
-	// When empty, SourceID is used.
+	// When empty, SourceID is used. Whitespace-only keys are invalid.
 	StateKey string
 
 	// StateInitializer returns initial messages on first use.
@@ -106,6 +108,7 @@ func (l *historyProviderSessionLocks) forOptions(options []agent.Option) *sync.M
 // The provider stores conversation history in the session like [agent.NewInMemoryHistoryProvider],
 // but it automatically applies Strategy at the configured TriggerEvent. This gives history providers
 // first-class reducer-trigger behavior without requiring a separate context provider.
+// It panics if the resolved StateKey is blank.
 func NewHistoryProvider(cfg HistoryProviderConfig) agent.HistoryProvider {
 	if cfg.Strategy == nil {
 		panic("Strategy is required")
@@ -116,10 +119,14 @@ func NewHistoryProvider(cfg HistoryProviderConfig) agent.HistoryProvider {
 	}
 	cfg.SourceID = cmp.Or(cfg.SourceID, defaultHistoryProviderSourceID)
 	cfg.StateKey = cmp.Or(cfg.StateKey, cfg.SourceID)
+	if strings.TrimSpace(cfg.StateKey) == "" {
+		panic("StateKey must not be blank")
+	}
 	return &historyProvider{config: cfg, locks: new(historyProviderSessionLocks)}
 }
 
 func (p *historyProvider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, error) {
+	telemetry.MarkUsed(telemetry.FeatureCompactionProvider)
 	mu := p.locks.forOptions(invoking.Options)
 	mu.Lock()
 	defer mu.Unlock()
@@ -178,6 +185,7 @@ func (p *historyProvider) Invoked(ctx context.Context, invoked agent.InvokedCont
 	if invoked.Err != nil {
 		return nil
 	}
+	telemetry.MarkUsed(telemetry.FeatureCompactionProvider)
 
 	requestFilter := p.config.StoreInputRequestMessageFilter
 	if requestFilter == nil {

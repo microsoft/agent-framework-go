@@ -119,6 +119,19 @@ func (e ErrorEvent) Data() any {
 	return e.Error
 }
 
+var _ Event = WorkflowWarningEvent{}
+
+// WorkflowWarningEvent is an event triggered when a workflow encounters a
+// warning condition.
+type WorkflowWarningEvent struct {
+	Message       string
+	SubWorkflowID string
+}
+
+func (e WorkflowWarningEvent) Data() any {
+	return e.Message
+}
+
 var _ Event = OutputEvent{}
 
 // OutputEvent is an event triggered when the workflow produces an output.

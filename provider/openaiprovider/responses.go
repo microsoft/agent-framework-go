@@ -19,8 +19,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/internal/modelcall"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
@@ -56,10 +59,16 @@ func NewResponsesAgent(oclient openai.Client, config AgentConfig) *agent.Agent {
 	return agent.New(
 		agent.ProviderConfig{
 			ProviderName: cmp.Or(config.ProviderName, "openai"),
-			Run:          c.run,
-			Middlewares:  providerMiddlewares,
-			Format:       c.formatOf,
-			Unmarshal:    c.unmarshal,
+			Run: modelcall.Wrap(c.run, func(options []agent.Option) string {
+				if token, _ := agent.GetOption(options, agent.WithContinuationToken); token != "" {
+					return ""
+				}
+				params, _ := agent.GetOption(options, ResponsesNewParams)
+				return cmp.Or(params.Model, config.Model)
+			}),
+			Middlewares: providerMiddlewares,
+			Format:      c.formatOf,
+			Unmarshal:   c.unmarshal,
 		}, config.Config,
 	)
 }
@@ -94,20 +103,26 @@ func ResponsesIncludeReasoningEncryptedContent(enabled bool) agent.Option {
 	return responsesIncludeReasoningEncryptedContentOpt(enabled)
 }
 
-func (a *responsesClient) formatOf(v any) (agent.ResponseFormat, error) {
-	return jsonformat.ForType(reflect.TypeOf(v))
+func (a *responsesClient) formatOf(v any) (format.ResponseFormat, error) {
+	responseFormat, err := jsonformat.ForType(reflect.TypeOf(v))
+	if err != nil {
+		return format.ResponseFormat{}, err
+	}
+	return jsonformat.WrapNonObjectSchema(responseFormat)
 }
 
-func (a *responsesClient) unmarshal(format agent.ResponseFormat, data []byte, v any) error {
+func (a *responsesClient) unmarshal(format format.ResponseFormat, data []byte, v any) error {
 	jsonFormat, err := jsonformat.FromResponseFormat(format)
 	if err != nil {
 		return err
 	}
-	return jsonFormat.Unmarshal(data, v)
+	return jsonFormat.UnmarshalStructuredOutput(data, v)
 }
 
 func (a *responsesClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		telemetry.MarkUsed(telemetry.FeatureOpenAI)
+		telemetryOption := telemetryRequestOption(a.config.ProviderName)
 		stream, _ := agent.GetOption(options, agent.Stream)
 
 		body, err := responsesBuildCompletionParams(a.config, messages, options)
@@ -139,7 +154,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 				// Get streaming response
 				streamResp := a.client.Responses.GetStreaming(ctx, ct.ResponseID, responses.ResponseGetParams{
 					StartingAfter: openai.Int(ct.SequenceNumber),
-				}, telemetryRequestOption)
+				}, telemetryOption)
 				defer func() { _ = streamResp.Close() }()
 				streamState := &responsesStreamState{}
 				storeDisabled := disableStoreOutput
@@ -155,6 +170,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 						return
 					}
 					if resp := responsesEventResponse(event); resp != nil {
+						modelcall.RecordResponse(ctx, resp.Model, resp.ID)
 						storeDisabled = storeDisabled || resp.JSON.ExtraFields["store"].Raw() == "false"
 						conversationID = responsesConversationID(resp, requestConversationID, storeDisabled)
 					}
@@ -170,11 +186,12 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 				}
 			} else {
 				// Get complete response
-				resp, err := a.client.Responses.Get(ctx, ct.ResponseID, responses.ResponseGetParams{}, telemetryRequestOption)
+				resp, err := a.client.Responses.Get(ctx, ct.ResponseID, responses.ResponseGetParams{}, telemetryOption)
 				if err != nil {
 					yield(nil, err)
 					return
 				}
+				modelcall.RecordResponse(ctx, resp.Model, resp.ID)
 				conversationID := responsesConversationID(resp, requestConversationID, disableStoreOutput)
 				responsesProcessResponse(resp, ct.SequenceNumber, func(update *agent.ResponseUpdate, err error) bool {
 					if update != nil {
@@ -188,7 +205,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 
 		if stream {
 			// Create streaming response
-			streamResp := a.client.Responses.NewStreaming(ctx, body, telemetryRequestOption)
+			streamResp := a.client.Responses.NewStreaming(ctx, body, telemetryOption)
 			defer func() { _ = streamResp.Close() }()
 			responseID := ""
 			createdAt := time.Time{}
@@ -204,6 +221,7 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 					return
 				}
 				if resp := responsesEventResponse(event); resp != nil {
+					modelcall.RecordResponse(ctx, resp.Model, resp.ID)
 					storeDisabled = storeDisabled || resp.JSON.ExtraFields["store"].Raw() == "false"
 					conversationID = responsesConversationID(resp, requestConversationID, storeDisabled)
 				}
@@ -233,11 +251,12 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 			}
 		} else {
 			// Create complete response
-			resp, err := a.client.Responses.New(ctx, body, telemetryRequestOption)
+			resp, err := a.client.Responses.New(ctx, body, telemetryOption)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
+			modelcall.RecordResponse(ctx, resp.Model, resp.ID)
 			conversationID := responsesConversationID(resp, requestConversationID, disableStoreOutput)
 			responsesProcessResponse(resp, 0, func(update *agent.ResponseUpdate, err error) bool {
 				if update != nil {
@@ -453,6 +472,11 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			if tl.Authorization != "" {
 				variant.Authorization = openai.String(tl.Authorization)
 			}
+			// Honor the caller's approval mode. When unset, the Responses API
+			// defaults require_approval to "always".
+			if tl.ApprovalMode != "" {
+				variant.RequireApproval.OfMcpToolApprovalSetting = openai.String(string(tl.ApprovalMode))
+			}
 			params.Tools = append(params.Tools, responses.ToolUnionParam{
 				OfMcp: &variant,
 			})
@@ -658,8 +682,7 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 			case *message.TextContent:
 				outputContents = append(outputContents, responses.ResponseOutputMessageContentUnionParam{
 					OfOutputText: &responses.ResponseOutputTextParam{
-						// TODO: Convert message annotations back to Responses output-text annotations.
-						Annotations: []responses.ResponseOutputTextAnnotationUnionParam{},
+						Annotations: annotationsToOutputText(c.Annotations),
 						Text:        c.Text,
 					},
 				})
@@ -1377,15 +1400,28 @@ func responsesUsageToContent(usage responses.ResponseUsage) *message.UsageConten
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
 		return nil
 	}
-	return &message.UsageContent{
-		Details: message.UsageDetails{
-			InputTokenCount:       usage.InputTokens,
-			OutputTokenCount:      usage.OutputTokens,
-			TotalTokenCount:       usage.TotalTokens,
-			CachedInputTokenCount: usage.InputTokensDetails.CachedTokens,
-			ReasoningTokenCount:   usage.OutputTokensDetails.ReasoningTokens,
-		},
+	details := message.UsageDetails{
+		InputTokenCount:       usage.InputTokens,
+		OutputTokenCount:      usage.OutputTokens,
+		TotalTokenCount:       usage.TotalTokens,
+		CachedInputTokenCount: usage.InputTokensDetails.CachedTokens,
+		ReasoningTokenCount:   usage.OutputTokensDetails.ReasoningTokens,
 	}
+	// UsageDetails has no first-class cache-creation field, so surface cache
+	// write tokens (prompt-cache writes / cache creation) via AdditionalCounts,
+	// matching the Python client. Initialize the map lazily so additional
+	// subfields can be added later without clobbering.
+	add := func(k string, v int64) {
+		if v == 0 {
+			return
+		}
+		if details.AdditionalCounts == nil {
+			details.AdditionalCounts = make(map[string]int64)
+		}
+		details.AdditionalCounts[k] = v
+	}
+	add("InputTokensDetails.CacheWriteTokens", usage.InputTokensDetails.CacheWriteTokens)
+	return &message.UsageContent{Details: details}
 }
 
 const (
@@ -1977,6 +2013,78 @@ func populateAnnotations(anns []responses.ResponseOutputTextAnnotationUnion, con
 			})
 		}
 	}
+}
+
+// annotationsToOutputText is the inverse of populateAnnotations: it converts
+// framework citation annotations back into Responses output-text annotation
+// params so that an assistant turn replayed from client-side history carries
+// the citations it originally arrived with. Which variant to emit is inferred
+// from the populated fields, mirroring how populateAnnotations maps each one.
+// Annotations that are not citations are skipped.
+func annotationsToOutputText(anns []message.Annotation) []responses.ResponseOutputTextAnnotationUnionParam {
+	out := make([]responses.ResponseOutputTextAnnotationUnionParam, 0, len(anns))
+	for _, ann := range anns {
+		cit, ok := ann.(*message.CitationAnnotation)
+		if !ok {
+			continue
+		}
+		containerID, _ := cit.AdditionalProperties["ContainerId"].(string)
+		switch {
+		case containerID != "" && cit.FileID != "":
+			for _, span := range citationSpans(cit.AnnotatedRegions) {
+				out = append(out, responses.ResponseOutputTextAnnotationUnionParam{
+					OfContainerFileCitation: &responses.ResponseOutputTextAnnotationContainerFileCitationParam{
+						ContainerID: containerID,
+						FileID:      cit.FileID,
+						Filename:    cit.Title,
+						StartIndex:  span[0],
+						EndIndex:    span[1],
+					},
+				})
+			}
+		case cit.URL != "":
+			for _, span := range citationSpans(cit.AnnotatedRegions) {
+				out = append(out, responses.ResponseOutputTextAnnotationUnionParam{
+					OfURLCitation: &responses.ResponseOutputTextAnnotationURLCitationParam{
+						URL:        cit.URL,
+						Title:      cit.Title,
+						StartIndex: span[0],
+						EndIndex:   span[1],
+					},
+				})
+			}
+		case cit.FileID != "" && cit.Title != "":
+			out = append(out, responses.ResponseOutputTextAnnotationUnionParam{
+				OfFileCitation: &responses.ResponseOutputTextAnnotationFileCitationParam{
+					FileID:   cit.FileID,
+					Filename: cit.Title,
+				},
+			})
+		case cit.FileID != "":
+			out = append(out, responses.ResponseOutputTextAnnotationUnionParam{
+				OfFilePath: &responses.ResponseOutputTextAnnotationFilePathParam{
+					FileID: cit.FileID,
+				},
+			})
+		}
+	}
+	return out
+}
+
+// citationSpans extracts the [start, end) index pairs from a citation's
+// annotated regions, skipping regions without both bounds set. Each Responses
+// annotation carries a single span, so a citation with multiple regions is
+// fanned out into one annotation per region.
+func citationSpans(regions message.AnnotatedRegions) [][2]int64 {
+	var spans [][2]int64
+	for _, region := range regions {
+		span, ok := region.(*message.TextSpanAnnotatedRegion)
+		if !ok || span.StartIndex == nil || span.EndIndex == nil {
+			continue
+		}
+		spans = append(spans, [2]int64{int64(*span.StartIndex), int64(*span.EndIndex)})
+	}
+	return spans
 }
 
 func textSpanAnnotatedRegion(start, end int64) *message.TextSpanAnnotatedRegion {
