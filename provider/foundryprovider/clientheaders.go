@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/openai/openai-go/v3/option"
 )
@@ -57,14 +58,26 @@ func WithHostedAgentUserIdentity(userIdentity string) agent.Option {
 	return hostedAgentUserIdentityOpt(userIdentity)
 }
 
-type clientHeadersMiddleware struct{}
+type clientHeadersMiddleware struct {
+	serverAgent bool
+}
 
-func (clientHeadersMiddleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+func (m clientHeadersMiddleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	headers := collectClientHeaders(options)
 	if len(headers) != 0 {
 		ctx = context.WithValue(ctx, clientHeadersContextKey{}, headers)
 	}
-	return next(ctx, messages, options...)
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		telemetry.MarkUsed(telemetry.FeatureFoundryChatClient)
+		if m.serverAgent {
+			telemetry.MarkUsed(telemetry.FeatureFoundryAgent)
+		}
+		for update, err := range next(ctx, messages, options...) {
+			if !yield(update, err) {
+				return
+			}
+		}
+	}
 }
 
 func clientHeadersRequestOption() option.RequestOption {

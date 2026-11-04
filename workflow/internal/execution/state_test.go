@@ -3,10 +3,17 @@
 package execution
 
 import (
+	"bytes"
+	"encoding/json"
+	"maps"
+	"reflect"
+	"slices"
+	"strconv"
 	"sync"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/internal/hashmap"
+	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/workflow"
 	"github.com/microsoft/agent-framework-go/workflow/internal/checkpoint"
 )
@@ -85,14 +92,20 @@ func TestStateManager_ConcurrentGetOrCreateSharedScopeReturnsSameInstance(t *tes
 
 func TestScopeSharedScope_ReadKeys(t *testing.T) {
 	scopeName := "sharedScope"
-	runScopeKeysTest(t, scopeName, true)
+	runScopeKeysTest(t, scopeName, true, false)
+	t.Run("nil update deletes", func(t *testing.T) {
+		runScopeKeysTest(t, scopeName, true, true)
+	})
 }
 
 func TestScopePrivateScope_ReadKeys(t *testing.T) {
-	runScopeKeysTest(t, "", false)
+	runScopeKeysTest(t, "", false, false)
+	t.Run("nil update deletes", func(t *testing.T) {
+		runScopeKeysTest(t, "", false, true)
+	})
 }
 
-func runScopeKeysTest(t *testing.T, scopeName string, isSharedScope bool) {
+func runScopeKeysTest(t *testing.T, scopeName string, isSharedScope bool, deleteWithNil bool) {
 	const (
 		SelfExecutorId  = "executor1"
 		OtherExecutorId = "executor2"
@@ -153,7 +166,11 @@ func runScopeKeysTest(t *testing.T, scopeName string, isSharedScope bool) {
 	}
 
 	// Act 3: Clear the state from the self executor's view of the shared scope
-	mustSucceed(t, manager.ClearStateKeyByID(sharedScopeSelfView, Key1))
+	if deleteWithNil {
+		mustSucceed(t, manager.WriteStateByID(sharedScopeSelfView, Key1, nil))
+	} else {
+		mustSucceed(t, manager.ClearStateKeyByID(sharedScopeSelfView, Key1))
+	}
 
 	// Assert 3: The self executor should not see the key immediately, but the other executor should still see it if sharedScope
 	selfKeys = manager.ReadKeysByID(sharedScopeSelfView)
@@ -193,14 +210,20 @@ func runScopeKeysTest(t *testing.T, scopeName string, isSharedScope bool) {
 
 func TestScopeSharedScope_ValueLifecycle(t *testing.T) {
 	scopeName := "sharedScope"
-	runValueLifecycleTest(t, scopeName, true)
+	runValueLifecycleTest(t, scopeName, true, false)
+	t.Run("nil update deletes", func(t *testing.T) {
+		runValueLifecycleTest(t, scopeName, true, true)
+	})
 }
 
 func TestScopePrivateScope_ValueLifecycle(t *testing.T) {
-	runValueLifecycleTest(t, "", false)
+	runValueLifecycleTest(t, "", false, false)
+	t.Run("nil update deletes", func(t *testing.T) {
+		runValueLifecycleTest(t, "", false, true)
+	})
 }
 
-func runValueLifecycleTest(t *testing.T, scopeName string, isSharedScope bool) {
+func runValueLifecycleTest(t *testing.T, scopeName string, isSharedScope bool, deleteWithNil bool) {
 	const (
 		SelfExecutorId  = "executor1"
 		OtherExecutorId = "executor2"
@@ -221,7 +244,10 @@ func runValueLifecycleTest(t *testing.T, scopeName string, isSharedScope bool) {
 	// Assert baseline: neither executor sees any keys or values
 	checkValue := func(scope workflow.ScopeID, key string, expected any, msg string) {
 		t.Helper()
-		val, ok, _ := manager.ReadStateByID(scope, key)
+		val, ok, err := manager.ReadStateByID(scope, key)
+		if err != nil {
+			t.Fatalf("%s: ReadStateByID(%+v, %q): %v", msg, scope, key, err)
+		}
 		if expected == nil {
 			if ok {
 				t.Errorf("%s: expected nil, got %v", msg, val)
@@ -306,7 +332,11 @@ func runValueLifecycleTest(t *testing.T, scopeName string, isSharedScope bool) {
 	mustSucceed(t, manager.PublishUpdates(nil))
 
 	// Act 6: Delete Key1 from the other executor's view of the shared scope
-	mustSucceed(t, manager.ClearStateKeyByID(scopeOtherView, Key1))
+	if deleteWithNil {
+		mustSucceed(t, manager.WriteStateByID(scopeOtherView, Key1, nil))
+	} else {
+		mustSucceed(t, manager.ClearStateKeyByID(scopeOtherView, Key1))
+	}
 
 	// Assert 6
 	if isSharedScope {
@@ -323,7 +353,11 @@ func runValueLifecycleTest(t *testing.T, scopeName string, isSharedScope bool) {
 	checkValue(scopeOtherView, Key2, Value2, "uninvolved keys' state/value should not change after a delete")
 
 	// Act 7: Delete Key2 from the self executor's view of the shared scope
-	mustSucceed(t, manager.ClearStateKeyByID(scopeSelfView, Key2))
+	if deleteWithNil {
+		mustSucceed(t, manager.WriteStateByID(scopeSelfView, Key2, nil))
+	} else {
+		mustSucceed(t, manager.ClearStateKeyByID(scopeSelfView, Key2))
+	}
 
 	// Assert 7
 	if isSharedScope {
@@ -383,6 +417,10 @@ func runConflictingUpdatesTest_WriteVsWrite(t *testing.T, scopeName string, isSh
 	scopeSelfView := workflow.ScopeID{ExecutorID: SelfExecutorId, ScopeName: scopeName}
 	scopeOtherView := workflow.ScopeID{ExecutorID: OtherExecutorId, ScopeName: scopeName}
 
+	if equal := scopeSelfView.Equal(scopeOtherView); equal != isSharedScope {
+		t.Fatalf("scope equality = %v, want %v", equal, isSharedScope)
+	}
+
 	mustSucceed(t, manager.WriteStateByID(scopeSelfView, Key1, Value1))
 	mustSucceed(t, manager.WriteStateByID(scopeOtherView, Key1, Value2))
 
@@ -411,6 +449,10 @@ func runConflictingUpdatesTest_WriteVsDelete(t *testing.T, scopeName string, isS
 	manager := NewStateManager()
 	scopeSelfView := workflow.ScopeID{ExecutorID: SelfExecutorId, ScopeName: scopeName}
 	scopeOtherView := workflow.ScopeID{ExecutorID: OtherExecutorId, ScopeName: scopeName}
+
+	if equal := scopeSelfView.Equal(scopeOtherView); equal != isSharedScope {
+		t.Fatalf("scope equality = %v, want %v", equal, isSharedScope)
+	}
 
 	mustSucceed(t, manager.WriteStateByID(scopeSelfView, Key1, Value1))
 	mustSucceed(t, manager.WriteStateByID(scopeOtherView, Key2, Value2))
@@ -444,6 +486,10 @@ func runConflictingUpdatesTest_WriteVsClear(t *testing.T, scopeName string, isSh
 	manager := NewStateManager()
 	scopeSelfView := workflow.ScopeID{ExecutorID: SelfExecutorId, ScopeName: scopeName}
 	scopeOtherView := workflow.ScopeID{ExecutorID: OtherExecutorId, ScopeName: scopeName}
+
+	if equal := scopeSelfView.Equal(scopeOtherView); equal != isSharedScope {
+		t.Fatalf("scope equality = %v, want %v", equal, isSharedScope)
+	}
 
 	mustSucceed(t, manager.WriteStateByID(scopeSelfView, Key1, Value1))
 	mustSucceed(t, manager.WriteStateByID(scopeOtherView, Key2, Value2))
@@ -492,42 +538,41 @@ func testLoadPortableValueState(t *testing.T, publishStateUpdates bool) {
 		mustSucceed(t, manager.PublishUpdates(nil))
 	}
 
-	// Act & Assert - Read as the original types
-	checkType := func(key string, expected any) {
-		t.Helper()
-		pv, ok, _ := manager.ReadStateByID(scope, key)
-		if !ok {
-			t.Errorf("key %s not found", key)
-			return
-		}
+	assertPortableStateValue(t, &manager, scope, "StringValue", StringValue,
+		reflect.TypeFor[int](), reflect.TypeFor[*message.Message](), reflect.TypeFor[workflow.PortableValue]())
+	assertPortableStateValue(t, &manager, scope, "IntValue", IntValue,
+		reflect.TypeFor[string](), reflect.TypeFor[*message.Message](), reflect.TypeFor[workflow.PortableValue]())
+	assertPortableStateValue(t, &manager, scope, "ScopeKey", ScopeKey,
+		reflect.TypeFor[string](), reflect.TypeFor[int](), reflect.TypeFor[workflow.PortableValue]())
+	assertPortableStateValue(t, &manager, scope, "PortableValueValue", StringValue,
+		reflect.TypeFor[int](), reflect.TypeFor[*message.Message](), reflect.TypeFor[workflow.PortableValue]())
+}
 
-		actual := pv.Any()
-		if expectedSK, ok := expected.(workflow.ScopeKey); ok {
-			if actualSK, ok := actual.(workflow.ScopeKey); ok {
-				if !expectedSK.Equal(actualSK) {
-					t.Errorf("key %s: expected %v, got %v", key, expected, actual)
-				}
-				return
-			}
-		}
-
-		if actual != expected {
+func assertPortableStateValue(t *testing.T, manager *StateManager, scope workflow.ScopeID, key string, expected any, rejectedTypes ...reflect.Type) {
+	t.Helper()
+	pv, found, err := manager.ReadStateByID(scope, key)
+	if err != nil {
+		t.Fatalf("ReadStateByID(%q): %v", key, err)
+	}
+	if !found {
+		t.Fatalf("key %s not found", key)
+	}
+	actual, ok := pv.As(reflect.TypeOf(expected))
+	if !ok {
+		t.Fatalf("key %s: payload does not match %T", key, expected)
+	}
+	if expectedSK, ok := expected.(workflow.ScopeKey); ok {
+		actualSK, ok := actual.(workflow.ScopeKey)
+		if !ok || !expectedSK.Equal(actualSK) {
 			t.Errorf("key %s: expected %v, got %v", key, expected, actual)
 		}
+	} else if actual != expected {
+		t.Errorf("key %s: expected %v, got %v", key, expected, actual)
 	}
-
-	checkType("StringValue", StringValue)
-	checkType("IntValue", IntValue)
-	checkType("ScopeKey", ScopeKey)
-	checkType("PortableValueValue", StringValue)
-
-	// Verify types
-	pv, _, _ := manager.ReadStateByID(scope, "StringValue")
-	if _, ok := workflow.PortableValueAs[string](pv); !ok {
-		t.Errorf("expected string")
-	}
-	if _, ok := workflow.PortableValueAs[int](pv); ok {
-		t.Errorf("expected not int")
+	for _, typ := range rejectedTypes {
+		if pv.Is(typ) {
+			t.Errorf("key %s: payload unexpectedly matches %v", key, typ)
+		}
 	}
 }
 
@@ -562,37 +607,93 @@ func TestScopeLoadPortableValueState_AfterSerialization(t *testing.T) {
 		StateData: stateData,
 	}
 
+	data, err := json.Marshal(testCheckpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var restored checkpoint.Checkpoint
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatal(err)
+	}
 	manager = NewStateManager()
-	mustSucceed(t, manager.ImportState(testCheckpoint))
+	mustSucceed(t, manager.ImportState(&restored))
 
-	// Act & Assert - Read as the original types
-	checkType := func(key string, expected any) {
-		t.Helper()
-		pv, ok, _ := manager.ReadStateByID(scope, key)
-		if !ok {
-			t.Errorf("key %s not found", key)
-			return
+	assertPortableStateValue(t, &manager, scope, "StringValue", StringValue,
+		reflect.TypeFor[int](), reflect.TypeFor[*message.Message]())
+	assertPortableStateValue(t, &manager, scope, "IntValue", IntValue,
+		reflect.TypeFor[string](), reflect.TypeFor[*message.Message]())
+	assertPortableStateValue(t, &manager, scope, "ScopeKey", ScopeKey,
+		reflect.TypeFor[string](), reflect.TypeFor[int](), reflect.TypeFor[workflow.PortableValue]())
+	assertPortableStateValue(t, &manager, scope, "PortableValueValue", StringValue,
+		reflect.TypeFor[int](), reflect.TypeFor[*message.Message](), reflect.TypeFor[workflow.PortableValue]())
+}
+
+func TestEdgeStateDataJSON_Roundtrip(t *testing.T) {
+	port := workflow.RequestPort{ID: "StringToInt", Request: reflect.TypeFor[string](), Response: reflect.TypeFor[int]()}
+	request, err := workflow.NewExternalRequest("TestData", port, "Request1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := request.CreateResponse(13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payloads := []any{"Hello, world!", response, jsonPortSerializable{ID: 42, Name: "TestCustomSerializable"}}
+	value := map[string]workflow.PortableValue{}
+	for i, payload := range payloads {
+		state := newStatefulEdgeState([]string{"SourceExecutor1", "SourceExecutor2"})
+		envelope, err := NewMessageEnvelope(payload, reflect.TypeOf(payload), "SourceExecutor1", "")
+		if err != nil {
+			t.Fatal(err)
 		}
-
-		actual := pv.Any()
-		if expectedSK, ok := expected.(workflow.ScopeKey); ok {
-			if actualSK, ok := actual.(workflow.ScopeKey); ok {
-				if !expectedSK.Equal(actualSK) {
-					t.Errorf("key %s: expected %v, got %v", key, expected, actual)
-				}
-				return
+		if messages := state.processMessage("SourceExecutor1", envelope); messages != nil {
+			t.Fatal("fan-in released before its second source")
+		}
+		value[strconv.Itoa(i+1)] = workflow.AnyPortableValue(state)
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result map[string]workflow.PortableValue
+	if err := json.Unmarshal(data, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result) != len(value) {
+		t.Fatalf("edge state count = %d, want %d", len(result), len(value))
+	}
+	for id, expected := range value {
+		portable, ok := result[id]
+		if !ok {
+			t.Fatalf("missing edge %q", id)
+		}
+		before, ok := workflow.PortableValueAs[*statefulEdgeState](expected)
+		if !ok {
+			t.Fatal("original state cannot decode")
+		}
+		after, ok := workflow.PortableValueAs[*statefulEdgeState](portable)
+		if !ok || !slices.Equal(after.sourceIDs, before.sourceIDs) || !maps.Equal(after.unseen, before.unseen) ||
+			len(after.pendingMessages) != len(before.pendingMessages) {
+			t.Fatalf("edge %s state did not round trip: %#v", id, after)
+		}
+		for i, message := range before.pendingMessages {
+			got := after.pendingMessages[i]
+			if got.MessageType != message.MessageType || got.TargetID != message.TargetID {
+				t.Fatalf("edge %s pending envelope metadata changed", id)
+			}
+			expectedJSON, err := json.Marshal(message.Message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actualJSON, err := json.Marshal(got.Message)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(expectedJSON, actualJSON) {
+				t.Fatalf("edge %s pending message = %s, want %s", id, actualJSON, expectedJSON)
 			}
 		}
-
-		if actual != expected {
-			t.Errorf("key %s: expected %v, got %v", key, expected, actual)
-		}
 	}
-
-	checkType("StringValue", StringValue)
-	checkType("IntValue", IntValue)
-	checkType("ScopeKey", ScopeKey)
-	checkType("PortableValueValue", StringValue)
 }
 
 func TestScopeID_Equality(t *testing.T) {

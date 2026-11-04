@@ -3,116 +3,70 @@
 package jsonformat
 
 import (
-	"fmt"
 	"reflect"
-	"strings"
-	"sync"
 
 	"github.com/google/jsonschema-go/jsonschema"
-	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/format"
+	rootjsonformat "github.com/microsoft/agent-framework-go/format/jsonformat"
 )
 
 // Format provides JSON schema-based response formatting and validation.
-type Format struct {
-	agent.ResponseFormat
+//
+// Deprecated: Use [rootjsonformat.Format] instead.
+type Format = rootjsonformat.Format
 
-	resolvedOnce sync.Once
-	resolved     *jsonschema.Resolved
-	resolvedErr  error
-}
-
-func (f *Format) resolvedSchema() (*jsonschema.Resolved, error) {
-	f.resolvedOnce.Do(func() {
-		f.resolved, f.resolvedErr = f.Schema.(*jsonschema.Schema).Resolve(&jsonschema.ResolveOptions{ValidateDefaults: true})
-	})
-	return f.resolved, f.resolvedErr
-}
-
-func newFormat(name, description string, schema *jsonschema.Schema) *Format {
-	return &Format{
-		ResponseFormat: agent.ResponseFormat{
-			Kind:        "json",
-			Name:        name,
-			Description: description,
-			Strict:      true,
-			Schema:      schema,
-		},
-	}
-}
-
-// New creates a new JSON response format with the given name, description, and
-// schema. A nil schema represents an unconstrained JSON value.
-func New(name, description string, schema *jsonschema.Schema) agent.ResponseFormat {
-	if schema == nil {
-		schema = &jsonschema.Schema{}
-	}
-	return newFormat(name, description, schema).ResponseFormat
+// New creates a new JSON response format with the given name, description, and schema.
+//
+// Deprecated: Use [rootjsonformat.New] instead.
+func New(name, description string, schema *jsonschema.Schema) format.ResponseFormat {
+	return rootjsonformat.New(name, description, schema)
 }
 
 // FromResponseFormat creates a Format from a response format data value.
-func FromResponseFormat(format agent.ResponseFormat) (*Format, error) {
-	schema, ok := format.Schema.(*jsonschema.Schema)
-	if !ok {
-		return nil, fmt.Errorf("response format schema has type %T, want *jsonschema.Schema", format.Schema)
-	}
-	if schema == nil {
-		return nil, fmt.Errorf("response format schema cannot be nil")
-	}
-	return newFormat(format.Name, format.Description, schema), nil
+//
+// Deprecated: Use [rootjsonformat.FromResponseFormat] instead.
+func FromResponseFormat(format format.ResponseFormat) (*Format, error) {
+	return rootjsonformat.FromResponseFormat(format)
 }
 
-// Any returns a ResponseFormat representing the any type (no schema constraints).
-func Any() agent.ResponseFormat {
-	return New("any", "", &jsonschema.Schema{})
+// Any returns a response format with no schema constraints.
+//
+// Deprecated: Use [rootjsonformat.Any] instead.
+func Any() format.ResponseFormat {
+	return rootjsonformat.Any()
 }
 
-// Nothing returns a ResponseFormat that matches no values.
-func Nothing() agent.ResponseFormat {
-	return New("empty", "", &jsonschema.Schema{
-		Not: &jsonschema.Schema{},
-	})
+// Nothing returns a response format that matches no values.
+//
+// Deprecated: Use [rootjsonformat.Nothing] instead.
+func Nothing() format.ResponseFormat {
+	return rootjsonformat.Nothing()
 }
 
 // MustFor calls [For] and panics on error.
-func MustFor[T any]() agent.ResponseFormat {
-	f, err := For[T]()
-	if err != nil {
-		panic(err)
-	}
-	return f
+//
+// Deprecated: Use [rootjsonformat.MustFor] instead.
+func MustFor[T any]() format.ResponseFormat {
+	return rootjsonformat.MustFor[T]()
 }
 
-// For creates a ResponseFormat for the type T.
-func For[T any]() (agent.ResponseFormat, error) {
-	return ForType(reflect.TypeFor[T]())
+// For creates a response format for the type T.
+//
+// Deprecated: Use [rootjsonformat.For] instead.
+func For[T any]() (format.ResponseFormat, error) {
+	return rootjsonformat.For[T]()
 }
 
-// ForType creates a ResponseFormat for the given reflect.Type.
-// A nil rt is treated as [Nothing].
-func ForType(rt reflect.Type) (agent.ResponseFormat, error) {
-	var schema *jsonschema.Schema
-	if rt == nil {
-		return Nothing(), nil
-	}
-	// Pointers are treated equivalently to non-pointers when deriving the schema.
-	// The only difference is whether the value can be null. We don't want that
-	// to happen for the root object, as that complicates usage with no benefit.
-	rt = dereference(rt)
-	schema, err := jsonschema.ForType(rt, &jsonschema.ForOptions{})
-	if err != nil {
-		return agent.ResponseFormat{}, err
-	}
-	name := rt.String()
-	if split := strings.Split(name, "."); len(split) != 0 {
-		// Use only the type name, not the package path.
-		name = split[len(split)-1]
-	}
-	return New(name, "", schema), nil
+// ForType creates a response format for the given reflect.Type.
+//
+// Deprecated: Use [rootjsonformat.ForType] instead.
+func ForType(rt reflect.Type) (format.ResponseFormat, error) {
+	return rootjsonformat.ForType(rt)
 }
 
-func dereference(t reflect.Type) reflect.Type {
-	for t.Kind() == reflect.Pointer {
-		t = t.Elem()
-	}
-	return t
+// WrapNonObjectSchema returns a response format with an object-root schema.
+//
+// Deprecated: Use [rootjsonformat.WrapNonObjectSchema] instead.
+func WrapNonObjectSchema(responseFormat format.ResponseFormat) (format.ResponseFormat, error) {
+	return rootjsonformat.WrapNonObjectSchema(responseFormat)
 }

@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 )
 
 func TestStrictSchemaToMapTransformsCloneRecursively(t *testing.T) {
@@ -402,6 +402,20 @@ func TestStrictSchemaToMapRejectsNonObjectRoot(t *testing.T) {
 				t.Fatalf("strictSchemaToMap() error = %v, want root-object error", err)
 			}
 		})
+	}
+}
+
+func TestExplicitResponseFormatStillRejectsNonObjectRoot(t *testing.T) {
+	format, err := jsonformat.For[int]()
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := []agent.Option{agent.WithResponseFormat(format)}
+	if _, err := buildCompletionParams("test-model", nil, options); err == nil || !strings.Contains(err.Error(), "root schema must have type object") {
+		t.Fatalf("chat format error = %v, want object-root error", err)
+	}
+	if _, err := responsesBuildCompletionParams(AgentConfig{Model: "test-model"}, nil, options); err == nil || !strings.Contains(err.Error(), "root schema must have type object") {
+		t.Fatalf("responses format error = %v, want object-root error", err)
 	}
 }
 

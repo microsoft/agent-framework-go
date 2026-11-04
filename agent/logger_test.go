@@ -34,17 +34,99 @@ func TestAgent_RunLogs_WhenLoggerConfigured(t *testing.T) {
 		t.Fatal("expected provider run to be called")
 	}
 	output := buf.String()
-	if !strings.Contains(output, "run invoked") {
-		t.Fatalf("expected run invoked log, got: %s", output)
+	if strings.Count(output, `level=DEBUG msg="run invoked"`) != 1 {
+		t.Fatalf("expected exactly one Debug run invoked log, got: %s", output)
 	}
-	if !strings.Contains(output, "run completed") {
-		t.Fatalf("expected run completed log, got: %s", output)
+	if strings.Count(output, `level=DEBUG msg="run completed"`) != 1 {
+		t.Fatalf("expected exactly one Debug run completed log, got: %s", output)
 	}
 	if !strings.Contains(output, "agentID=test-agent") {
 		t.Fatalf("expected agent ID in logs, got: %s", output)
 	}
 	if !strings.Contains(output, "agentName=test-agent") {
 		t.Fatalf("expected agent name in logs, got: %s", output)
+	}
+}
+
+func TestAgent_RunLogs_CollectedRunUsesDebugLevel(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	a := newRunLoggerTestAgent(logger, false, false, func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return singleRunLoggerTestUpdate("Test response")
+	})
+	if _, err := a.Run(t.Context(), []*message.Message{message.NewText("Hello")}).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []string{"run invoked", "run completed"} {
+		if count := strings.Count(buf.String(), `level=DEBUG msg="`+event+`"`); count != 1 {
+			t.Errorf("%s debug records = %d, want 1; logs: %s", event, count, buf.String())
+		}
+	}
+}
+
+func testRunLoggerCancellation(t *testing.T, stream bool) {
+	t.Helper()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	a := newRunLoggerTestAgent(logger, false, false, func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) { yield(nil, context.Canceled) }
+	})
+	var got error
+	updates := a.Run(t.Context(), []*message.Message{message.NewText("Hello")}, agent.Stream(stream))
+	if stream {
+		for _, err := range updates {
+			if err != nil {
+				got = err
+				break
+			}
+		}
+	} else {
+		_, got = updates.Collect()
+	}
+	if got != context.Canceled {
+		t.Fatalf("error = %v, want context.Canceled", got)
+	}
+	if count := strings.Count(buf.String(), `level=DEBUG msg="run canceled"`); count != 1 {
+		t.Fatalf("cancellation debug records = %d, want 1; logs: %s", count, buf.String())
+	}
+}
+
+func TestAgent_RunLogs_CollectedCancellation(t *testing.T) {
+	testRunLoggerCancellation(t, false)
+}
+
+func TestAgent_RunLogs_StreamingCancellation(t *testing.T) {
+	testRunLoggerCancellation(t, true)
+}
+
+func TestAgent_RunLogs_CollectedFailure(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	want := errors.New("Test exception")
+	a := newRunLoggerTestAgent(logger, false, false, func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		return func(yield func(*agent.ResponseUpdate, error) bool) { yield(nil, want) }
+	})
+	if _, err := a.Run(t.Context(), []*message.Message{message.NewText("Hello")}).Collect(); err != want {
+		t.Fatalf("error = %v, want original error %v", err, want)
+	}
+	output := buf.String()
+	if strings.Count(output, `level=ERROR msg="run failed"`) != 1 || !strings.Contains(output, want.Error()) {
+		t.Fatalf("expected one failure record containing the original error; logs: %s", output)
+	}
+}
+
+func TestAgent_RunLogs_PreservesAgentMetadata(t *testing.T) {
+	cfg := agent.Config{
+		ID: "logging-agent-id", Name: "TestAgent", Description: "This is a test agent.",
+		Logger: slog.New(slog.DiscardHandler),
+	}
+	a := agent.New(agent.ProviderConfig{
+		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return singleRunLoggerTestUpdate("Test response")
+		},
+	}, cfg)
+	if a.Name() != cfg.Name || a.Description() != cfg.Description || a.ID() != cfg.ID {
+		t.Fatalf("agent metadata = %q/%q/%q, want %q/%q/%q", a.Name(), a.Description(), a.ID(), cfg.Name, cfg.Description, cfg.ID)
 	}
 }
 
@@ -109,8 +191,8 @@ func TestAgent_RunLogs_LogsErrors(t *testing.T) {
 		t.Fatalf("expected error %v, got %v", expectedErr, runErr)
 	}
 	output := buf.String()
-	if !strings.Contains(output, "run failed") {
-		t.Fatalf("expected run failed log, got: %s", output)
+	if strings.Count(output, `level=ERROR msg="run failed"`) != 1 {
+		t.Fatalf("expected exactly one Error run failed log, got: %s", output)
 	}
 	if !strings.Contains(output, "test error") {
 		t.Fatalf("expected error message in log, got: %s", output)
@@ -164,7 +246,10 @@ func TestAgent_RunLogs_EarlyTermination(t *testing.T) {
 	})
 
 	consumedCount := 0
-	for range a.RunText(context.Background(), "hello") {
+	for _, err := range a.RunText(context.Background(), "hello") {
+		if err != nil {
+			t.Fatal(err)
+		}
 		consumedCount++
 		if consumedCount >= 2 {
 			break
