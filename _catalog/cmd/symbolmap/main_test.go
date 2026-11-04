@@ -614,6 +614,7 @@ func Behavior() {}
 func GoOnly() {}
 `,
 		"tool/added/tool.go": "package added\ntype Tool struct{ Option string }\nfunc Run() {}\n",
+		"sdk.go":             "package sdk\ntype Config struct{ Enabled bool }\nfunc (Config) Run() {}\nfunc New() Config { return Config{} }\n",
 	})
 	commitAuditCheckout(t, oldRoot)
 	commitAuditCheckout(t, newRoot)
@@ -711,9 +712,27 @@ func GoOnly() {}
 			t.Errorf("patch hunk was omitted at line %d: %s", line+1, text)
 		}
 	}
-	for _, name := range []string{"agent.Added.Embedded", "agent.Added.Enabled", "agent.Added.Value", "agent.Added.Run", "tool/added.Tool", "tool/added.Tool.Option", "tool/added.Run"} {
+	for _, name := range []string{
+		"agent.Added.Embedded", "agent.Added.Enabled", "agent.Added.Value", "agent.Added.Run",
+		"tool/added.Tool", "tool/added.Tool.Option", "tool/added.Run",
+		"sdk.Config", "sdk.Config.Enabled", "sdk.Config.Run", "sdk.New",
+	} {
 		if _, ok := members[name]; !ok {
 			t.Errorf("missing exported member %q", name)
+		}
+	}
+	rootParent := ""
+	for index, change := range changes.Changes {
+		if change.Message == "package example.org/sdk: added" {
+			rootParent = "api:" + strconv.Itoa(index)
+		}
+	}
+	if rootParent == "" {
+		t.Fatal("added module-root package was not reported")
+	}
+	for _, name := range []string{"sdk.Config", "sdk.Config.Enabled", "sdk.Config.Run", "sdk.New"} {
+		if !slices.Equal(members[name].Parents, []string{rootParent}) {
+			t.Errorf("%s lost its module-root API parent: %v", name, members[name].Parents)
 		}
 	}
 	check := func(t *testing.T, plan auditPlan, receipts []auditResult, want string) {
@@ -753,6 +772,9 @@ func GoOnly() {}
 		}},
 		{"missing member", "member:agent.Added.Run", func(_ *auditPlan, receipts *[]auditResult) {
 			*receipts = slices.DeleteFunc(*receipts, func(receipt auditResult) bool { return receipt.ID == "member:agent.Added.Run" })
+		}},
+		{"missing root member", "member:sdk.Config.Run", func(_ *auditPlan, receipts *[]auditResult) {
+			*receipts = slices.DeleteFunc(*receipts, func(receipt auditResult) bool { return receipt.ID == "member:sdk.Config.Run" })
 		}},
 		{"missing behavioral item", "behavior:0", func(_ *auditPlan, receipts *[]auditResult) {
 			*receipts = slices.DeleteFunc(*receipts, func(receipt auditResult) bool { return receipt.ID == "behavior:0" })
@@ -860,6 +882,47 @@ func GoOnly() {}
 		var out, diagnostics bytes.Buffer
 		if err := run(args, &out, &diagnostics); err == nil || !strings.Contains(err.Error(), "complete, unfiltered") || out.Len() != 0 {
 			t.Fatalf("partial report must fail without a plan: %v, %s", err, out.String())
+		}
+	})
+	t.Run("filtered reports rejected", func(t *testing.T) {
+		for _, filter := range []string{"NoSuchSymbol", "agent", ": added"} {
+			t.Run(filter, func(t *testing.T) {
+				filteredOutput := commandOutput(t, "changes", "-old-root", oldRoot, "-go-root", newRoot,
+					"-go-package", "./...", "-symbol", filter, "-limit=0")
+				var filtered goChangesReport
+				decodeOutput(t, filteredOutput, &filtered)
+				if filtered.SymbolFilter == nil || *filtered.SymbolFilter != filter {
+					t.Fatalf("report lost filter provenance: %+v", filtered.SymbolFilter)
+				}
+				if filter == "NoSuchSymbol" && len(filtered.Changes) != 0 {
+					t.Fatal("zero-match filter unexpectedly returned changes")
+				}
+				if filter == "agent" && (len(filtered.Changes) == 0 || len(filtered.Changes) >= len(changes.Changes)) {
+					t.Fatal("subset filter did not reduce the report")
+				}
+				if filter == ": added" && len(filtered.Changes) != len(changes.Changes) {
+					t.Fatal("all-match filter did not retain every change")
+				}
+				args := slices.Clone(planArgs)
+				args[len(args)-3] = writeAuditFile(t, "filtered.json", []byte(filteredOutput))
+				var out, diagnostics bytes.Buffer
+				if err := run(args, &out, &diagnostics); err == nil || !strings.Contains(err.Error(), "complete, unfiltered") || out.Len() != 0 {
+					t.Fatalf("filtered report must fail without a plan: %v, %s", err, out.String())
+				}
+			})
+		}
+	})
+	t.Run("filter provenance required", func(t *testing.T) {
+		var legacy map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(changeOutput), &legacy); err != nil {
+			t.Fatal(err)
+		}
+		delete(legacy, "symbol_filter")
+		args := slices.Clone(planArgs)
+		args[len(args)-3] = writeAuditJSON(t, "legacy.json", legacy)
+		var out, diagnostics bytes.Buffer
+		if err := run(args, &out, &diagnostics); err == nil || !strings.Contains(err.Error(), "complete, unfiltered") || out.Len() != 0 {
+			t.Fatalf("unknown filter provenance must fail without a plan: %v, %s", err, out.String())
 		}
 	})
 	t.Run("behavioral review without API changes", func(t *testing.T) {
@@ -1053,6 +1116,9 @@ func init() { panic("indexing must not execute initializers") }
 	if got.Old.Module != "example.org/sdk" || got.New.Module != got.Old.Module || got.Old.GOOS == "" || got.New.GOOS != got.Old.GOOS {
 		t.Fatalf("missing comparison provenance: %+v", got.goChangesSummary)
 	}
+	if got.SymbolFilter == nil || *got.SymbolFilter != "" {
+		t.Fatalf("unfiltered report must record an explicit empty filter: %+v", got.SymbolFilter)
+	}
 	if !reflect.DeepEqual(got.Old.Packages, []string{"agent", "tool/removed"}) || !reflect.DeepEqual(got.New.Packages, []string{"agent", "tool/added"}) {
 		t.Fatalf("unexpected comparison packages: old=%v new=%v", got.Old.Packages, got.New.Packages)
 	}
@@ -1104,6 +1170,14 @@ func init() { panic("indexing must not execute initializers") }
 	decodeOutput(t, commandOutput(t, append(args, "-symbol", "REQUIREPERSERVICECALLHISTORYPERSISTENCE", "-limit=0")...), &page)
 	if page.Page.Total == 0 || page.Incompatible != 0 || page.Compatible != len(page.Changes) {
 		t.Fatalf("compatible additions disappeared from filtered output: %+v", page)
+	}
+	if page.SymbolFilter == nil || *page.SymbolFilter != "REQUIREPERSERVICECALLHISTORYPERSISTENCE" {
+		t.Fatalf("filtered report lost its filter: %+v", page.SymbolFilter)
+	}
+	var filteredSummary goChangesSummary
+	decodeOutput(t, commandOutput(t, append(args, "-symbol", "REQUIREPERSERVICECALLHISTORYPERSISTENCE", "-summary")...), &filteredSummary)
+	if !reflect.DeepEqual(filteredSummary, page.goChangesSummary) {
+		t.Fatalf("filtered summary changed counts or provenance: %+v", filteredSummary)
 	}
 	var summary goChangesSummary
 	decodeOutput(t, commandOutput(t, append(args, "-summary")...), &summary)

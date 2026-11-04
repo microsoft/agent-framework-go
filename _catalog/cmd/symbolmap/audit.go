@@ -116,7 +116,8 @@ func runAudit(command string, args []string, out, diagnostics io.Writer) error {
 	if err := decodeAuditJSON(data, &changes); err != nil {
 		return fmt.Errorf("%s: %w", changesFile, err)
 	}
-	if changes.Page.Offset != 0 || changes.Page.Total != len(changes.Changes) ||
+	if changes.SymbolFilter == nil || *changes.SymbolFilter != "" ||
+		changes.Page.Offset != 0 || changes.Page.Total != len(changes.Changes) ||
 		changes.Page.Returned != len(changes.Changes) || changes.Page.NextOffset != nil ||
 		changes.Compatible+changes.Incompatible != len(changes.Changes) {
 		return errors.New("audit-plan requires a complete, unfiltered changes report")
@@ -200,8 +201,9 @@ func makeAuditPlan(catalog symbolcatalog.Catalog, changes goChangesReport, api g
 			continue
 		}
 		var prefix string
-		if pkg, ok := strings.CutPrefix(name, "package "+api.Module+"/"); ok {
-			prefix = pkg + "."
+		if pkg, ok := strings.CutPrefix(name, "package "); ok &&
+			(pkg == api.Module || strings.HasPrefix(pkg, api.Module+"/")) {
+			prefix = goIndexPackageName(pkg, api.Module) + "."
 		} else if api.Symbols[name].Kind == "type" {
 			prefix = name + "."
 		} else {

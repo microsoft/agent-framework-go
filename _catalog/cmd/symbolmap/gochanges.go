@@ -22,6 +22,7 @@ type goChangesSummary struct {
 	New          reconciliationGoInventory `json:"new"`
 	Compatible   int                       `json:"compatible_changes"`
 	Incompatible int                       `json:"incompatible_changes"`
+	SymbolFilter *string                   `json:"symbol_filter"`
 }
 
 type goChangesReport struct {
@@ -80,7 +81,10 @@ func goChangeSnapshot(api goInventory) reconciliationGoInventory {
 }
 
 func writeGoChanges(out io.Writer, oldAPI, newAPI goInventory, diff apidiff.Report, options reportOptions) error {
-	summary := goChangesSummary{Old: goChangeSnapshot(oldAPI), New: goChangeSnapshot(newAPI)}
+	summary := goChangesSummary{
+		Old: goChangeSnapshot(oldAPI), New: goChangeSnapshot(newAPI),
+		SymbolFilter: new(options.filter.Symbol),
+	}
 	changes := make([]goAPIChange, 0, len(diff.Changes))
 	for _, change := range diff.Changes {
 		if !strings.Contains(strings.ToLower(change.Message), strings.ToLower(options.filter.Symbol)) {
@@ -115,6 +119,9 @@ func writeGoChanges(out io.Writer, oldAPI, newAPI goInventory, diff apidiff.Repo
 	writeGoReportContext(&buffer, summary.Old)
 	fmt.Fprintln(&buffer, "New Go API:")
 	writeGoReportContext(&buffer, summary.New)
+	if options.filter.Symbol != "" {
+		fmt.Fprintf(&buffer, "Symbol filter: %s\n", reportCell(options.filter.Symbol))
+	}
 	fmt.Fprintln(&buffer, "Structural API changes only; implementations, documentation, and struct tags are not compared.")
 	fmt.Fprintf(&buffer, "Changes: %d compatible; %d incompatible. Neither classification establishes .NET parity.\n", summary.Compatible, summary.Incompatible)
 	if !options.brief {
