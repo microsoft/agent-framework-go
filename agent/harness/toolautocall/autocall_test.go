@@ -593,6 +593,7 @@ func TestFunctionInvoking_Termination(t *testing.T) {
 		{name: "replaced function", replaceFunction: true},
 		{name: "error", toolErr: toolFailure},
 		{name: "after error", after: true, toolErr: toolFailure},
+		{name: "after copied context", after: true, replaceContext: true},
 		{name: "panic", panic: true, toolErr: toolFailure},
 		{name: "fail on first error", toolErr: toolFailure, maxErrors: new(0)},
 		{name: "concurrent error", concurrent: true, toolErr: toolFailure},

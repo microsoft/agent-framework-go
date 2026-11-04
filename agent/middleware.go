@@ -168,18 +168,29 @@ func (t *functionInvocationTool) Call(ctx context.Context, args string) (result 
 			defer func() {
 				invocation.Function = functionBeforeMiddleware
 			}()
+			var forwardedInvocation *FunctionInvocationContext
+			var invocationTerminateAfterNext, forwardedTerminateAfterNext bool
 			continuation := validateContinuation(func(ctx context.Context, nextInvocation *FunctionInvocationContext) (any, error) {
 				defer func() {
 					if nextInvocation != invocation && nextInvocation.Terminate {
 						invocation.Terminate = true
 					}
+					forwardedInvocation = nextInvocation
+					invocationTerminateAfterNext = invocation.Terminate
+					forwardedTerminateAfterNext = nextInvocation.Terminate
 				}()
 				if !sameFuncTool(nextInvocation.Function, functionBeforeMiddleware) {
 					return nextInvocation.Function.Call(ctx, nextInvocation.Arguments)
 				}
 				return inner(ctx, nextInvocation)
 			})
-			return middleware(continuation, ctx, invocation)
+			result, err := middleware(continuation, ctx, invocation)
+			if forwardedInvocation != nil && forwardedInvocation != invocation &&
+				invocation.Terminate == invocationTerminateAfterNext &&
+				forwardedInvocation.Terminate != forwardedTerminateAfterNext {
+				invocation.Terminate = forwardedInvocation.Terminate
+			}
+			return result, err
 		}
 	}
 	return validateContinuation(next)(ctx, invocation)
