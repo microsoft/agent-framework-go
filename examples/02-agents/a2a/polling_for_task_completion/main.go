@@ -8,7 +8,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/a2aproject/a2a-go/v2/a2aclient"
 	"github.com/a2aproject/a2a-go/v2/a2aclient/agentcard"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
@@ -31,21 +30,17 @@ func main() {
 		demo.Panicf("failed to resolve agent card: %v", err)
 	}
 
-	client, err := a2aclient.NewFromCard(ctx, card)
-	if err != nil {
-		demo.Panicf("failed to create A2A client: %v", err)
-	}
-
-	remoteAgent := a2aprovider.NewAgent(
-		client,
+	remoteAgent, err := a2aprovider.NewAgentFromCard(
+		ctx, card,
 		a2aprovider.AgentConfig{
 			Config: agent.Config{
-				Name:        cmp.Or(card.Name, "RemoteA2AAgent"),
-				Description: card.Description,
 				Middlewares: []agent.Middleware{logger},
 			},
 		},
 	)
+	if err != nil {
+		demo.Panicf("failed to create A2A agent: %v", err)
+	}
 
 	session, err := remoteAgent.CreateSession(ctx)
 	if err != nil {

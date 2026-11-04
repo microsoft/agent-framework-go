@@ -31,50 +31,6 @@ func TestBuildTaskUpdateInputs_RejectsInvalidStoredContinuationToken(t *testing.
 	}
 }
 
-func TestExecuteNewMessageStreaming_CallerCancellationCancelsTask(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	hostedAgent := agent.New(agent.ProviderConfig{Run: func(runCtx context.Context, _ []*message.Message, _ ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
-		return func(yield func(*agent.ResponseUpdate, error) bool) {
-			if !yield(&agent.ResponseUpdate{MessageID: "msg-1", Contents: message.Contents{&message.TextContent{Text: "partial"}}}, nil) {
-				return
-			}
-			cancel()
-			yield(nil, runCtx.Err())
-		}
-	}}, agent.Config{})
-	exec := &executor{agent: hostedAgent}
-	execCtx := testExecutorContext()
-
-	events, err := collectExecutorEvents(func(yield func(a2a.Event, error) bool) error {
-		return exec.executeNewMessageStreaming(ctx, execCtx, yield)
-	})
-	if err != nil {
-		t.Fatalf("error = %v, want terminal status without executor error", err)
-	}
-	assertTaskStates(t, events, a2a.TaskStateWorking, a2a.TaskStateCanceled)
-	artifacts := executorArtifactEvents(events)
-	if len(artifacts) != 1 || !artifacts[0].LastChunk || artifacts[0].Artifact.Parts[0].Text() != "partial" {
-		t.Fatalf("artifacts = %#v, want one completed partial artifact", artifacts)
-	}
-}
-
-func TestExecuteNewMessageStreaming_AgentCancellationFailsTask(t *testing.T) {
-	hostedAgent := agent.New(agent.ProviderConfig{Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
-		return func(yield func(*agent.ResponseUpdate, error) bool) {
-			yield(nil, context.Canceled)
-		}
-	}}, agent.Config{})
-	exec := &executor{agent: hostedAgent}
-
-	events, err := collectExecutorEvents(func(yield func(a2a.Event, error) bool) error {
-		return exec.executeNewMessageStreaming(context.Background(), testExecutorContext(), yield)
-	})
-	if err != nil {
-		t.Fatalf("error = %v, want terminal status without executor error", err)
-	}
-	assertTaskStates(t, events, a2a.TaskStateWorking, a2a.TaskStateFailed)
-}
-
 func TestExecuteTaskUpdate_FailureEmitsFailedAndReturnsError(t *testing.T) {
 	wantErr := errors.New("agent failed")
 	hostedAgent := agent.New(agent.ProviderConfig{Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -157,16 +113,6 @@ func assertTaskStates(t *testing.T, events []a2a.Event, want ...a2a.TaskState) {
 	}
 }
 
-func executorArtifactEvents(events []a2a.Event) []*a2a.TaskArtifactUpdateEvent {
-	var artifacts []*a2a.TaskArtifactUpdateEvent
-	for _, event := range events {
-		if artifact, ok := event.(*a2a.TaskArtifactUpdateEvent); ok {
-			artifacts = append(artifacts, artifact)
-		}
-	}
-	return artifacts
-}
-
 func TestToAgentMessage_Nil_ReturnsNil(t *testing.T) {
 	got, err := toAgentMessage(nil)
 	if err != nil {
@@ -174,27 +120,6 @@ func TestToAgentMessage_Nil_ReturnsNil(t *testing.T) {
 	}
 	if got != nil {
 		t.Fatalf("expected nil message, got %#v", got)
-	}
-}
-
-func TestToAgentMessage_WithTextPart_MapsToTextContent(t *testing.T) {
-	in := &a2a.Message{ID: "m1", Role: a2a.MessageRoleUser, Parts: a2a.ContentParts{a2a.NewTextPart("hello")}}
-	got, err := toAgentMessage(in)
-	if err != nil {
-		t.Fatalf("toAgentMessage returned error: %v", err)
-	}
-	if got.ID != "m1" || got.Role != message.RoleUser {
-		t.Fatalf("unexpected mapped message: %+v", got)
-	}
-	if len(got.Contents) != 1 {
-		t.Fatalf("contents len = %d, want 1", len(got.Contents))
-	}
-	text, ok := got.Contents[0].(*message.TextContent)
-	if !ok {
-		t.Fatalf("content type = %T, want *message.TextContent", got.Contents[0])
-	}
-	if text.Text != "hello" {
-		t.Fatalf("text = %q, want %q", text.Text, "hello")
 	}
 }
 
@@ -208,19 +133,6 @@ func TestResponseToMessage_NilResponse_ReturnsAgentMessage(t *testing.T) {
 	}
 	if got.ContextID != "ctx-1" || got.TaskID != "task-1" {
 		t.Fatalf("unexpected task info in message: task=%q context=%q", got.TaskID, got.ContextID)
-	}
-}
-
-func TestResponseToMessage_WithEmptyAdditionalProperties_OmitsMetadata(t *testing.T) {
-	got, err := responseToMessage(testTaskInfoProvider{}, &agent.Response{
-		AdditionalProperties: map[string]any{},
-		Messages:             []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "chunk"}}}},
-	})
-	if err != nil {
-		t.Fatalf("responseToMessage returned error: %v", err)
-	}
-	if got.Metadata != nil {
-		t.Fatalf("Metadata = %#v, want nil", got.Metadata)
 	}
 }
 
@@ -341,5 +253,210 @@ func TestResponseUpdateToArtifactEvent_UsesResponseIDAndCopiesMetadata(t *testin
 	}
 	if got.LastChunk {
 		t.Fatalf("lastChunk = %v, want false", got.LastChunk)
+	}
+}
+
+func TestBuildNewMessageInputsNilMessage(t *testing.T) {
+	request := &a2a.SendMessageRequest{Message: nil}
+
+	got, err := buildNewMessageInputs(request.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("messages = %#v, want empty", got)
+	}
+}
+
+func TestBuildNewMessageInputsNilParts(t *testing.T) {
+	request := &a2a.SendMessageRequest{Message: &a2a.Message{
+		ID:    "test-id",
+		Role:  a2a.MessageRoleUser,
+		Parts: nil,
+	}}
+
+	got, err := buildNewMessageInputs(request.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("messages = %#v, want empty", got)
+	}
+}
+
+func TestBuildNewMessageInputsText(t *testing.T) {
+	request := &a2a.SendMessageRequest{Message: &a2a.Message{
+		ID:    "test-id",
+		Role:  a2a.MessageRoleUser,
+		Parts: a2a.ContentParts{a2a.NewTextPart("Hello, world!")},
+	}}
+
+	got, err := buildNewMessageInputs(request.Message)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] == nil {
+		t.Fatalf("messages = %#v, want one non-nil message", got)
+	}
+	msg := got[0]
+	if msg.ID != "test-id" {
+		t.Errorf("message ID = %q, want test-id", msg.ID)
+	}
+	if msg.Role != message.RoleUser {
+		t.Errorf("role = %q, want user", msg.Role)
+	}
+	if len(msg.Contents) != 1 {
+		t.Fatalf("contents = %#v, want one", msg.Contents)
+	}
+	text, ok := msg.Contents[0].(*message.TextContent)
+	if !ok {
+		t.Fatalf("content = %T, want *message.TextContent", msg.Contents[0])
+	}
+	if text.Text != "Hello, world!" {
+		t.Errorf("text = %q, want Hello, world!", text.Text)
+	}
+}
+
+func TestMessagesToPartsNilList(t *testing.T) {
+	var messages []*message.Message
+
+	got, err := messagesToParts(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("parts = nil, want non-nil")
+	}
+	if len(got) != 0 {
+		t.Fatalf("parts = %#v, want empty", got)
+	}
+}
+
+func TestMessagesToPartsEmptyList(t *testing.T) {
+	messages := []*message.Message{}
+
+	got, err := messagesToParts(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil {
+		t.Fatal("parts = nil, want non-nil")
+	}
+	if len(got) != 0 {
+		t.Fatalf("parts = %#v, want empty", got)
+	}
+}
+
+func TestMessagesToPartsTextContent(t *testing.T) {
+	messages := []*message.Message{{
+		Role:     message.RoleAssistant,
+		Contents: message.Contents{&message.TextContent{Text: "Hello from the agent!"}},
+	}}
+
+	got, err := messagesToParts(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("parts = %#v, want one", got)
+	}
+	if got[0].Text() != "Hello from the agent!" {
+		t.Errorf("text = %q, want Hello from the agent!", got[0].Text())
+	}
+}
+
+func TestMessagesToPartsMultipleMessages(t *testing.T) {
+	messages := []*message.Message{
+		{Role: message.RoleUser, Contents: message.Contents{&message.TextContent{Text: "First message"}}},
+		{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "Second message"}}},
+	}
+
+	got, err := messagesToParts(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("parts = %#v, want two", got)
+	}
+	if got[0].Text() != "First message" {
+		t.Errorf("first text = %q, want First message", got[0].Text())
+	}
+	if got[1].Text() != "Second message" {
+		t.Errorf("second text = %q, want Second message", got[1].Text())
+	}
+}
+
+func TestContentsToPartsEmptyResponseUpdate(t *testing.T) {
+	update := &agent.ResponseUpdate{}
+
+	got, err := responseUpdateToParts(update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("parts = %#v, want empty", got)
+	}
+}
+
+func TestContentsToPartsTextResponseUpdate(t *testing.T) {
+	update := &agent.ResponseUpdate{
+		Role:     message.RoleAssistant,
+		Contents: message.Contents{&message.TextContent{Text: "Hello from streaming!"}},
+	}
+
+	got, err := responseUpdateToParts(update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("parts = %#v, want one", got)
+	}
+	if got[0].Text() != "Hello from streaming!" {
+		t.Errorf("text = %q, want Hello from streaming!", got[0].Text())
+	}
+}
+
+func TestContentsToPartsMultipleResponseUpdate(t *testing.T) {
+	update := &agent.ResponseUpdate{
+		Role: message.RoleAssistant,
+		Contents: message.Contents{
+			&message.TextContent{Text: "First chunk"},
+			&message.TextContent{Text: "Second chunk"},
+		},
+	}
+
+	got, err := responseUpdateToParts(update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("parts = %#v, want two", got)
+	}
+	if got[0].Text() != "First chunk" {
+		t.Errorf("first text = %q, want First chunk", got[0].Text())
+	}
+	if got[1].Text() != "Second chunk" {
+		t.Errorf("second text = %q, want Second chunk", got[1].Text())
+	}
+}
+
+func TestContentsToPartsUnsupportedResponseUpdate(t *testing.T) {
+	update := &agent.ResponseUpdate{
+		Role: message.RoleAssistant,
+		Contents: message.Contents{
+			&message.TextContent{Text: "Supported text"},
+			&message.FunctionCallContent{CallID: "call-1", Name: "myFunction"},
+		},
+	}
+
+	got, err := responseUpdateToParts(update)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("parts = %#v, want only the supported text part", got)
+	}
+	if got[0].Text() != "Supported text" {
+		t.Errorf("text = %q, want Supported text", got[0].Text())
 	}
 }

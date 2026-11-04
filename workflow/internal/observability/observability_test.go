@@ -4,11 +4,15 @@ package observability_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/microsoft/agent-framework-go/message"
 	observability "github.com/microsoft/agent-framework-go/workflow/internal/observability"
 	workflowobservability "github.com/microsoft/agent-framework-go/workflow/observability"
 )
@@ -38,6 +42,52 @@ func attributeValue(t *testing.T, attrs []workflowobservability.Attribute, key s
 	}
 	t.Fatalf("attribute %q not found", key)
 	return ""
+}
+
+type telemetryThrowingMessage struct{ err error }
+
+func (message telemetryThrowingMessage) MarshalJSON() ([]byte, error) {
+	panic(message.err)
+}
+
+func TestSensitiveData_MessageSerializationInvalidOperationUsesFallback(t *testing.T) {
+	span := &fakeSpan{}
+	telemetry := observability.New(observability.Options{
+		Tracer: &fakeTracer{span: span}, EnableSensitiveData: true,
+	})
+	_, activity := telemetry.StartMessageSend(t.Context(), "source", "target", telemetryThrowingMessage{err: errors.New("invalid operation")})
+	if activity == nil {
+		t.Fatal("expected message activity")
+	}
+	defer activity.End()
+	if got, want := attributeValue(t, span.attrs, observability.TagMessageContent), "[Unserializable: observability_test.telemetryThrowingMessage]"; got != want {
+		t.Fatalf("message content = %q, want %q", got, want)
+	}
+}
+
+func TestSensitiveData_MessageSerializationAnyExceptionUsesFallback(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{"ArgumentException", errors.New("invalid argument")},
+		{"IOException", &os.PathError{Op: "read", Path: "message", Err: io.ErrUnexpectedEOF}},
+		{"OperationCanceledException", context.Canceled},
+		{"TimeoutException", context.DeadlineExceeded},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			span := &fakeSpan{}
+			telemetry := observability.New(observability.Options{Tracer: &fakeTracer{span: span}, EnableSensitiveData: true})
+			_, activity := telemetry.StartMessageSend(t.Context(), "source", "target", telemetryThrowingMessage{err: test.err})
+			if activity == nil {
+				t.Fatal("expected message activity")
+			}
+			defer activity.End()
+			if got, want := attributeValue(t, span.attrs, observability.TagMessageContent), "[Unserializable: observability_test.telemetryThrowingMessage]"; got != want {
+				t.Fatalf("message content = %q, want %q", got, want)
+			}
+		})
+	}
 }
 
 func TestErrorAttributesShortTypeName(t *testing.T) {
@@ -158,25 +208,52 @@ func TestSerializedAttributeUsesFallbackForMarshalPanics(t *testing.T) {
 }
 
 func TestSensitiveDataUsesFallbackForExecutorInputAndOutput(t *testing.T) {
-	span := &fakeSpan{}
-	telemetry := observability.New(observability.Options{
-		Tracer:              &fakeTracer{span: span},
-		EnableSensitiveData: true,
-	})
-
-	message := unserializableValue{}
-	_, activity := telemetry.StartExecutorProcess(context.Background(), "exec1", "pkg.Type", "message", message, nil)
-	if activity == nil {
-		t.Fatal("expected an activity span")
+	tests := []struct {
+		name  string
+		input any
+		want  string
+	}{
+		{
+			name:  "custom marshaler",
+			input: unserializableValue{},
+			want:  "[Unserializable: observability_test.unserializableValue]",
+		},
+		{
+			name: "message content",
+			input: &message.Message{
+				Role: message.RoleAssistant,
+				Contents: message.Contents{
+					&message.FunctionResultContent{CallID: "call-1", Result: unserializableValue{}},
+				},
+			},
+			want: "[Unserializable: *message.Message]",
+		},
 	}
-	telemetry.SetExecutorOutput(activity, message)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := json.Marshal(test.input); err == nil {
+				t.Fatal("test input unexpectedly serialized without an error")
+			}
+			span := &fakeSpan{}
+			telemetry := observability.New(observability.Options{
+				Tracer:              &fakeTracer{span: span},
+				EnableSensitiveData: true,
+			})
 
-	want := "[Unserializable: observability_test.unserializableValue]"
-	if got := attributeValue(t, span.attrs, observability.TagExecutorInput); got != want {
-		t.Fatalf("executor.input = %q, want %q", got, want)
-	}
-	if got := attributeValue(t, span.attrs, observability.TagExecutorOutput); got != want {
-		t.Fatalf("executor.output = %q, want %q", got, want)
+			_, activity := telemetry.StartExecutorProcess(t.Context(), "exec1", "pkg.Type", "message", test.input, nil)
+			if activity == nil {
+				t.Fatal("expected an activity span")
+			}
+			defer activity.End()
+			telemetry.SetExecutorOutput(activity, test.input)
+
+			if got := attributeValue(t, span.attrs, observability.TagExecutorInput); got != test.want {
+				t.Fatalf("executor.input = %q, want %q", got, test.want)
+			}
+			if got := attributeValue(t, span.attrs, observability.TagExecutorOutput); got != test.want {
+				t.Fatalf("executor.output = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 

@@ -37,6 +37,19 @@ type Source struct {
 	Type SourceType `json:",omitzero"`
 }
 
+// String implements fmt.Stringer. It returns the source type, or "External"
+// for [SourceTypeExternal], followed by ":" and the ID when the ID is not empty.
+func (s Source) String() string {
+	t := string(s.Type)
+	if s.Type == SourceTypeExternal {
+		t = "External"
+	}
+	if s.ID == "" {
+		return t
+	}
+	return t + ":" + s.ID
+}
+
 // Message represents a message in a conversation.
 type Message struct {
 	AdditionalProperties map[string]any `json:",omitzero"`

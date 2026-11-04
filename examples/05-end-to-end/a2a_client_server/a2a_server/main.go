@@ -3,13 +3,11 @@
 package main
 
 import (
-	"context"
+	"cmp"
 	"flag"
 	"fmt"
-	"math/rand"
 	"net/http"
-	"strings"
-	"time"
+	"os"
 
 	"github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -17,167 +15,11 @@ import (
 	"github.com/microsoft/agent-framework-go/examples/internal/demo"
 	"github.com/microsoft/agent-framework-go/provider/a2aprovider"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
-	"github.com/microsoft/agent-framework-go/tool"
-	"github.com/microsoft/agent-framework-go/tool/functool"
 )
 
-var deployment = demo.FoundryModel
+var deployment = cmp.Or(os.Getenv("FOUNDRY_MODEL"), "gpt-5.4-mini")
 
-type Product struct {
-	Name     string  `json:"name"`
-	Quantity int     `json:"quantity"`
-	Price    float64 `json:"price"`
-}
-
-type Invoice struct {
-	TransactionID string    `json:"transactionId"`
-	InvoiceID     string    `json:"invoiceId"`
-	CompanyName   string    `json:"companyName"`
-	InvoiceDate   time.Time `json:"invoiceDate"`
-	Products      []Product `json:"products"`
-}
-
-type InvoiceQuery struct {
-	invoices []Invoice
-}
-
-func newInvoiceQuery() *InvoiceQuery {
-	r := rand.New(rand.NewSource(42))
-	randDate := func() time.Time {
-		end := time.Now().UTC()
-		start := end.AddDate(0, -2, 0)
-		delta := int(end.Sub(start).Hours() / 24)
-		return start.AddDate(0, 0, r.Intn(delta+1))
-	}
-	return &InvoiceQuery{invoices: []Invoice{
-		{TransactionID: "TICKET-XYZ987", InvoiceID: "INV789", CompanyName: "Contoso", InvoiceDate: randDate(), Products: []Product{{"T-Shirts", 150, 10}, {"Hats", 200, 15}, {"Glasses", 300, 5}}},
-		{TransactionID: "TICKET-XYZ111", InvoiceID: "INV111", CompanyName: "XStore", InvoiceDate: randDate(), Products: []Product{{"T-Shirts", 2500, 12}, {"Hats", 1500, 8}, {"Glasses", 200, 20}}},
-		{TransactionID: "TICKET-XYZ222", InvoiceID: "INV222", CompanyName: "Cymbal Direct", InvoiceDate: randDate(), Products: []Product{{"T-Shirts", 1200, 14}, {"Hats", 800, 7}, {"Glasses", 500, 25}}},
-		{TransactionID: "TICKET-XYZ333", InvoiceID: "INV333", CompanyName: "Contoso", InvoiceDate: randDate(), Products: []Product{{"T-Shirts", 400, 11}, {"Hats", 600, 15}, {"Glasses", 700, 5}}},
-	}}
-}
-
-func (q *InvoiceQuery) QueryInvoices(companyName string) []Invoice {
-	matches := make([]Invoice, 0)
-	for _, inv := range q.invoices {
-		if strings.EqualFold(inv.CompanyName, companyName) {
-			matches = append(matches, inv)
-		}
-	}
-	return matches
-}
-
-func (q *InvoiceQuery) QueryByTransactionID(transactionID string) []Invoice {
-	matches := make([]Invoice, 0)
-	for _, inv := range q.invoices {
-		if strings.EqualFold(inv.TransactionID, transactionID) {
-			matches = append(matches, inv)
-		}
-	}
-	return matches
-}
-
-func (q *InvoiceQuery) QueryByInvoiceID(invoiceID string) []Invoice {
-	matches := make([]Invoice, 0)
-	for _, inv := range q.invoices {
-		if strings.EqualFold(inv.InvoiceID, invoiceID) {
-			matches = append(matches, inv)
-		}
-	}
-	return matches
-}
-
-func main() {
-	agentType := flag.String("agentType", "invoice", "Agent type: invoice|policy|logistics")
-	port := flag.Int("port", 5000, "Port to listen on")
-	flag.Parse()
-
-	token := demo.FoundryTokenCredential()
-
-	addr := fmt.Sprintf(":%d", *port)
-	url := fmt.Sprintf("http://localhost:%d", *port)
-
-	logger := demo.NewLogger(
-		"A2A Server",
-		"Hosts one specialized agent via A2A JSON-RPC.",
-		"AgentType", *agentType,
-		"Model", deployment,
-		"URL", url,
-	)
-
-	cfg, card := buildAgent(*agentType, deployment)
-	cfg.Middlewares = append(cfg.Middlewares, logger)
-	hostAgent := foundryprovider.NewAgent(
-		demo.FoundryProjectEndpoint,
-		token,
-		foundryprovider.ModelDeployment(deployment),
-		cfg,
-	)
-
-	card.SupportedInterfaces = []*a2a.AgentInterface{
-		a2a.NewAgentInterface(url, a2a.TransportProtocolJSONRPC),
-	}
-	mux := http.NewServeMux()
-	requestHandler := a2asrv.NewHandler(
-		a2aprovider.NewExecutor(hostAgent, a2aprovider.ExecutorConfig{}),
-		a2asrv.WithExtendedAgentCard(card),
-	)
-	mux.Handle("/", a2asrv.NewJSONRPCHandler(requestHandler))
-	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
-
-	demo.Assistantf("A2A server listening at %s for agentType=%s", url, strings.ToLower(*agentType))
-	demo.Assistant("Start one server per agent type, then run the A2A client with A2A_AGENT_URLS set to those URLs.")
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		demo.Panicf("A2A server failed on %s: %v", addr, err)
-	}
-}
-
-func buildAgent(agentType, model string) (foundryprovider.AgentConfig, *a2a.AgentCard) {
-	t := strings.ToUpper(strings.TrimSpace(agentType))
-	cfg := foundryprovider.AgentConfig{}
-	card := &a2a.AgentCard{
-		Version:            "1.0.0",
-		DefaultInputModes:  []string{"text"},
-		DefaultOutputModes: []string{"text"},
-		Capabilities: a2a.AgentCapabilities{
-			Streaming: false,
-		},
-	}
-
-	switch t {
-	case "INVOICE":
-		q := newInvoiceQuery()
-		queryInvoices := functool.MustNew(functool.Config{Name: "query_invoices", Description: "Retrieves invoices for a company"}, func(_ context.Context, companyName string) ([]Invoice, error) {
-			return q.QueryInvoices(companyName), nil
-		})
-		queryByTransactionID := functool.MustNew(functool.Config{Name: "query_by_transaction_id", Description: "Retrieves invoices by transaction id"}, func(_ context.Context, transactionID string) ([]Invoice, error) {
-			return q.QueryByTransactionID(transactionID), nil
-		})
-		queryByInvoiceID := functool.MustNew(functool.Config{Name: "query_by_invoice_id", Description: "Retrieves invoices by invoice id"}, func(_ context.Context, invoiceID string) ([]Invoice, error) {
-			return q.QueryByInvoiceID(invoiceID), nil
-		})
-
-		cfg.Instructions = "You specialize in handling queries related to invoices."
-		cfg.Config = agent.Config{
-			Name:        "InvoiceAgent",
-			Description: "Handles requests relating to invoices.",
-			Tools: []tool.Tool{
-				queryInvoices,
-				queryByTransactionID,
-				queryByInvoiceID,
-			},
-		}
-		card.Name = "InvoiceAgent"
-		card.Description = "Handles requests relating to invoices."
-		card.Skills = []a2a.AgentSkill{{
-			ID:          "id_invoice_agent",
-			Name:        "InvoiceQuery",
-			Description: "Handles requests relating to invoices.",
-			Tags:        []string{"invoice", "agent-framework-go"},
-			Examples:    []string{"List the latest invoices for Contoso."},
-		}}
-	case "POLICY":
-		cfg.Instructions = `You specialize in handling queries related to policies and customer communications.
+const policyInstructions = `You specialize in handling queries related to policies and customer communications.
 
 Always reply with exactly this text:
 
@@ -189,43 +31,66 @@ shows fewer items packed than invoiced, issue a credit for the missing items. Do
 resolution in SAP CRM and notify the customer via email within 2 business days, referencing the
 original invoice and the credit memo number. Use the 'Formal Credit Notification' email
 template."`
-		cfg.Config = agent.Config{
-			Name:        "PolicyAgent",
-			Description: "Handles requests relating to policies and customer communications.",
-		}
-		card.Name = "PolicyAgent"
-		card.Description = cfg.Description
-		card.Skills = []a2a.AgentSkill{{
+
+func main() {
+	port := flag.Int("port", 5000, "Port to listen on")
+	flag.Parse()
+
+	token := demo.FoundryTokenCredential()
+
+	addr := fmt.Sprintf("localhost:%d", *port)
+	url := cmp.Or(os.Getenv("A2A_AGENT_URL"), fmt.Sprintf("http://localhost:%d", *port))
+
+	logger := demo.NewLogger(
+		"A2A Server",
+		"Hosts the policy agent via A2A HTTP+JSON and JSON-RPC.",
+		"Model", deployment,
+		"URL", url,
+	)
+
+	hostAgent := foundryprovider.NewAgent(
+		demo.FoundryProjectEndpoint,
+		token,
+		foundryprovider.ModelDeployment(deployment),
+		foundryprovider.AgentConfig{
+			Instructions: policyInstructions,
+			Config: agent.Config{
+				Name:        "PolicyAgent",
+				Middlewares: []agent.Middleware{logger},
+			},
+		},
+	)
+
+	card := &a2a.AgentCard{
+		Name:               "PolicyAgent",
+		Description:        "Handles requests relating to policies and customer communications.",
+		Version:            "1.0.0",
+		DefaultInputModes:  []string{"text/plain"},
+		DefaultOutputModes: []string{"text/plain"},
+		Capabilities:       a2a.AgentCapabilities{Streaming: false},
+		Skills: []a2a.AgentSkill{{
 			ID:          "id_policy_agent",
 			Name:        "PolicyAgent",
-			Description: cfg.Description,
-			Tags:        []string{"policy", "agent-framework-go"},
+			Description: "Handles requests relating to policies and customer communications.",
+			Tags:        []string{"policy"},
 			Examples:    []string{"What is the policy for short shipments?"},
-		}}
-	case "LOGISTICS":
-		cfg.Instructions = `You specialize in handling queries related to logistics.
-
-Always reply with exactly:
-
-Shipment number: SHPMT-SAP-001
-Item: TSHIRT-RED-L
-Quantity: 900`
-		cfg.Config = agent.Config{
-			Name:        "LogisticsAgent",
-			Description: "Handles requests relating to logistics.",
-		}
-		card.Name = "LogisticsAgent"
-		card.Description = cfg.Description
-		card.Skills = []a2a.AgentSkill{{
-			ID:          "id_logistics_agent",
-			Name:        "LogisticsQuery",
-			Description: cfg.Description,
-			Tags:        []string{"logistics", "agent-framework-go"},
-			Examples:    []string{"What is the status for SHPMT-SAP-001"},
-		}}
-	default:
-		demo.Panicf("unsupported --agentType: %s (expected invoice|policy|logistics)", agentType)
+		}},
+		SupportedInterfaces: []*a2a.AgentInterface{
+			a2a.NewAgentInterface(url, a2a.TransportProtocolJSONRPC),
+			a2a.NewAgentInterface(url, a2a.TransportProtocolHTTPJSON),
+		},
 	}
+	mux := http.NewServeMux()
+	requestHandler := a2aprovider.NewHandler(
+		hostAgent, a2aprovider.ExecutorConfig{SessionStore: a2aprovider.NewInMemorySessionStore()},
+		a2asrv.WithExtendedAgentCard(card),
+	)
+	mux.Handle("POST /{$}", a2asrv.NewJSONRPCHandler(requestHandler))
+	mux.Handle("/", a2asrv.NewRESTHandler(requestHandler))
+	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewStaticAgentCardHandler(card))
 
-	return cfg, card
+	demo.Assistantf("A2A policy server listening at %s", url)
+	if err := http.ListenAndServe(addr, mux); err != nil {
+		demo.Panicf("A2A server failed on %s: %v", addr, err)
+	}
 }

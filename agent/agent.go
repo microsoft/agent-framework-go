@@ -12,7 +12,9 @@ import (
 	"sync/atomic"
 
 	"github.com/google/uuid"
+	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/internal/agentopts"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/internal/toolmiddleware"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -32,6 +34,7 @@ type ProviderConfig struct {
 	Run RunFunc
 
 	// Middlewares wrap Run after agent history and context providers.
+	// Structured-output decoding wraps these middlewares to process their final response.
 	Middlewares []Middleware
 
 	// ManagesToolExecution indicates that Run invokes function tools supplied through
@@ -41,14 +44,15 @@ type ProviderConfig struct {
 	// retained originals. The provider remains responsible for execution and approvals.
 	ManagesToolExecution bool
 
-	// Format creates a provider response format for a structured output value.
-	Format func(v any) (ResponseFormat, error)
+	// Format creates a provider response format for the structured output value.
+	Format func(v any) (format.ResponseFormat, error)
 
 	// Unmarshal decodes provider structured output into v using format.
-	Unmarshal func(format ResponseFormat, data []byte, v any) error
+	Unmarshal func(format format.ResponseFormat, data []byte, v any) error
 
-	// CreateSession configures a provider-specific session. Implementations must
-	// treat options as read-only and clone the slice before making changes.
+	// CreateSession configures a provider-specific session. The session is initialized
+	// and supports concurrent state access. Implementations must treat options as
+	// read-only and clone the slice before making changes.
 	CreateSession func(ctx context.Context, session *Session, options ...Option) error
 }
 
@@ -154,6 +158,12 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 		agentMiddlewares = append([]Middleware{newRunLoggerMiddleware(cfg.Logger, cfg.LogSensitiveData)}, agentMiddlewares...)
 	}
 	providerMiddlewares := make([]Middleware, 0, len(prov.Middlewares)+3)
+	if prov.Format != nil || prov.Unmarshal != nil {
+		providerMiddlewares = append(providerMiddlewares, &structuredOutputMiddleware{
+			format:    prov.Format,
+			unmarshal: prov.Unmarshal,
+		})
+	}
 	providerMiddlewares = append(providerMiddlewares, prov.Middlewares...)
 	if cfg.MessageInjector != nil {
 		providerMiddlewares = append(providerMiddlewares, MiddlewareFunc(cfg.MessageInjector.run))
@@ -188,12 +198,6 @@ func New(prov ProviderConfig, cfg Config) *Agent {
 	}
 	if a.perServiceCallHistoryPersistence {
 		providerMiddlewares = append(providerMiddlewares, MiddlewareFunc(a.persistServiceCallHistory))
-	}
-	if prov.Format != nil || prov.Unmarshal != nil {
-		providerMiddlewares = append(providerMiddlewares, &structuredOutputMiddleware{
-			format:    prov.Format,
-			unmarshal: prov.Unmarshal,
-		})
 	}
 	providerRun := prov.Run
 	if prov.ManagesToolExecution {
@@ -317,6 +321,7 @@ func errorResponseStream(err error) ResponseStream {
 
 func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
 	return func(yield func(*ResponseUpdate, error) bool) {
+		telemetry.MarkUsed(telemetry.FeatureAgent)
 		session, _ := GetOption(options, WithSession)
 		// Resolve the current session on every invocation, including re-entry
 		// from agent middleware. Request options never seed an existing session.
@@ -626,6 +631,7 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 		// A per-run ID belongs to the request until returned by the provider.
 		// Only an explicit CreateSession call seeds a service ID on a session.
 		session := &Session{}
+		session.initState()
 		if a.provider.CreateSession != nil {
 			if err := a.provider.CreateSession(ctx, session, options...); err != nil {
 				return nil, nil, nil, err
@@ -640,6 +646,8 @@ func (a *Agent) prepareRun(ctx context.Context, messages []*message.Message, opt
 		if a.hasDefaultHistoryProvider && !a.perServiceCallHistoryPersistence {
 			options = append(options, agentopts.SessionlessHistory{})
 		}
+	} else {
+		session.initState()
 	}
 
 	continuationToken, _ := GetOption(options, WithContinuationToken)

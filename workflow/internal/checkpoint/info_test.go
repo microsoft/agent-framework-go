@@ -4,6 +4,7 @@ package checkpoint
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -23,6 +24,49 @@ func testBinding(id string, implementationID string) workflow.ExecutorBinding {
 				},
 			}, nil
 		},
+	}
+}
+
+func TestExecutorInfoJSON_Roundtrip(t *testing.T) {
+	binding := testBinding("ForwardString", "ForwardMessageExecutor[string]")
+	value := executorInfo{ImplementationID: binding.ImplementationID, ExecutorID: binding.ID}
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got executorInfo
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ExecutorID != value.ExecutorID || !got.matchBinding(binding) {
+		t.Fatalf("executor info = %#v, want original ID and functional implementation identity", got)
+	}
+}
+
+func TestWorkflowInfoJSON_WritesOutputExecutorMap(t *testing.T) {
+	info := WorkflowInfo{
+		Executors: map[string]executorInfo{}, Edges: map[string][]workflow.EdgeInfo{},
+		RequestPorts: map[string]workflow.RequestPortInfo{}, StartExecutorID: "start",
+		OutputExecutors: map[string][]workflow.OutputTag{"a": {}, "b": {workflow.OutputTagIntermediate}},
+	}
+	data, err := json.Marshal(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back WorkflowInfo
+	if err := json.Unmarshal(data, &back); err != nil {
+		t.Fatal(err)
+	}
+	if len(back.OutputExecutors) != 2 || len(back.OutputExecutors["a"]) != 0 ||
+		!slices.Equal(back.OutputExecutors["b"], []workflow.OutputTag{workflow.OutputTagIntermediate}) {
+		t.Fatalf("round-tripped outputs = %v", back.OutputExecutors)
+	}
+	var shape map[string]json.RawMessage
+	if err := json.Unmarshal(data, &shape); err != nil {
+		t.Fatal(err)
+	}
+	if value := shape["OutputExecutors"]; len(value) == 0 || value[0] != '{' {
+		t.Fatalf("output executor JSON = %s, want map", value)
 	}
 }
 

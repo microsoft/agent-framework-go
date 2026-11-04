@@ -20,38 +20,43 @@ import (
 
 func TestNewMemoryProviderPanicsWithInvalidArguments(t *testing.T) {
 	tests := []struct {
-		name string
-		act  func()
+		name        string
+		act         func()
+		wantMessage string
 	}{
 		{
 			name: "empty endpoint",
 			act: func() {
 				_ = foundryprovider.NewMemoryProvider(" ", validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{})
 			},
+			wantMessage: "endpoint is required",
 		},
 		{
 			name: "nil credential",
 			act: func() {
 				_ = foundryprovider.NewMemoryProvider(validEndpoint, nil, "memory", validScope, foundryprovider.MemoryProviderConfig{})
 			},
+			wantMessage: "credential is required",
 		},
 		{
 			name: "empty memory store",
 			act: func() {
 				_ = foundryprovider.NewMemoryProvider(validEndpoint, validCredential, " ", validScope, foundryprovider.MemoryProviderConfig{})
 			},
+			wantMessage: "memory store name is required",
 		},
 		{
 			name: "nil scope",
 			act: func() {
 				_ = foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", nil, foundryprovider.MemoryProviderConfig{})
 			},
+			wantMessage: "memory scope is required",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertPanics(t, tt.act)
+			assertPanics(t, tt.act, tt.wantMessage)
 		})
 	}
 }
@@ -68,6 +73,12 @@ func TestNewMemoryProviderSucceedsWithValidParameters(t *testing.T) {
 	if len(messages) != 0 || len(options) != 0 {
 		t.Fatalf("messages/options = %d/%d, want 0/0", len(messages), len(options))
 	}
+}
+
+func TestNewMemoryProviderRejectsEmptyStoreName(t *testing.T) {
+	assertPanics(t, func() {
+		foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "", validScope, foundryprovider.MemoryProviderConfig{})
+	}, "memory store name is required")
 }
 
 func TestNewMemoryProviderUsesCustomSearchInputFilter(t *testing.T) {
@@ -164,7 +175,7 @@ func TestMemoryProviderPanicsWhenScopeIsEmptyOnUse(t *testing.T) {
 	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", func(*agent.Session) string { return " " }, foundryprovider.MemoryProviderConfig{})
 	assertPanics(t, func() {
 		_, _, _ = provider.Invoking(t.Context(), agent.InvokingContext{Messages: []*message.Message{message.NewText("hello")}})
-	})
+	}, "memory scope must not be empty")
 }
 
 func TestMemoryProviderInvokingSearchesAndInjectsRetrievedMemories(t *testing.T) {
@@ -299,6 +310,23 @@ func TestMemoryProviderInvokingSearchFailureLogsAndReturnsOriginalMessages(t *te
 	}
 }
 
+func TestMemoryProviderInvokingCallerCancellationPropagates(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	transport := &recordingTransport{handle: func(req *http.Request, _ string) (*http.Response, error) {
+		cancel()
+		return nil, context.Canceled
+	}}
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+		ClientOptions: azcore.ClientOptions{Transport: transport},
+	})
+
+	_, _, err := provider.Invoking(ctx, agent.InvokingContext{Messages: []*message.Message{message.NewText("what do you remember?")}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Invoking error = %v, want context.Canceled", err)
+	}
+}
+
 func TestMemoryProviderInvokedUpdatesMemories(t *testing.T) {
 	transport := &recordingTransport{}
 	transport.handle = func(req *http.Request, _ string) (*http.Response, error) {
@@ -395,13 +423,29 @@ func TestMemoryProviderInvokedLogsUpdateFailureAndDoesNotReturnError(t *testing.
 	if err != nil {
 		t.Fatalf("Invoked error = %v", err)
 	}
-
 	logText := logs.String()
 	if !strings.Contains(logText, "foundrymemory: failed to update memories") || !strings.Contains(logText, expected.Error()) {
 		t.Fatalf("logs = %q", logText)
 	}
 	if strings.Contains(logText, "user-456") {
 		t.Fatalf("logs should not include scope: %q", logText)
+	}
+}
+
+func TestMemoryProviderInvokedCallerCancellationPropagates(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	transport := &recordingTransport{handle: func(req *http.Request, _ string) (*http.Response, error) {
+		cancel()
+		return nil, context.Canceled
+	}}
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+		ClientOptions: azcore.ClientOptions{Transport: transport},
+	})
+
+	err := provider.Invoked(ctx, agent.InvokedContext{RequestMessages: []*message.Message{message.NewText("remember me")}})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Invoked error = %v, want context.Canceled", err)
 	}
 }
 

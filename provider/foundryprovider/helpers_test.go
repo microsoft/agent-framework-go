@@ -4,6 +4,7 @@ package foundryprovider_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -34,11 +35,17 @@ const minimalResponsesJSON = `{
 	"output":[{"type":"message","id":"msg_test","status":"completed","role":"assistant","content":[{"type":"output_text","text":"hello","annotations":[]}]}]
 }`
 
-func assertPanics(t *testing.T, f func()) {
+func assertPanics(t *testing.T, f func(), wantMessage ...string) {
 	t.Helper()
 	defer func() {
-		if recover() == nil {
+		value := recover()
+		if value == nil {
 			t.Fatal("expected panic")
+		}
+		for _, want := range wantMessage {
+			if got := fmt.Sprint(value); !strings.Contains(got, want) {
+				t.Fatalf("panic = %q, want it to contain %q", got, want)
+			}
 		}
 	}()
 	f()
