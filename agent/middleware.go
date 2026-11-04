@@ -66,13 +66,26 @@ type FunctionInvocationContext struct {
 	// Middleware may replace it before calling next. To inspect or change
 	// individual fields, decode the JSON and encode any changes back into Arguments.
 	Arguments string
+
+	// Terminate stops automatic tool execution after this invocation returns,
+	// without another provider request. Its result is still returned. Remaining
+	// serial calls receive not-invoked results; concurrent calls finish normally.
+	// Invocation errors still follow the configured error handling.
+	//
+	// When continuing a service-managed conversation, pass the returned function
+	// results into the later run; termination does not send them to the provider.
+	//
+	// Providers that manage tool execution themselves do not support this
+	// control. Requesting termination from them returns a tool error.
+	Terminate bool
 }
 
 // FunctionInvocationMiddleware intercepts individual function calls.
 // Call next to continue execution, or return a result/error without
 // calling next to replace the tool's behavior. Results and errors may also be
 // inspected or replaced after next returns.
-// Skipping next replaces only this invocation; it does not terminate the agent loop.
+// Skipping next replaces only this invocation. Set
+// [FunctionInvocationContext.Terminate] to also stop automatic tool execution.
 //
 // Register it in [Config.FunctionMiddlewares], independently of agent middleware.
 // Callbacks apply when tools are executed, including tools supplied by context
@@ -137,9 +150,14 @@ func (t *functionInvocationTool) ApprovalRequired() bool {
 	return ok && approval.ApprovalRequired()
 }
 
-func (t *functionInvocationTool) Call(ctx context.Context, args string) (any, error) {
+func (t *functionInvocationTool) Call(ctx context.Context, args string) (result any, err error) {
 	callID, _ := toolmiddleware.CallIDFromContext(ctx)
 	invocation := &FunctionInvocationContext{Function: t.FuncTool, CallID: callID, Arguments: args}
+	defer func() {
+		if invocation.Terminate && !toolmiddleware.RequestTermination(ctx) {
+			err = errors.Join(err, errors.New("agent: graceful tool termination is not supported by this provider"))
+		}
+	}()
 	next := func(ctx context.Context, invocation *FunctionInvocationContext) (any, error) {
 		return t.FuncTool.Call(ctx, invocation.Arguments)
 	}
@@ -150,11 +168,16 @@ func (t *functionInvocationTool) Call(ctx context.Context, args string) (any, er
 			defer func() {
 				invocation.Function = functionBeforeMiddleware
 			}()
-			continuation := validateContinuation(func(ctx context.Context, invocation *FunctionInvocationContext) (any, error) {
-				if !sameFuncTool(invocation.Function, functionBeforeMiddleware) {
-					return invocation.Function.Call(ctx, invocation.Arguments)
+			continuation := validateContinuation(func(ctx context.Context, nextInvocation *FunctionInvocationContext) (any, error) {
+				defer func() {
+					if nextInvocation != invocation && nextInvocation.Terminate {
+						invocation.Terminate = true
+					}
+				}()
+				if !sameFuncTool(nextInvocation.Function, functionBeforeMiddleware) {
+					return nextInvocation.Function.Call(ctx, nextInvocation.Arguments)
 				}
-				return inner(ctx, invocation)
+				return inner(ctx, nextInvocation)
 			})
 			return middleware(continuation, ctx, invocation)
 		}

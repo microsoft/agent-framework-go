@@ -266,10 +266,11 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			}
 			messagesCloned = changed
 		}
+		var approvalCallOrder []string
 		if !f.disableApprovalNotRequiredBypassing {
 			var changed bool
 			var err error
-			messages, changed, err = injectPendingAutoApprovedCalls(session, messages)
+			messages, approvalCallOrder, changed, err = injectPendingAutoApprovedCalls(session, messages)
 			if err != nil {
 				yield(nil, err)
 				return
@@ -301,7 +302,7 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			var preDownstreamCallHistory []*message.Message
 			var approvedResultInsertIdx int
 			var err error
-			messages, preDownstreamCallHistory, notInvokedMsgs, approvedResultInsertIdx, err = f.processToolApprovalResponses(ctx, messages, toolMsgID, funcCallFallbackMsgID, serviceManagedHistory)
+			messages, preDownstreamCallHistory, notInvokedMsgs, approvedResultInsertIdx, err = f.processToolApprovalResponses(ctx, messages, approvalCallOrder, toolMsgID, funcCallFallbackMsgID, serviceManagedHistory)
 			if err != nil {
 				yield(nil, err)
 				return
@@ -317,7 +318,8 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			}
 			// Invoke approved approval responses, which generates some additional FRC wrapped in ChatMessage.
 			var newMsg *message.Message
-			newMsg, errCount, err = f.invokeApprovedToolApprovalResponses(ctx, notInvokedMsgs, tools, 0)
+			var shouldTerminate bool
+			newMsg, errCount, shouldTerminate, err = f.invokeApprovedToolApprovalResponses(ctx, notInvokedMsgs, tools, 0)
 			if newMsg != nil {
 				opts = updateOptionsForNextIteration(opts)
 				messages = slices.Insert(messages, approvedResultInsertIdx, newMsg)
@@ -332,6 +334,12 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			}
 			if err != nil {
 				yield(nil, err)
+				return
+			}
+			if shouldTerminate {
+				if finalConversationID != nil && serviceManagedHistory {
+					*finalConversationID = new(serviceID)
+				}
 				return
 			}
 		}
@@ -354,8 +362,7 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			// Reset slice without reallocating.
 			updates = updates[:0]
 			functionCallContents = functionCallContents[:0]
-			var hasApprovalRequiringFcc bool
-			var lastApprovalCheckedFCCIdx, lastYieldedUpdateIdx int
+			var lastYieldedUpdateIdx int
 			var conversationID *string
 			for update, err := range next(ctx, messagesToSend, opts...) {
 				if err != nil {
@@ -376,64 +383,36 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 						functionCallContents = append(functionCallContents, fcc)
 					}
 				}
-				// We're streaming updates back to the caller. However, approvals requires extra handling. We should not yield any
-				// FunctionCallContents back to the caller if approvals might be required, because if any actually are, we need to convert
-				// all FunctionCallContents into approval requests, even those that don't require approval (we otherwise don't have a way
-				// to track the FCCs to a later turn, in particular when the conversation history is managed by the service / inner client).
-				// So, if there are no functions that need approval, we can yield updates with FCCs as they arrive. But if any FCC _might_
-				// require approval (which just means that any Function we can possibly invoke requires approval), then we need to hold off
-				// on yielding any FCCs until we know whether any of them actually require approval, which is either at the end of the stream
-				// or the first time we get an FCC that requires approval. At that point, we can yield all of the updates buffered thus far
-				// and anything further, replacing FCCs with approval if any required it, or yielding them as is.
+				// Buffer from the first function call until the response is complete.
+				// A later server result must suppress local execution and approval state.
 				if len(functionCallContents) == 0 {
-					// If there are no function calls to make yet, we can yield the update as-is.
 					lastYieldedUpdateIdx++
 					if !yieldUpdate(update) {
 						return
 					}
-					continue
 				}
-				if !requiresApproval {
-					// We have function calls but no approval-required functions. Buffer updates from this point on
-					// so we can detect and suppress server-handled function calls before local invocation.
-					continue
-				}
-				hasApprovalRequiringFcc, lastApprovalCheckedFCCIdx = checkForApprovalRequiringFCC(functionCallContents, tools, hasApprovalRequiringFcc, lastApprovalCheckedFCCIdx)
-				if hasApprovalRequiringFcc {
-					// If we've encountered a function call content that requires approval,
-					// we need to ask for approval for all functions, since we cannot mix and match.
-					// Convert all function call contents into approval requests from the last yielded update index
-					// and yield all those updates.
-					for ; lastYieldedUpdateIdx < len(updates); lastYieldedUpdateIdx++ {
-						updateToYield := updates[lastYieldedUpdateIdx]
-						updatedContent, err := f.prepareApprovalContents(ctx, updateToYield.Contents, tools, session)
-						if err != nil {
-							yield(nil, err)
-							return
-						}
-						if updatedContent != nil {
-							updateToYield.Contents = updatedContent
-						}
-						if !yieldUpdate(updateToYield) {
-							return
-						}
-					}
-					continue
-				}
-				// We don't have any approval requiring function calls yet, but we may receive some in future
-				// so we cannot yield the updates yet. We'll just keep them in the updates list for later.
-				// We will yield the updates as soon as we receive a function call content that requires approval
-				// or when we reach the end of the updates stream.
 			}
 			if finalConversationID != nil {
 				*finalConversationID = conversationID
 			}
 			// Mark function calls as informational-only if the server already provided matching function results.
 			functionCallContents = markServerHandledFunctionCalls(updates, functionCallContents)
+			hasApprovalRequiringFcc := requiresApproval && checkForApprovalRequiringFCC(functionCallContents, tools)
 
 			// We need to yield any remaining updates that were not yielded while looping through the streamed updates.
 			for ; lastYieldedUpdateIdx < len(updates); lastYieldedUpdateIdx++ {
-				if !yieldUpdate(updates[lastYieldedUpdateIdx]) {
+				update := updates[lastYieldedUpdateIdx]
+				if hasApprovalRequiringFcc {
+					contents, err := f.prepareApprovalContents(ctx, update.Contents, tools, session, functionCallContents)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					if contents != nil {
+						update.Contents = contents
+					}
+				}
+				if !yieldUpdate(update) {
 					return
 				}
 			}
@@ -448,7 +427,8 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			// Process all of the functions, adding their results into the history.
 			var newMsg *message.Message
 			var err error
-			newMsg, errCount, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount)
+			var shouldTerminate bool
+			newMsg, errCount, shouldTerminate, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount)
 
 			// Stream any generated function results. This mirrors what's done for ResponseAsync, where the returned messages
 			// includes all activities, including generated function results.
@@ -459,6 +439,9 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			}
 			if err != nil {
 				yield(nil, err)
+				return
+			}
+			if shouldTerminate {
 				return
 			}
 
@@ -490,7 +473,7 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 	}
 }
 
-func (f *autocall) prepareApprovalContents(ctx context.Context, contents message.Contents, tools map[string]tool.SchemaTool, session *agent.Session) (message.Contents, error) {
+func (f *autocall) prepareApprovalContents(ctx context.Context, contents message.Contents, tools map[string]tool.SchemaTool, session *agent.Session, callOrder []*message.FunctionCallContent) (message.Contents, error) {
 	var updated message.Contents
 	var autoApproved []*message.FunctionCallContent
 	for i, c := range contents {
@@ -513,7 +496,7 @@ func (f *autocall) prepareApprovalContents(ctx context.Context, contents message
 		}
 	}
 	if len(autoApproved) > 0 {
-		if err := recordPendingAutoApprovedCalls(session, autoApproved); err != nil {
+		if err := recordPendingAutoApprovedCalls(session, autoApproved, callOrder); err != nil {
 			return nil, err
 		}
 		updated = slices.DeleteFunc(updated, func(content message.Content) bool { return content == nil })
@@ -530,23 +513,13 @@ func composeApprovalRequestID(callID string) string {
 	return "ficc_" + callID
 }
 
-//	checkForApprovalRequiringFCC checks if any of the provided functionCallContents require approval.
-//
-// Supports checking from a provided index up to the end of the list, to allow efficient incremental checking when streaming.
-func checkForApprovalRequiringFCC(functionCalls []*message.FunctionCallContent, tools map[string]tool.SchemaTool, hasApprovalRequiringFcc bool, lastApprovalCheckedFCCIdx int) (bool, int) {
-	if hasApprovalRequiringFcc {
-		// If we already found an approval requiring FCC, we can skip checking the rest.
-		return true, lastApprovalCheckedFCCIdx
-	}
-	for ; lastApprovalCheckedFCCIdx < len(functionCalls); lastApprovalCheckedFCCIdx++ {
-		fcc := functionCalls[lastApprovalCheckedFCCIdx]
-		if t, ok := tools[fcc.Name]; ok {
-			if approval, ok := t.(tool.ApprovalRequiredTool); ok && approval.ApprovalRequired() {
-				hasApprovalRequiringFcc = true
-			}
+func checkForApprovalRequiringFCC(functionCalls []*message.FunctionCallContent, tools map[string]tool.SchemaTool) bool {
+	for _, call := range functionCalls {
+		if toolRequiresApproval(tools[call.Name]) {
+			return true
 		}
 	}
-	return hasApprovalRequiringFcc, lastApprovalCheckedFCCIdx
+	return false
 }
 
 func convertToolResultMsgToUpdate(msg *message.Message, msgID string) *agent.ResponseUpdate {
@@ -831,6 +804,7 @@ type pendingApprovalRequestsState struct {
 
 type pendingAutoApprovedCallsState struct {
 	Calls []*message.FunctionCallContent `json:"calls,omitempty"`
+	Order []string                       `json:"order,omitempty"`
 }
 
 func bindApprovalResponses(session *agent.Session, messages []*message.Message) ([]*message.Message, bool, error) {
@@ -1004,17 +978,17 @@ func toolCallsEquivalent(a, b message.ToolCallContent) bool {
 	return reflect.TypeOf(a) == reflect.TypeOf(b) && a.GetCallID() == b.GetCallID()
 }
 
-func injectPendingAutoApprovedCalls(session *agent.Session, messages []*message.Message) ([]*message.Message, bool, error) {
+func injectPendingAutoApprovedCalls(session *agent.Session, messages []*message.Message) ([]*message.Message, []string, bool, error) {
 	if session == nil {
-		return messages, false, nil
+		return messages, nil, false, nil
 	}
 	var state pendingAutoApprovedCallsState
 	ok, err := session.Get(pendingAutoApprovedCallsStateKey, &state)
 	if err != nil {
-		return nil, false, err
+		return nil, nil, false, err
 	}
 	if !ok || len(state.Calls) == 0 {
-		return messages, false, nil
+		return messages, nil, false, nil
 	}
 	session.Delete(pendingAutoApprovedCallsStateKey)
 
@@ -1032,19 +1006,25 @@ func injectPendingAutoApprovedCalls(session *agent.Session, messages []*message.
 		responses = append(responses, request.CreateResponse(true, ""))
 	}
 	if len(requests) == 0 {
-		return messages, false, nil
+		return messages, nil, false, nil
 	}
 
-	out := make([]*message.Message, 0, len(messages)+2)
-	out = append(out, messages...)
-	out = append(out,
+	insertIdx := 0
+	needsProcessing := approvalResponseNeedsProcessingByRequestID(messages)
+	for i, msg := range slices.Backward(messages) {
+		if messageHasFunctionApproval(msg, needsProcessing) {
+			insertIdx = i
+			break
+		}
+	}
+	out := slices.Insert(slices.Clone(messages), insertIdx,
 		&message.Message{Role: message.RoleAssistant, Contents: requests},
 		message.New(responses...),
 	)
-	return out, true, nil
+	return out, state.Order, true, nil
 }
 
-func recordPendingAutoApprovedCalls(session *agent.Session, calls []*message.FunctionCallContent) error {
+func recordPendingAutoApprovedCalls(session *agent.Session, calls, callOrder []*message.FunctionCallContent) error {
 	if session == nil || len(calls) == 0 {
 		return nil
 	}
@@ -1068,6 +1048,16 @@ func recordPendingAutoApprovedCalls(session *agent.Session, calls []*message.Fun
 		}
 		byID[call.CallID] = len(state.Calls)
 		state.Calls = append(state.Calls, snapshotFunctionCall(call))
+	}
+	orderIDs := make(map[string]struct{}, len(state.Order)+len(callOrder))
+	for _, id := range state.Order {
+		orderIDs[id] = struct{}{}
+	}
+	for _, call := range callOrder {
+		if _, exists := orderIDs[call.CallID]; !exists {
+			state.Order = append(state.Order, call.CallID)
+			orderIDs[call.CallID] = struct{}{}
+		}
 	}
 	session.Set(pendingAutoApprovedCallsStateKey, state)
 	return nil
@@ -1139,10 +1129,10 @@ func snapshotFunctionCall(call *message.FunctionCallContent) *message.FunctionCa
 	return &clone
 }
 
-func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, approvals []toolApprovalResultWithRequestMessage, tools map[string]tool.SchemaTool, errCount int) (*message.Message, int, error) {
+func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, approvals []toolApprovalResultWithRequestMessage, tools map[string]tool.SchemaTool, errCount int) (*message.Message, int, bool, error) {
 	// Check if there are any function calls to do for any approved tool requests and execute them.
 	if len(approvals) == 0 {
-		return nil, errCount, nil
+		return nil, errCount, false, nil
 	}
 	funcCalls := make([]*message.FunctionCallContent, 0, len(approvals))
 	for _, approval := range approvals {
@@ -1153,7 +1143,7 @@ func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, appr
 		}
 	}
 	if len(funcCalls) == 0 {
-		return nil, errCount, nil
+		return nil, errCount, false, nil
 	}
 	return f.processFunctionCalls(ctx, tools, funcCalls, errCount)
 }
@@ -1168,13 +1158,14 @@ const (
 )
 
 type functionInvocationResult struct {
-	status functionInvocationStatus
-	call   *message.FunctionCallContent
-	result any
-	err    error
+	status    functionInvocationStatus
+	call      *message.FunctionCallContent
+	result    any
+	err       error
+	terminate bool
 }
 
-func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]tool.SchemaTool, funcCalls []*message.FunctionCallContent, errCount int) (*message.Message, int, error) {
+func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]tool.SchemaTool, funcCalls []*message.FunctionCallContent, errCount int) (*message.Message, int, bool, error) {
 	// We must add a response for every tool call, regardless of whether we successfully executed it or not.
 	// If we successfully execute it, we'll add the result. If we don't, we'll add an error.
 	if len(funcCalls) == 0 { // invariant
@@ -1233,6 +1224,9 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 				runErr = result.err
 				break
 			}
+			if result.terminate {
+				break
+			}
 		}
 	}
 	if len(results) < len(funcCalls) {
@@ -1244,8 +1238,10 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 			results = append(results, functionInvocationResult{status: functionInvocationStatusNotInvoked, call: fc, err: skippedErr})
 		}
 	}
+	var shouldTerminate bool
 	for _, result := range results {
 		result.call.InformationalOnly = true
+		shouldTerminate = shouldTerminate || result.terminate
 	}
 
 	newMsg := f.createResponseMessage(results)
@@ -1253,7 +1249,7 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 		errCount, runErr = f.updateConsecutiveErrorCountOrThrow(ctx, newMsg, errCount)
 	}
 
-	return newMsg, errCount, runErr
+	return newMsg, errCount, shouldTerminate, runErr
 }
 
 func (f *autocall) updateConsecutiveErrorCountOrThrow(ctx context.Context, added *message.Message, errCount int) (int, error) {
@@ -1299,7 +1295,8 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	}
 	f.logger.Debug(ctx, "calling function", "funcName", funcCall.Name, slogx.SensitiveData("arguments", funcCall.Arguments))
 	start := time.Now()
-	ctx = agent.WithFuncCallID(ctx, funcCall.CallID)
+	var terminate bool
+	ctx = toolmiddleware.WithInvocation(ctx, funcCall.CallID, &terminate)
 	var result any
 	var err error
 	tracer := f.tracer
@@ -1331,12 +1328,15 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 		}
 	}
 	f.logger.Debug(ctx, "function call completed", "funcName", funcCall.Name, "duration", time.Since(start), slogx.SensitiveData("result", result))
-
-	if err != nil {
-		return functionInvocationResult{status: functionInvocationStatusException, call: funcCall, err: err}
+	if terminate {
+		f.logger.Debug(ctx, "function requested termination", "funcName", funcCall.Name)
 	}
 
-	return functionInvocationResult{status: functionInvocationStatusRanToCompletion, call: funcCall, result: result}
+	if err != nil {
+		return functionInvocationResult{status: functionInvocationStatusException, call: funcCall, err: err, terminate: terminate}
+	}
+
+	return functionInvocationResult{status: functionInvocationStatusRanToCompletion, call: funcCall, result: result, terminate: terminate}
 }
 
 func (f *autocall) createResponseMessage(results []functionInvocationResult) *message.Message {
@@ -1392,7 +1392,7 @@ func (f *autocall) createFunctionResultContent(result functionInvocationResult) 
 //   - Recreates tool call content for any ToolApprovalResponseContent that hasn't been handled yet.
 //   - Generates failed FunctionResultContent for any rejected function tool call.
 //   - Adds all the new content items to originalMessages and returns them as the pre-invocation history.
-func (f *autocall) processToolApprovalResponses(ctx context.Context, msgs []*message.Message, toolMsgID, fallbackMsgID string, serviceManagedHistory bool) ([]*message.Message, []*message.Message, []toolApprovalResultWithRequestMessage, int, error) {
+func (f *autocall) processToolApprovalResponses(ctx context.Context, msgs []*message.Message, callOrder []string, toolMsgID, fallbackMsgID string, serviceManagedHistory bool) ([]*message.Message, []*message.Message, []toolApprovalResultWithRequestMessage, int, error) {
 	approvalResponseNeedsProcessing := approvalResponseNeedsProcessingByRequestID(msgs)
 	lastApprovalIdx := -1
 	for i, msg := range slices.Backward(msgs) {
@@ -1414,6 +1414,21 @@ func (f *autocall) processToolApprovalResponses(ctx context.Context, msgs []*mes
 	msgs, approvals, rejections, err := f.extractAndRemoveToolApprovalRequestsAndResponses(ctx, msgs)
 	if err != nil {
 		return nil, nil, nil, 0, err
+	}
+	if len(callOrder) > 0 {
+		positions := make(map[string]int, len(callOrder))
+		for i, id := range callOrder {
+			positions[id] = i
+		}
+		position := func(approval toolApprovalResultWithRequestMessage) int {
+			if i, ok := positions[approval.Response.ToolCall.GetCallID()]; ok {
+				return i
+			}
+			return len(callOrder)
+		}
+		slices.SortStableFunc(approvals, func(a, b toolApprovalResultWithRequestMessage) int {
+			return cmp.Compare(position(a), position(b))
+		})
 	}
 	insertIdx := len(msgs) - trailingMessageCount
 	// Wrap the tool call content in message(s).
@@ -1689,7 +1704,7 @@ func (f *autocall) generateRejectedFunctionResults(ctx context.Context, rejectio
 		}
 		f.logger.Debug(ctx, "function was rejected", "funcName", fcc.Name, "reason", rej.Response.Reason)
 		fcc.InformationalOnly = true
-		result := "Tool call invocation rejected."
+		result := "Tool call invocation was rejected by the approver and must not be retried."
 		if strings.TrimSpace(rej.Response.Reason) != "" {
 			result += " " + rej.Response.Reason
 		}

@@ -5,9 +5,11 @@ package agent_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"iter"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -359,6 +361,40 @@ func TestProviderConfig_ManagesToolExecution_FunctionReplacement(t *testing.T) {
 	}
 	if !slices.Equal(order, []string{"first before", "replacement", "first after"}) {
 		t.Errorf("order = %v, want [first before replacement first after]", order)
+	}
+}
+
+func TestProviderConfig_ManagesToolExecution_RejectsTermination(t *testing.T) {
+	toolFailure := errors.New("original tool failure")
+	for _, toolErr := range []error{nil, toolFailure} {
+		t.Run(fmt.Sprint(toolErr), func(t *testing.T) {
+			fn := functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) {
+				return "found", toolErr
+			})
+			run := func(ctx context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				return func(yield func(*agent.ResponseUpdate, error) bool) {
+					fn, _ := agent.GetOption(opts, agent.WithTool)
+					_, err := fn.(tool.FuncTool).Call(agent.WithFuncCallID(ctx, "call"), `{}`)
+					if err != nil {
+						yield(nil, err)
+					}
+				}
+			}
+			a := agent.New(agent.ProviderConfig{Run: run, ManagesToolExecution: true}, agent.Config{
+				Tools: []tool.Tool{fn},
+				FunctionMiddlewares: []agent.FunctionInvocationMiddleware{func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+					invocation.Terminate = true
+					return next(ctx, invocation)
+				}},
+			})
+			_, err := a.RunText(t.Context(), "lookup").Collect()
+			if err == nil || !strings.Contains(err.Error(), "graceful tool termination is not supported") {
+				t.Fatalf("termination error = %v", err)
+			}
+			if toolErr != nil && !errors.Is(err, toolErr) {
+				t.Fatalf("termination masked original error: %v", err)
+			}
+		})
 	}
 }
 
