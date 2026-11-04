@@ -10,6 +10,68 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 )
 
+func TestMessageMerger_AssemblesMessage(t *testing.T) {
+	creationTime := time.Now().Add(-time.Second)
+	merger := newMessageMerger()
+	for _, word := range []string{"Hello ", "Agent ", "Framework ", "Workflows!"} {
+		merger.AddUpdate(&agent.ResponseUpdate{
+			AgentID: "TestAgent1", AuthorName: "Assistant1", ResponseID: "response", MessageID: "message",
+			Role: message.RoleAssistant, CreatedAt: creationTime,
+			Contents: message.Contents{&message.TextContent{Text: word}},
+		})
+	}
+	response := merger.ComputeMerged("response", "", "")
+	if len(response.Messages) != 1 {
+		t.Fatalf("messages = %v, want one", response.Messages)
+	}
+	msg := response.Messages[0]
+	if msg.Role != message.RoleAssistant || msg.AuthorName != "Assistant1" || response.AgentID != "TestAgent1" {
+		t.Fatalf("message/response identities = %#v/%#v", msg, response)
+	}
+	if response.CreatedAt.IsZero() || response.CreatedAt.Before(creationTime) ||
+		response.CreatedAt.Before(creationTime.Add(-5*time.Second)) || response.CreatedAt.After(creationTime.Add(5*time.Second)) {
+		t.Fatalf("response creation time = %v, want within five seconds of %v", response.CreatedAt, creationTime)
+	}
+	if !msg.CreatedAt.Equal(creationTime) || len(msg.Contents) != 1 || response.FinishReason != "" {
+		t.Fatalf("message = %#v, finish reason = %q", msg, response.FinishReason)
+	}
+}
+
+func TestMessageMerger_PropagatesFinishReason(t *testing.T) {
+	merger := newMessageMerger()
+	addTextUpdate(merger, "response", "Hello", "message", time.Time{})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: "response", MessageID: "message", Role: message.RoleAssistant, FinishReason: "content_filter",
+	})
+	response := merger.ComputeMerged("response", "", "")
+	if response.FinishReason != "content_filter" {
+		t.Fatalf("finish reason = %q, want content_filter", response.FinishReason)
+	}
+}
+
+func TestMessageMerger_AggregatesUsageAndAdditionalCounts(t *testing.T) {
+	merger := newMessageMerger()
+	addTextUpdate(merger, "response-1", "first", "message-1", time.Time{})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		Role: message.RoleAssistant, ResponseID: "response-1", MessageID: "message-1",
+		Contents: message.Contents{&message.UsageContent{Details: message.UsageDetails{
+			InputTokenCount: 2, OutputTokenCount: 3, TotalTokenCount: 5, AdditionalCounts: map[string]int64{"cached": 7, "reasoning": 11},
+		}}},
+	})
+	addTextUpdate(merger, "response-2", "second", "message-2", time.Time{})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		Role: message.RoleAssistant, ResponseID: "response-2", MessageID: "message-2",
+		Contents: message.Contents{&message.UsageContent{Details: message.UsageDetails{
+			InputTokenCount: 29, OutputTokenCount: 7, TotalTokenCount: 36, AdditionalCounts: map[string]int64{"cached": 13, "audio": 17},
+		}}},
+	})
+	usage := merger.ComputeMerged("response-1", "", "").Usage()
+	if usage.InputTokenCount != 31 || usage.OutputTokenCount != 10 || usage.TotalTokenCount != 41 ||
+		usage.AdditionalCounts["cached"] != 20 || usage.AdditionalCounts["reasoning"] != 11 || usage.AdditionalCounts["audio"] != 17 {
+		t.Fatalf("merged usage = %#v", usage)
+	}
+}
+
 func TestMessageMerger_PreservesFirstSeenMessageOrder(t *testing.T) {
 	responseID := "response"
 	now := time.Date(2026, 7, 15, 12, 0, 0, 0, time.UTC)
@@ -70,11 +132,25 @@ func TestMessageMerger_PreservesFunctionCallResultOrder(t *testing.T) {
 	if len(response.Messages) != 2 {
 		t.Fatalf("message count = %d, want 2", len(response.Messages))
 	}
-	if _, ok := response.Messages[0].Contents[0].(*message.FunctionCallContent); !ok {
+	if len(response.Messages[0].Contents) != 1 {
+		t.Fatalf("first content count = %d, want 1", len(response.Messages[0].Contents))
+	}
+	if len(response.Messages[1].Contents) != 1 {
+		t.Fatalf("second content count = %d, want 1", len(response.Messages[1].Contents))
+	}
+	call, ok := response.Messages[0].Contents[0].(*message.FunctionCallContent)
+	if !ok {
 		t.Fatalf("first content = %T, want *message.FunctionCallContent", response.Messages[0].Contents[0])
 	}
-	if _, ok := response.Messages[1].Contents[0].(*message.FunctionResultContent); !ok {
+	result, ok := response.Messages[1].Contents[0].(*message.FunctionResultContent)
+	if !ok {
 		t.Fatalf("second content = %T, want *message.FunctionResultContent", response.Messages[1].Contents[0])
+	}
+	if call.CallID != callID {
+		t.Fatalf("function call ID = %q, want %q", call.CallID, callID)
+	}
+	if result.CallID != callID {
+		t.Fatalf("function result call ID = %q, want %q", result.CallID, callID)
 	}
 }
 
@@ -106,6 +182,12 @@ func TestMessageMerger_PreservesIdentifierlessMessageOrder(t *testing.T) {
 	}
 	if got := response.Messages[0].String(); got != "before" {
 		t.Fatalf("first message = %q, want %q", got, "before")
+	}
+	if len(response.Messages[1].Contents) != 1 {
+		t.Fatalf("second content count = %d, want 1", len(response.Messages[1].Contents))
+	}
+	if len(response.Messages[2].Contents) != 1 {
+		t.Fatalf("third content count = %d, want 1", len(response.Messages[2].Contents))
 	}
 	if _, ok := response.Messages[1].Contents[0].(*message.FunctionCallContent); !ok {
 		t.Fatalf("second content = %T, want *message.FunctionCallContent", response.Messages[1].Contents[0])
@@ -199,6 +281,9 @@ func TestMessageMerger_FoldsIdentifierlessReasoningIntoFollowingMessage(t *testi
 	assertMessageContentTexts(t, msg, "thinking about the question", "The reformulated question.")
 	assertTextReasoningContent(t, msg.Contents[0], "thinking about the question")
 	assertTextContent(t, msg.Contents[1], "The reformulated question.")
+	if got := msg.String(); got != "The reformulated question." {
+		t.Fatalf("message text = %q, want %q", got, "The reformulated question.")
+	}
 }
 
 func TestMessageMerger_DoesNotFoldIdentifierlessReasoningIntoDifferentRole(t *testing.T) {
@@ -227,6 +312,9 @@ func TestMessageMerger_DoesNotFoldIdentifierlessReasoningIntoDifferentRole(t *te
 	}
 	if response.Messages[0].Role != message.RoleAssistant {
 		t.Fatalf("first role = %q, want %q", response.Messages[0].Role, message.RoleAssistant)
+	}
+	if len(response.Messages[0].Contents) != 1 {
+		t.Fatalf("first content count = %d, want 1", len(response.Messages[0].Contents))
 	}
 	assertTextReasoningContent(t, response.Messages[0].Contents[0], "thinking")
 	if response.Messages[1].Role != message.RoleTool {
@@ -295,6 +383,12 @@ func TestMessageMerger_PreservesMessageOrderWhenReasoningLacksCreatedAt(t *testi
 	if len(response.Messages) != 2 {
 		t.Fatalf("message count = %d, want 2", len(response.Messages))
 	}
+	if len(response.Messages[0].Contents) != 1 {
+		t.Fatalf("first content count = %d, want 1", len(response.Messages[0].Contents))
+	}
+	if len(response.Messages[1].Contents) != 1 {
+		t.Fatalf("second content count = %d, want 1", len(response.Messages[1].Contents))
+	}
 	assertTextReasoningContent(t, response.Messages[0].Contents[0], "Thinking about the question")
 	assertTextContent(t, response.Messages[1].Contents[0], "Here is the answer.")
 }
@@ -337,6 +431,9 @@ func TestMessageMerger_MergesReasoningAndTextIntoSingleMessageWhenReasoningLacks
 		t.Fatalf("message count = %d, want 1", len(response.Messages))
 	}
 	msg := response.Messages[0]
+	if msg.Role != message.RoleAssistant {
+		t.Fatalf("role = %q, want %q", msg.Role, message.RoleAssistant)
+	}
 	if msg.ID != messageID {
 		t.Fatalf("message ID = %q, want %q", msg.ID, messageID)
 	}
@@ -423,8 +520,14 @@ func TestMessageMerger_FoldsIdentifierlessReasoningIntoFollowingMessageAcrossRes
 	if msg.Role != message.RoleAssistant {
 		t.Fatalf("role = %q, want %q", msg.Role, message.RoleAssistant)
 	}
+	if len(msg.Contents) != 2 {
+		t.Fatalf("content count = %d, want 2", len(msg.Contents))
+	}
 	assertTextReasoningContent(t, msg.Contents[0], "thinking about the question")
 	assertTextContent(t, msg.Contents[1], "The reformulated question.")
+	if got := msg.String(); got != "The reformulated question." {
+		t.Fatalf("message text = %q, want %q", got, "The reformulated question.")
+	}
 }
 
 func addTextUpdate(merger *messageMerger, responseID string, text string, messageID string, createdAt time.Time) {

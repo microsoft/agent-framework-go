@@ -14,6 +14,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness/todo"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
+	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -126,7 +127,7 @@ func TestAddTodos_CreatesSingleItem(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Buy milk"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Buy milk","description":"A test description"}]}`)
 
 	items := p.AllTodos(mustSession(t, opts))
 	if len(items) != 1 {
@@ -134,6 +135,12 @@ func TestAddTodos_CreatesSingleItem(t *testing.T) {
 	}
 	if items[0].Title != "Buy milk" {
 		t.Errorf("expected 'Buy milk', got %q", items[0].Title)
+	}
+	if items[0].Description != "A test description" {
+		t.Errorf("description = %q, want A test description", items[0].Description)
+	}
+	if items[0].IsComplete {
+		t.Error("expected a newly added item to be incomplete")
 	}
 	// Numbering starts at 1, matching the .NET/Python harnesses.
 	if items[0].ID != 1 {
@@ -151,7 +158,7 @@ func TestAddTodos_CreatesMultipleItems(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Item 1"},{"title":"Item 2"},{"title":"Item 3"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Item 1"},{"title":"Item 2"},{"title":"Item 3","description":"With description"}]}`)
 
 	items := p.AllTodos(mustSession(t, opts))
 	if len(items) != 3 {
@@ -159,6 +166,17 @@ func TestAddTodos_CreatesMultipleItems(t *testing.T) {
 	}
 	if items[0].ID >= items[1].ID || items[1].ID >= items[2].ID {
 		t.Error("expected incrementing IDs")
+	}
+	for i, title := range []string{"Item 1", "Item 2", "Item 3"} {
+		if items[i].ID != i+1 {
+			t.Errorf("item %d ID = %d, want %d", i, items[i].ID, i+1)
+		}
+		if items[i].Title != title {
+			t.Errorf("item %d title = %q, want %q", i, items[i].Title, title)
+		}
+	}
+	if items[2].Description != "With description" {
+		t.Errorf("third item description = %q, want With description", items[2].Description)
 	}
 }
 
@@ -177,7 +195,7 @@ func TestCompleteTodos_MarksItemComplete(t *testing.T) {
 	id := items[0].ID
 
 	result := callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, id))
-	if !strings.Contains(result, "1") {
+	if result != "1" {
 		t.Errorf("expected 1 completed, got %s", result)
 	}
 
@@ -200,14 +218,24 @@ func TestCompleteTodos_MarksMultipleComplete(t *testing.T) {
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"A"},{"title":"B"},{"title":"C"}]}`)
 	items := p.AllTodos(mustSession(t, opts))
 
-	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"},{"id":%d,"reason":"done"}]}`, items[0].ID, items[1].ID))
+	result := callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"},{"id":%d,"reason":"done"}]}`, items[0].ID, items[2].ID))
+	if result != "2" {
+		t.Errorf("expected 2 completed, got %s", result)
+	}
 
 	remaining := p.RemainingTodos(mustSession(t, opts))
 	if len(remaining) != 1 {
 		t.Fatalf("expected 1 remaining, got %d", len(remaining))
 	}
-	if remaining[0].Title != "C" {
-		t.Errorf("expected 'C' remaining, got %q", remaining[0].Title)
+	if remaining[0].Title != "B" {
+		t.Errorf("expected 'B' remaining, got %q", remaining[0].Title)
+	}
+	items = p.AllTodos(mustSession(t, opts))
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items after completion, got %d", len(items))
+	}
+	if !items[0].IsComplete || items[1].IsComplete || !items[2].IsComplete {
+		t.Errorf("completion states = %v/%v/%v, want true/false/true", items[0].IsComplete, items[1].IsComplete, items[2].IsComplete)
 	}
 }
 
@@ -222,7 +250,7 @@ func TestCompleteTodos_ReturnsZeroForMissingIds(t *testing.T) {
 	}
 
 	result := callTool(t, outOpts, "todos_complete", `{"Arg0":[{"id":999,"reason":"done"}]}`)
-	if !strings.Contains(result, "0") {
+	if result != "0" {
 		t.Errorf("expected 0 completed for missing ID, got %s", result)
 	}
 }
@@ -239,9 +267,18 @@ func TestRemoveTodos_RemovesItem(t *testing.T) {
 
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Remove me"}]}`)
 	items := p.AllTodos(mustSession(t, opts))
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item before remove, got %d", len(items))
+	}
 	id := items[0].ID
+	if id != 1 {
+		t.Fatalf("first todo ID = %d, want 1", id)
+	}
 
-	callTool(t, outOpts, "todos_remove", fmt.Sprintf(`{"Arg0":[%d]}`, id))
+	result := callTool(t, outOpts, "todos_remove", fmt.Sprintf(`{"Arg0":[%d]}`, id))
+	if result != "1" {
+		t.Errorf("expected 1 removed, got %s", result)
+	}
 
 	items = p.AllTodos(mustSession(t, opts))
 	if len(items) != 0 {
@@ -262,14 +299,17 @@ func TestRemoveTodos_RemovesMultipleItems(t *testing.T) {
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"A"},{"title":"B"},{"title":"C"}]}`)
 	items := p.AllTodos(mustSession(t, opts))
 
-	callTool(t, outOpts, "todos_remove", fmt.Sprintf(`{"Arg0":[%d,%d]}`, items[0].ID, items[1].ID))
+	result := callTool(t, outOpts, "todos_remove", fmt.Sprintf(`{"Arg0":[%d,%d]}`, items[0].ID, items[2].ID))
+	if result != "2" {
+		t.Errorf("expected 2 removed, got %s", result)
+	}
 
 	items = p.AllTodos(mustSession(t, opts))
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item remaining, got %d", len(items))
 	}
-	if items[0].Title != "C" {
-		t.Errorf("expected 'C', got %q", items[0].Title)
+	if items[0].Title != "B" {
+		t.Errorf("expected 'B', got %q", items[0].Title)
 	}
 }
 
@@ -284,7 +324,7 @@ func TestRemoveTodos_ReturnsZeroForMissingIds(t *testing.T) {
 	}
 
 	result := callTool(t, outOpts, "todos_remove", `{"Arg0":[999]}`)
-	if !strings.Contains(result, "0") {
+	if result != "0" {
 		t.Errorf("expected 0 removed for missing ID, got %s", result)
 	}
 }
@@ -301,9 +341,15 @@ func TestRemainingTodos_ReturnsOnlyIncomplete(t *testing.T) {
 
 	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Done"},{"title":"Pending"}]}`)
 	items := p.AllTodos(mustSession(t, opts))
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items before completion, got %d", len(items))
+	}
+	if items[0].ID != 1 {
+		t.Fatalf("first todo ID = %d, want 1", items[0].ID)
+	}
 	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
 
-	remaining := p.RemainingTodos(mustSession(t, opts))
+	remaining := todoToolItems(t, outOpts, "todos_get_remaining")
 	if len(remaining) != 1 {
 		t.Fatalf("expected 1 remaining, got %d", len(remaining))
 	}
@@ -326,7 +372,7 @@ func TestAllTodos_ReturnsAllItems(t *testing.T) {
 	items := p.AllTodos(mustSession(t, opts))
 	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
 
-	all := p.AllTodos(mustSession(t, opts))
+	all := todoToolItems(t, outOpts, "todos_get_all")
 	if len(all) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(all))
 	}
@@ -342,21 +388,19 @@ func TestState_PersistsAcrossInvocations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Persist me"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Persisted"}]}`)
 
 	// Second invocation: items should still be there.
 	_, outOpts2, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_ = outOpts2
-
-	items := p.AllTodos(mustSession(t, opts))
+	items := todoToolItems(t, outOpts2, "todos_get_all")
 	if len(items) != 1 {
 		t.Fatalf("expected 1 item to persist, got %d", len(items))
 	}
-	if items[0].Title != "Persist me" {
-		t.Errorf("expected 'Persist me', got %q", items[0].Title)
+	if items[0].Title != "Persisted" {
+		t.Errorf("expected 'Persisted', got %q", items[0].Title)
 	}
 }
 
@@ -376,6 +420,9 @@ func TestPublicAllTodos_ReturnsAllItems(t *testing.T) {
 	all := p.AllTodos(session)
 	if len(all) != 2 {
 		t.Fatalf("expected 2 items, got %d", len(all))
+	}
+	if all[0].Title != "X" || all[1].Title != "Y" {
+		t.Errorf("titles = %q/%q, want X/Y", all[0].Title, all[1].Title)
 	}
 }
 
@@ -436,8 +483,8 @@ func TestCustomInstructions_OverridesDefault(t *testing.T) {
 	}
 
 	instructions := collectInstructions(outOpts)
-	if !strings.Contains(instructions, "Custom todo instructions") {
-		t.Error("expected custom instructions")
+	if instructions != "Custom todo instructions here" {
+		t.Errorf("instructions = %q, want %q", instructions, "Custom todo instructions here")
 	}
 }
 
@@ -455,6 +502,9 @@ func TestNilOptions_UsesDefaultInstructions(t *testing.T) {
 	if !strings.Contains(instructions, "Todo") {
 		t.Error("expected default instructions to contain 'Todo'")
 	}
+	if !strings.Contains(instructions, "todo list") {
+		t.Error("expected default instructions to describe the todo list")
+	}
 }
 
 // 18. ProvideAIContextAsync_InjectsEmptyTodoMessage
@@ -467,15 +517,12 @@ func TestProvide_InjectsEmptyTodoMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	found := false
-	for _, msg := range outMessages {
-		if strings.Contains(msg.Contents.Text(), "none yet") {
-			found = true
-			break
-		}
+	if len(outMessages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(outMessages))
 	}
-	if !found {
-		t.Error("expected 'none yet' in messages for empty todo list")
+	text := outMessages[1].String()
+	if !strings.Contains(text, "### Current todo list") || !strings.Contains(text, "none yet") {
+		t.Errorf("expected current todo list heading and 'none yet' in injected message, got %q", text)
 	}
 }
 
@@ -489,7 +536,7 @@ func TestProvide_InjectsTodoListMessage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Task A"},{"title":"Task B"}]}`)
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Task A"},{"title":"Task B","description":"Has details"}]}`)
 	items := p.AllTodos(mustSession(t, opts))
 	callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"done"}]}`, items[0].ID))
 
@@ -499,22 +546,21 @@ func TestProvide_InjectsTodoListMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	foundDone := false
-	foundOpen := false
-	for _, msg := range outMessages {
-		text := msg.Contents.Text()
-		if strings.Contains(text, "[done]") {
-			foundDone = true
-		}
-		if strings.Contains(text, "[open]") {
-			foundOpen = true
-		}
+	if len(outMessages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(outMessages))
 	}
-	if !foundDone {
-		t.Error("expected '[done]' in todo list message")
+	text := outMessages[1].String()
+	if !strings.Contains(text, "### Current todo list") {
+		t.Errorf("expected current todo list heading in injected message, got %q", text)
 	}
-	if !foundOpen {
-		t.Error("expected '[open]' in todo list message")
+	if !strings.Contains(text, "[done] Task A") {
+		t.Errorf("expected '[done] Task A' in injected message, got %q", text)
+	}
+	if !strings.Contains(text, "[open] Task B") {
+		t.Errorf("expected '[open] Task B' in injected message, got %q", text)
+	}
+	if !strings.Contains(text, ": Has details") {
+		t.Errorf("expected description suffix in injected message, got %q", text)
 	}
 }
 
@@ -572,10 +618,8 @@ func TestProvide_SuppressTodoListMessage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// With suppression, no todo list message should be injected.
-	// The output messages should be the same length as input (no extra todo message).
-	if len(outMessages) != len(msgs) {
-		t.Errorf("expected %d messages with suppressed todo, got %d", len(msgs), len(outMessages))
+	if err := messagetest.MessagesEqual(outMessages, newMessages("hi")); err != nil {
+		t.Errorf("expected only original messages with suppressed todo list: %v", err)
 	}
 }
 
@@ -583,33 +627,222 @@ func TestProvide_SuppressTodoListMessage(t *testing.T) {
 func TestProvide_CustomTodoListMessageBuilder(t *testing.T) {
 	p := todo.New(&todo.Options{
 		TodoListMessageBuilder: func(items []todo.Item) string {
-			return "CUSTOM: empty"
+			return fmt.Sprintf("Custom: %d items", len(items))
 		},
 	})
 	opts := sessionOpts()
-
-	outMessages, _, err := invokeProvider(p, context.Background(), newMessages("hi"), opts...)
+	_, outOpts, err := invokeProvider(p, t.Context(), nil, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Task A"}]}`)
+	outMessages, _, err := invokeProvider(p, t.Context(), nil, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(outMessages) != 1 || outMessages[0].String() != "Custom: 1 items" {
+		t.Fatalf("custom summary = %v, want Custom: 1 items", outMessages)
+	}
+}
 
-	found := false
-	for _, msg := range outMessages {
-		if strings.Contains(msg.Contents.Text(), "CUSTOM:") {
-			found = true
-			break
+func todoTool(t *testing.T, opts []agent.Option, name string) tool.FuncTool {
+	t.Helper()
+	for _, candidate := range collectTools(opts) {
+		if candidate.Name() == name {
+			if ft, ok := candidate.(tool.FuncTool); ok {
+				return ft
+			}
 		}
 	}
-	if !found {
-		t.Error("expected custom builder output in messages")
+	t.Fatalf("invocable tool %q not found", name)
+	return nil
+}
+
+func todoToolItems(t *testing.T, opts []agent.Option, name string) []todo.Item {
+	t.Helper()
+	result, err := todoTool(t, opts, name).Call(t.Context(), "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, ok := result.([]todo.Item)
+	if !ok {
+		t.Fatalf("%s result = %T, want []todo.Item", name, result)
+	}
+	return items
+}
+
+func TestProvide_BuilderSnapshotMutationDoesNotAffectState(t *testing.T) {
+	var snapshot []todo.Item
+	p := todo.New(&todo.Options{TodoListMessageBuilder: func(items []todo.Item) string {
+		snapshot = items
+		return "snapshot test"
+	}})
+	opts := sessionOpts()
+	_, tools, err := invokeProvider(p, t.Context(), nil, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callTool(t, tools, "todos_add", `{"Arg0":[{"title":"Original"}]}`)
+	if _, _, err := invokeProvider(p, t.Context(), nil, opts...); err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot) != 1 {
+		t.Fatalf("snapshot = %v, want one item", snapshot)
+	}
+	clear(snapshot)
+	snapshot = snapshot[:0]
+	if all := p.AllTodos(mustSession(t, opts)); len(all) != 1 || all[0].Title != "Original" {
+		t.Fatalf("state after snapshot mutation = %v", all)
+	}
+}
+
+func TestConcurrentAdds_ProduceUniqueSequentialIDs(t *testing.T) {
+	p := todo.New(nil)
+	_, opts, err := invokeProvider(p, t.Context(), nil, sessionOpts()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	add := todoTool(t, opts, "todos_add")
+	start := make(chan struct{})
+	done := make(chan error, 10)
+	for i := range 10 {
+		go func() {
+			<-start
+			_, err := add.Call(t.Context(), fmt.Sprintf(`{"Arg0":[{"title":"Item %d"}]}`, i))
+			done <- err
+		}()
+	}
+	close(start)
+	for range 10 {
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}
+	all := todoToolItems(t, opts, "todos_get_all")
+	if len(all) != 10 {
+		t.Fatalf("todo count = %d, want 10", len(all))
+	}
+	ids := make([]int, len(all))
+	for i, item := range all {
+		ids[i] = item.ID
+	}
+	slices.Sort(ids)
+	if !slices.Equal(ids, []int{1, 2, 3, 4, 5, 6, 7, 8, 9, 10}) {
+		t.Fatalf("ids = %v", ids)
+	}
+}
+
+func TestConcurrentAddAndComplete_SerializesCorrectly(t *testing.T) {
+	p := todo.New(nil)
+	_, opts, err := invokeProvider(p, t.Context(), nil, sessionOpts()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callTool(t, opts, "todos_add", `{"Arg0":[{"title":"Existing 1"},{"title":"Existing 2"},{"title":"Existing 3"}]}`)
+	start := make(chan struct{})
+	done := make(chan error, 3)
+	for _, call := range []struct{ name, args string }{
+		{"todos_add", `{"Arg0":[{"title":"New A"},{"title":"New B"}]}`},
+		{"todos_add", `{"Arg0":[{"title":"New C"}]}`},
+		{"todos_complete", `{"Arg0":[{"id":1,"reason":"Done"},{"id":2,"reason":"Done"},{"id":3,"reason":"Done"}]}`},
+	} {
+		ft := todoTool(t, opts, call.name)
+		go func() {
+			<-start
+			_, err := ft.Call(t.Context(), call.args)
+			done <- err
+		}()
+	}
+	close(start)
+	for range 3 {
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}
+	all := todoToolItems(t, opts, "todos_get_all")
+	if len(all) != 6 {
+		t.Fatalf("todos = %v, want six", all)
+	}
+	ids := make([]int, len(all))
+	completed := make(map[int]bool)
+	for i, item := range all {
+		ids[i] = item.ID
+		if item.IsComplete {
+			completed[item.ID] = true
+		}
+	}
+	slices.Sort(ids)
+	if !slices.Equal(ids, []int{1, 2, 3, 4, 5, 6}) {
+		t.Fatalf("ids = %v", ids)
+	}
+	for _, id := range []int{1, 2, 3} {
+		if !completed[id] {
+			t.Errorf("todo %d was not completed", id)
+		}
+	}
+	if len(completed) != 3 {
+		t.Errorf("completed IDs = %v, want only 1, 2, 3", completed)
+	}
+}
+
+func TestProvide_CustomBuilderReadsStableTodoSnapshot(t *testing.T) {
+	ready := make(chan struct{})
+	release := make(chan struct{})
+	block := false
+	p := todo.New(&todo.Options{
+		TodoListMessageBuilder: func(items []todo.Item) string {
+			if !block {
+				return "initial"
+			}
+			close(ready)
+			<-release
+			if len(items) != 1 {
+				return fmt.Sprintf("unexpected todo count: %d", len(items))
+			}
+			return fmt.Sprintf("complete: %v", items[0].IsComplete)
+		},
+	})
+	opts := sessionOpts()
+	_, outOpts, err := invokeProvider(p, t.Context(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callTool(t, outOpts, "todos_add", `{"Arg0":[{"title":"Task A"}]}`)
+
+	block = true
+	type result struct {
+		messages []*message.Message
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		messages, _, err := invokeProvider(p, t.Context(), newMessages("next"), opts...)
+		done <- result{messages: messages, err: err}
+	}()
+	<-ready
+	func() {
+		defer close(release)
+		callTool(t, outOpts, "todos_complete", `{"Arg0":[{"id":1,"reason":"done"}]}`)
+	}()
+	received := <-done
+	if received.err != nil {
+		t.Fatal(received.err)
+	}
+	if len(received.messages) != 2 || received.messages[1].String() != "complete: false" {
+		t.Fatalf("todo summary = %v, want snapshot before completion", received.messages)
+	}
+	if remaining := p.RemainingTodos(mustSession(t, opts)); len(remaining) != 0 {
+		t.Fatalf("remaining todos = %v, want none", remaining)
 	}
 }
 
 // 22. ProvideAIContextAsync_SuppressWinsOverBuilder
 func TestProvide_SuppressWinsOverBuilder(t *testing.T) {
+	var builderCalled bool
 	p := todo.New(&todo.Options{
 		SuppressTodoListMessage: true,
 		TodoListMessageBuilder: func(items []todo.Item) string {
+			builderCalled = true
 			return "CUSTOM: should not appear"
 		},
 	})
@@ -621,13 +854,11 @@ func TestProvide_SuppressWinsOverBuilder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, msg := range outMessages {
-		if strings.Contains(msg.Contents.Text(), "CUSTOM:") {
-			t.Error("suppress should win over builder")
-		}
+	if builderCalled {
+		t.Error("suppressed todo list should not invoke the custom builder")
 	}
-	if len(outMessages) != len(msgs) {
-		t.Errorf("expected %d messages with suppress, got %d", len(msgs), len(outMessages))
+	if err := messagetest.MessagesEqual(outMessages, newMessages("hi")); err != nil {
+		t.Errorf("expected only original messages with suppressed todo list: %v", err)
 	}
 }
 
@@ -672,7 +903,7 @@ func TestCompleteTodos_WithReason(t *testing.T) {
 	}
 
 	result := callTool(t, outOpts, "todos_complete", fmt.Sprintf(`{"Arg0":[{"id":%d,"reason":"completed successfully"}]}`, items[0].ID))
-	if !strings.Contains(result, "1") {
+	if result != "1" {
 		t.Errorf("expected 1 completed, got %s", result)
 	}
 

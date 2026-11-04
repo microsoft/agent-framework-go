@@ -5,18 +5,20 @@ package openaiprovider_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/messagetest"
 	"github.com/microsoft/agent-framework-go/message"
@@ -29,7 +31,7 @@ import (
 
 func TestChatToolCallsWithServiceIDDoNotClaimStoredHistory(t *testing.T) {
 	requests := make(chan []byte, 2)
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Error(err)
@@ -44,7 +46,7 @@ func TestChatToolCallsWithServiceIDDoNotClaimStoredHistory(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL)), openaiprovider.AgentConfig{Model: "test-model"})
+	a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL), option.WithHTTPClient(server.Client())), openaiprovider.AgentConfig{Model: "test-model"})
 	session, err := a.CreateSession(t.Context(), agent.WithServiceID("thread-1"))
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +82,7 @@ func TestChatCompletionsAgent_FunctionInvocationMiddleware(t *testing.T) {
 			}
 			t.Run(name, func(t *testing.T) {
 				var requests atomic.Int32
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					w.Header().Set("Content-Type", "application/json")
 					if requests.Add(1)%2 == 1 {
 						_, _ = io.WriteString(w, `{"id":"chatcmpl-tools","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`)
@@ -119,7 +121,7 @@ func TestChatCompletionsAgent_FunctionInvocationMiddleware(t *testing.T) {
 						},
 					})}
 				}
-				a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL)), openaiprovider.AgentConfig{
+				a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL), option.WithHTTPClient(server.Client())), openaiprovider.AgentConfig{
 					Config:       cfg,
 					Model:        "test-model",
 					ToolAutoCall: autoCall,
@@ -316,6 +318,294 @@ func TestChatResponseFormatSchemaConvertsJSONSchema(t *testing.T) {
 	}
 }
 
+type structuredOutputAnimal struct {
+	ID       int                     `json:"id"`
+	FullName string                  `json:"fullName"`
+	Species  structuredOutputSpecies `json:"species"`
+}
+
+type structuredOutputSpecies string
+
+type structuredOutputCase struct {
+	property, propertyType, response string
+	newTarget                        func() any
+	want                             any
+}
+
+func TestStructuredOutputObjectEndToEnd(t *testing.T) {
+	testStructuredOutputEndToEnd(t, structuredOutputCase{
+		property: "id", propertyType: "integer", response: `{"id":99,"fullName":"Leo","species":"Bear"}`,
+		newTarget: func() any { return new(structuredOutputAnimal) },
+		want:      &structuredOutputAnimal{ID: 99, FullName: "Leo", Species: "Bear"},
+	})
+}
+
+func TestStructuredOutputPrimitiveEndToEnd(t *testing.T) {
+	testStructuredOutputEndToEnd(t, structuredOutputCase{
+		property: "data", propertyType: "integer", response: `{"data":123}`,
+		newTarget: func() any { return new(int) }, want: new(123),
+	})
+}
+
+func TestStructuredOutputArrayEndToEnd(t *testing.T) {
+	testStructuredOutputEndToEnd(t, structuredOutputCase{
+		property: "data", propertyType: "array", response: `{"data":["one","two","three"]}`,
+		newTarget: func() any { return new([]string) }, want: &[]string{"one", "two", "three"},
+	})
+}
+
+func TestStructuredOutputEnumEndToEnd(t *testing.T) {
+	testStructuredOutputEndToEnd(t, structuredOutputCase{
+		property: "data", propertyType: "string", response: `{"data":"Bear"}`,
+		newTarget: func() any { return new(structuredOutputSpecies) }, want: new(structuredOutputSpecies("Bear")),
+	})
+}
+
+func TestStructuredOutputNestedArrayEndToEnd(t *testing.T) {
+	type item struct {
+		Label string `json:"label"`
+	}
+	testStructuredOutputEndToEnd(t, structuredOutputCase{
+		property: "data", propertyType: "array", response: `{"data":[{"label":"value"}]}`,
+		newTarget: func() any { return new([]item) }, want: &[]item{{Label: "value"}},
+	})
+}
+
+func TestStructuredOutputIgnoresExtraEnvelopeProperties(t *testing.T) {
+	testStructuredOutputEndToEnd(t, structuredOutputCase{
+		property: "data", propertyType: "integer", response: `{"data":42,"extra":true}`,
+		newTarget: func() any { return new(int) }, want: new(42),
+	})
+}
+
+func TestStructuredOutputUsesFirstUnwrappedJSONValue(t *testing.T) {
+	type payload struct {
+		Value int `json:"value"`
+	}
+	testStructuredOutputEndToEnd(t, structuredOutputCase{
+		property: "value", propertyType: "integer", response: `{"value":42} {"value":99}`,
+		newTarget: func() any { return new(payload) }, want: &payload{Value: 42},
+	})
+}
+
+func testStructuredOutputEndToEnd(t *testing.T, tc structuredOutputCase) {
+	for _, provider := range []struct {
+		name     string
+		newAgent func(*httptest.Server) *agent.Agent
+	}{
+		{name: "chat", newAgent: newTestClient},
+		{name: "responses", newAgent: func(server *httptest.Server) *agent.Agent {
+			return newTestResponsesClient(server, "gpt-4o-mini")
+		}},
+	} {
+		t.Run(provider.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					ResponseFormat struct {
+						JSONSchema struct {
+							Schema json.RawMessage `json:"schema"`
+							Strict bool            `json:"strict"`
+						} `json:"json_schema"`
+					} `json:"response_format"`
+					Text struct {
+						Format struct {
+							Schema json.RawMessage `json:"schema"`
+							Strict bool            `json:"strict"`
+						} `json:"format"`
+					} `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("decode request: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				rawSchema := request.ResponseFormat.JSONSchema.Schema
+				strict := request.ResponseFormat.JSONSchema.Strict
+				if provider.name == "responses" {
+					rawSchema = request.Text.Format.Schema
+					strict = request.Text.Format.Strict
+				}
+				var schema struct {
+					Type                 string                     `json:"type"`
+					Properties           map[string]json.RawMessage `json:"properties"`
+					Required             []string                   `json:"required"`
+					AdditionalProperties *bool                      `json:"additionalProperties"`
+				}
+				if err := json.Unmarshal(rawSchema, &schema); err != nil {
+					t.Errorf("decode response schema: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if !strict || schema.Type != "object" || schema.AdditionalProperties == nil || *schema.AdditionalProperties {
+					t.Errorf("wire format strict=%v, schema=%s, want strict closed object", strict, rawSchema)
+				}
+				property, ok := schema.Properties[tc.property]
+				if !ok {
+					t.Errorf("schema property %q missing: %s", tc.property, rawSchema)
+				} else {
+					var nested struct {
+						Type any `json:"type"`
+					}
+					if err := json.Unmarshal(property, &nested); err != nil {
+						t.Errorf("decode property %q: %v", tc.property, err)
+					} else if types, ok := nested.Type.([]any); ok {
+						if !slices.Contains(types, any(tc.propertyType)) {
+							t.Errorf("property %q type = %v, want %s", tc.property, nested.Type, tc.propertyType)
+						}
+					} else if nested.Type != tc.propertyType {
+						t.Errorf("property %q type = %v, want %s", tc.property, nested.Type, tc.propertyType)
+					}
+				}
+				if tc.property == "data" {
+					if !reflect.DeepEqual(schema.Required, []string{"data"}) {
+						t.Errorf("required = %v, want [data]", schema.Required)
+					}
+				} else if _, ok := schema.Properties["data"]; ok {
+					t.Error("object schema unexpectedly wrapped in data")
+				}
+				text, err := json.Marshal(tc.response)
+				if err != nil {
+					t.Errorf("encode response text: %v", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				if provider.name == "chat" {
+					_, err = fmt.Fprintf(w, `{"id":"chatcmpl-test","object":"chat.completion","created":1727888631,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":%s},"finish_reason":"stop"}]}`, text)
+				} else {
+					_, err = fmt.Fprintf(w, `{"id":"resp_001","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[{"type":"message","id":"msg_001","status":"completed","role":"assistant","content":[{"type":"output_text","text":%s,"annotations":[]}]}]}`, text)
+				}
+				if err != nil {
+					t.Errorf("write response: %v", err)
+				}
+			}))
+			defer server.Close()
+
+			out := tc.newTarget()
+			response, err := provider.newAgent(server).RunText(t.Context(), "hello", agent.WithStructuredOutput(out)).Collect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(out, tc.want) {
+				t.Errorf("structured output = %#v, want %#v", out, tc.want)
+			}
+			if got := response.String(); got != tc.response {
+				t.Errorf("response text = %q, want %q", got, tc.response)
+			}
+		})
+	}
+}
+
+func TestStructuredOutputNonObjectStreaming(t *testing.T) {
+	for _, provider := range []struct {
+		name     string
+		newAgent func(*httptest.Server) *agent.Agent
+	}{
+		{name: "chat", newAgent: newTestClient},
+		{name: "responses", newAgent: func(server *httptest.Server) *agent.Agent {
+			return newTestResponsesClient(server, "gpt-4o-mini")
+		}},
+	} {
+		t.Run(provider.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Stream         bool `json:"stream"`
+					ResponseFormat struct {
+						JSONSchema struct {
+							Schema json.RawMessage `json:"schema"`
+							Strict bool            `json:"strict"`
+						} `json:"json_schema"`
+					} `json:"response_format"`
+					Text struct {
+						Format struct {
+							Schema json.RawMessage `json:"schema"`
+							Strict bool            `json:"strict"`
+						} `json:"format"`
+					} `json:"text"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Errorf("decode request: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if !request.Stream {
+					t.Error("streaming request did not set stream=true")
+				}
+				rawSchema, strict := request.ResponseFormat.JSONSchema.Schema, request.ResponseFormat.JSONSchema.Strict
+				if provider.name == "responses" {
+					rawSchema, strict = request.Text.Format.Schema, request.Text.Format.Strict
+				}
+				var schema struct {
+					Type                 string                     `json:"type"`
+					Properties           map[string]json.RawMessage `json:"properties"`
+					Required             []string                   `json:"required"`
+					AdditionalProperties *bool                      `json:"additionalProperties"`
+				}
+				if err := json.Unmarshal(rawSchema, &schema); err != nil {
+					t.Errorf("decode streaming response schema: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				var dataSchema struct {
+					Type string `json:"type"`
+				}
+				if err := json.Unmarshal(schema.Properties["data"], &dataSchema); err != nil {
+					t.Errorf("decode data schema: %v", err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				if !strict || schema.Type != "object" || !slices.Equal(schema.Required, []string{"data"}) ||
+					schema.AdditionalProperties == nil || *schema.AdditionalProperties || dataSchema.Type != "integer" {
+					t.Errorf("streaming response format strict=%v, schema=%s, want closed object with required integer data", strict, rawSchema)
+				}
+				w.Header().Set("Content-Type", "text/event-stream")
+				if provider.name == "chat" {
+					for _, part := range []string{`{"data":`, `42}`} {
+						if _, err := fmt.Fprintf(w, "data: {\"id\":\"chatcmpl-test\",\"object\":\"chat.completion.chunk\",\"created\":1727889370,\"model\":\"gpt-4o-mini\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":%q},\"finish_reason\":null}]}\n\n", part); err != nil {
+							t.Errorf("write chat stream: %v", err)
+							return
+						}
+					}
+					_, _ = io.WriteString(w, "data: [DONE]\n\n")
+					return
+				}
+				events := []string{
+					`event: response.created
+data: {"type":"response.created","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"in_progress","model":"gpt-4o-mini","output":[]}}`,
+					`event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_001","status":"in_progress","role":"assistant","content":[]}}`,
+				}
+				for _, event := range events {
+					if _, err := fmt.Fprintf(w, "%s\n\n", event); err != nil {
+						t.Errorf("write responses event: %v", err)
+						return
+					}
+				}
+				for _, part := range []string{`{"data":`, `42}`} {
+					if _, err := fmt.Fprintf(w, "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_001\",\"output_index\":0,\"content_index\":0,\"delta\":%q}\n\n", part); err != nil {
+						t.Errorf("write responses delta: %v", err)
+						return
+					}
+				}
+				_, _ = io.WriteString(w, `event: response.completed
+data: {"type":"response.completed","response":{"id":"resp_001","object":"response","created_at":1741892091,"status":"completed","model":"gpt-4o-mini","output":[]}}
+
+`)
+			}))
+			defer server.Close()
+
+			var output int
+			response, err := provider.newAgent(server).RunText(t.Context(), "hello", agent.WithStructuredOutput(&output), agent.Stream(true)).Collect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if output != 42 || response.String() != `{"data":42}` {
+				t.Fatalf("streamed output = %d, response text = %q; want 42 and wrapped JSON", output, response.String())
+			}
+		})
+	}
+}
+
 func TestChatConfigInstructions_NonStreaming(t *testing.T) {
 	const input = `
 						{
@@ -357,7 +647,7 @@ func TestChatConfigInstructions_NonStreaming(t *testing.T) {
 
 func TestChatAgentConfigAllowsConcurrentToolInvocation(t *testing.T) {
 	var requests atomic.Int64
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if requests.Add(1) == 1 {
 			_, _ = io.WriteString(w, `{
@@ -382,7 +672,7 @@ func TestChatAgentConfigAllowsConcurrentToolInvocation(t *testing.T) {
 		})
 	}
 	a := openaiprovider.NewChatCompletionsAgent(
-		openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")),
+		openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test"), option.WithHTTPClient(server.Client())),
 		openaiprovider.AgentConfig{
 			Model: "gpt-4o-mini",
 			ToolAutoCall: &toolautocall.Config{
@@ -404,7 +694,9 @@ func TestChatAgentConfigAllowsConcurrentToolInvocation(t *testing.T) {
 		case <-started:
 		case <-time.After(time.Second):
 			close(release)
-			<-done
+			if err := <-done; err != nil {
+				t.Errorf("tool run after releasing calls: %v", err)
+			}
 			t.Fatal("tool calls did not start concurrently")
 		}
 	}
@@ -417,7 +709,7 @@ func TestChatAgentConfigAllowsConcurrentToolInvocation(t *testing.T) {
 func TestChatAgentConfigEnablesMessageInjectionInsideToolAutoCall(t *testing.T) {
 	var requests atomic.Int64
 	var injectedMessageSeen atomic.Bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		if requests.Add(1) == 1 {
@@ -438,7 +730,7 @@ func TestChatAgentConfigEnablesMessageInjectionInsideToolAutoCall(t *testing.T) 
 		return "ok", nil
 	})
 	a := openaiprovider.NewChatCompletionsAgent(
-		openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")),
+		openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test"), option.WithHTTPClient(server.Client())),
 		openaiprovider.AgentConfig{
 			Model: "gpt-4o-mini",
 			Config: agent.Config{
@@ -622,6 +914,25 @@ func lastMessageAdditionalProperties(t *testing.T, resp *agent.Response) map[str
 	}
 	t.Fatalf("no message carried AdditionalProperties: %#v", resp.Messages)
 	return nil
+}
+
+// cache_write_tokens (prompt-cache writes / cache creation) must be surfaced via AdditionalCounts,
+// matching the Python client.
+func TestChatCacheWriteTokensSurfaced(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"chatcmpl-cw","object":"chat.completion","created":1727888631,"model":"gpt-4o-mini","choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cache_write_tokens":7}}}`)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(server).RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+	usage := resp.Usage()
+	if got := usage.AdditionalCounts["PromptTokensDetails.CacheWriteTokens"]; got != 7 {
+		t.Errorf("expected cache_write_tokens 7, got %v", got)
+	}
 }
 
 // Some OpenAI-compatible endpoints still emit the deprecated "function_call"
@@ -967,6 +1278,27 @@ data: [DONE]
 	}
 	if refusal.ErrorCode != "Refusal" {
 		t.Errorf("refusal error code = %q, want Refusal", refusal.ErrorCode)
+	}
+}
+
+func TestChatStreamingRefusal_TerminalChunk(t *testing.T) {
+	const input = `{"messages":[{"role":"user","content":"question"}],"model":"gpt-4o-mini","stream":true,"stream_options":{"include_usage":true}}`
+	const output = "data: " + `{"id":"refusal","object":"chat.completion.chunk","created":42,"choices":[{"index":0,"delta":{"role":"assistant","refusal":"Cannot assist."},"finish_reason":"stop"}]}` + "\n\ndata: [DONE]\n\n"
+	server := newTestServerStreaming(t, input, output)
+	defer server.Close()
+
+	response, err := newTestClient(server).RunText(t.Context(), "question", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refusals []*message.ErrorContent
+	for content := range response.Contents() {
+		if refusal, ok := content.(*message.ErrorContent); ok {
+			refusals = append(refusals, refusal)
+		}
+	}
+	if len(refusals) != 1 || refusals[0].Message != "Cannot assist." || refusals[0].ErrorCode != "Refusal" {
+		t.Fatalf("refusals = %+v, want one complete refusal", refusals)
 	}
 }
 
@@ -1522,9 +1854,7 @@ data: [DONE]
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt},
-		{MessageID: msgID, ResponseID: msgID, FinishReason: "tool_calls", Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{
-			&message.FunctionCallContent{CallID: callID, Name: "GetPersonAge", Arguments: `{"personName":"Alice"}`},
-		}},
+		{MessageID: msgID, ResponseID: msgID, FinishReason: "tool_calls", Role: message.RoleAssistant, CreatedAt: createdAt},
 		{MessageID: msgID, ResponseID: msgID, Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{
 			&message.UsageContent{Details: message.UsageDetails{
 				InputTokenCount:       61,
@@ -1533,6 +1863,9 @@ data: [DONE]
 				CachedInputTokenCount: 0,
 				ReasoningTokenCount:   90,
 			}},
+		}},
+		{MessageID: msgID, ResponseID: msgID, FinishReason: "tool_calls", Role: message.RoleAssistant, CreatedAt: createdAt, Contents: []message.Content{
+			&message.FunctionCallContent{CallID: callID, Name: "GetPersonAge", Arguments: `{"personName":"Alice"}`},
 		}},
 	}
 
@@ -1561,6 +1894,187 @@ data: [DONE]
 	}
 	if err := agenttest.ResponseUpdatesEqual(updates, want); err != nil {
 		t.Error(err)
+	}
+}
+
+func TestChatStreamingToolCalls_CompleteOnce(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		choices []string
+	}{
+		{
+			name: "packed terminal calls",
+			choices: []string{
+				`[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"first","arguments":"{\"value\":1}"}},{"index":1,"id":"b","type":"function","function":{"name":"second","arguments":"{\"value\":2}"}}]},"finish_reason":"tool_calls"}]`,
+			},
+		},
+		{
+			name: "packed calls before terminal chunk",
+			choices: []string{
+				`[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"first","arguments":"{\"value\":1}"}},{"index":1,"id":"b","type":"function","function":{"name":"second","arguments":"{\"value\":2}"}}]}}]`,
+				`[{"index":0,"delta":{},"finish_reason":"tool_calls"}]`,
+			},
+		},
+		{
+			name: "interleaved arguments",
+			choices: []string{
+				`[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"first","arguments":"{\"value\":"}},{"index":1,"id":"b","type":"function","function":{"name":"second","arguments":"{\"value\":"}}]}}]`,
+				`[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"arguments":"2}"}}]}}]`,
+				`[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"1}"}}]}}]`,
+				`[{"index":0,"delta":{},"finish_reason":"tool_calls"}]`,
+			},
+		},
+		{
+			name: "sequential calls",
+			choices: []string{
+				`[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"first","arguments":"{\"value\":1}"}}]}}]`,
+				`[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"b","type":"function","function":{"name":"second","arguments":"{\"value\":2}"}}]}}]`,
+				`[{"index":0,"delta":{},"finish_reason":"tool_calls"}]`,
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const input = `{"messages":[{"role":"user","content":"call both"}],"model":"gpt-4o-mini","stream":true,"stream_options":{"include_usage":true}}`
+			output := "data: " + `{"id":"calls","object":"chat.completion.chunk","created":123,"choices":[{"index":0,"delta":{"role":"assistant","content":"working"}}]}` + "\n\n"
+			for _, choices := range tc.choices {
+				output += fmt.Sprintf("data: {\"id\":\"calls\",\"object\":\"chat.completion.chunk\",\"created\":123,\"choices\":%s}\n\n", choices)
+			}
+			output += "data: " + `{"id":"calls","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}}` + "\n\ndata: [DONE]\n\n"
+			server := newTestServerStreaming(t, input, output)
+			defer server.Close()
+
+			var response agent.Response
+			var updates []*agent.ResponseUpdate
+			var calls []*message.FunctionCallContent
+			for update, err := range newTestClient(server).RunText(t.Context(), "call both", agent.Stream(true)) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				updates = append(updates, update)
+				response.Update(update)
+				for _, content := range update.Contents {
+					if call, ok := content.(*message.FunctionCallContent); ok {
+						calls = append(calls, call)
+					}
+				}
+			}
+			if len(calls) != 2 {
+				t.Fatalf("calls = %+v, want two complete calls", calls)
+			}
+			for i, want := range []message.FunctionCallContent{
+				{CallID: "a", Name: "first", Arguments: `{"value":1}`},
+				{CallID: "b", Name: "second", Arguments: `{"value":2}`},
+			} {
+				if got := calls[i]; got.CallID != want.CallID || got.Name != want.Name || got.Arguments != want.Arguments {
+					t.Errorf("call %d = %+v, want %+v", i, got, want)
+				}
+			}
+			last := updates[len(updates)-1]
+			if last.MessageID != "calls" || last.ResponseID != "calls" || last.Role != message.RoleAssistant ||
+				last.FinishReason != "tool_calls" || !last.CreatedAt.Equal(time.Unix(123, 0)) || len(last.Contents) != 2 {
+				t.Errorf("completed update lost metadata or calls: %+v", last)
+			}
+			if updates[0].String() != "working" || response.String() != "working" || response.Usage().TotalTokenCount != 3 {
+				t.Errorf("text or usage lost or duplicated: %+v", response)
+			}
+			if raw, ok := response.RawRepresentation.([]any); !ok || len(raw) != len(tc.choices)+2 {
+				t.Errorf("RawRepresentation = %#v, want only the original stream chunks", response.RawRepresentation)
+			}
+		})
+	}
+}
+
+func TestChatStreamingPackedToolCalls_InvokeOnce(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		if requests.Add(1) == 1 {
+			_, _ = fmt.Fprint(w, "data: "+`{"id":"calls","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"first","arguments":"{\"value\":1}"}},{"index":1,"id":"b","type":"function","function":{"name":"second","arguments":"{\"value\":2}"}}]},"finish_reason":"tool_calls"}]}`+"\n\ndata: [DONE]\n\n")
+			return
+		}
+		var body struct {
+			Messages []struct {
+				Role       string `json:"role"`
+				ToolCallID string `json:"tool_call_id"`
+				Content    string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			return
+		}
+		var ids, values []string
+		for _, msg := range body.Messages {
+			if msg.Role == "tool" {
+				ids = append(ids, msg.ToolCallID)
+				values = append(values, msg.Content)
+			}
+		}
+		if !slices.Equal(ids, []string{"a", "b"}) || !slices.Equal(values, []string{"1", "2"}) {
+			t.Errorf("tool results = %v/%v, want a=1 and b=2", ids, values)
+		}
+		_, _ = fmt.Fprint(w, "data: "+`{"id":"done","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`+"\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+
+	var values []int
+	invoke := func(_ context.Context, args struct {
+		Value int `json:"value"`
+	},
+	) (int, error) {
+		values = append(values, args.Value)
+		return args.Value, nil
+	}
+	a := openaiprovider.NewChatCompletionsAgent(
+		openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test"), option.WithMaxRetries(0)),
+		openaiprovider.AgentConfig{Model: "m", Config: agent.Config{Tools: []tool.Tool{
+			functool.MustNew(functool.Config{Name: "first"}, invoke),
+			functool.MustNew(functool.Config{Name: "second"}, invoke),
+		}}},
+	)
+	response, err := a.RunText(t.Context(), "call both", agent.Stream(true)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(values, []int{1, 2}) || requests.Load() != 2 || response.String() != "done" {
+		t.Fatalf("values=%v requests=%d response=%q, want one invocation per call", values, requests.Load(), response.String())
+	}
+}
+
+func TestChatStreamingToolCalls_FailureDoesNotInvokeTools(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = fmt.Fprint(w, "data: "+`{"id":"calls","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"effect","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`+"\n\n")
+		_, _ = fmt.Fprint(w, "data: "+`{"error":{"message":"broken stream","type":"server_error","code":"stream_failed"}}`+"\n\n")
+	}))
+	defer server.Close()
+
+	var effects int
+	effect := functool.MustNew(functool.Config{Name: "effect"}, func(context.Context, struct{}) (string, error) {
+		effects++
+		return "completed", nil
+	})
+	a := openaiprovider.NewChatCompletionsAgent(
+		openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test"), option.WithMaxRetries(0)),
+		openaiprovider.AgentConfig{Model: "m", Config: agent.Config{Tools: []tool.Tool{effect}}},
+	)
+	var calls int
+	var runErr error
+	for update, err := range a.RunText(t.Context(), "perform action", agent.Stream(true)) {
+		if update != nil {
+			for _, content := range update.Contents {
+				if _, ok := content.(*message.FunctionCallContent); ok {
+					calls++
+				}
+			}
+		}
+		if err != nil {
+			runErr = err
+			break
+		}
+	}
+	if runErr == nil || !strings.Contains(runErr.Error(), "broken stream") || effects != 0 || calls != 0 {
+		t.Fatalf("err=%v effects=%d calls=%d, want original stream failure and no dispatchable calls", runErr, effects, calls)
 	}
 }
 

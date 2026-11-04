@@ -112,7 +112,7 @@ func buildPaymentWorkflow(fraudCheckWorkflow *workflow.Workflow) *workflow.Workf
 		demo.Assistantf("  [Payment/ValidatePayment] Validated payment for %s ($%.2f)", order.OrderID, float64(order.Amount)/100)
 		return order
 	}).Bind()
-	fraudCheck := inproc.BindSubworkflowAsExecutor(fraudCheckWorkflow, "FraudCheck")
+	fraudCheck := inproc.BindSubworkflowAsExecutor(fraudCheckWorkflow, "FraudCheck", inproc.SubworkflowConfig{})
 	chargePayment := workflow.NewExecutor("ChargePayment", func(order OrderInfo) OrderInfo {
 		order.PaymentTransactionID = "TXN-ORD-001"
 		demo.Assistantf("  [Payment/ChargePayment] Payment processed: %s", order.PaymentTransactionID)
@@ -153,8 +153,8 @@ func buildOrderProcessingWorkflow(paymentWorkflow *workflow.Workflow, shippingWo
 		demo.Assistantf("[OrderReceived] Processing order %q", orderID)
 		return OrderInfo{OrderID: orderID, Amount: 9999}
 	}).Bind()
-	payment := inproc.BindSubworkflowAsExecutor(paymentWorkflow, "Payment")
-	shipping := inproc.BindSubworkflowAsExecutor(shippingWorkflow, "Shipping")
+	payment := inproc.BindSubworkflowAsExecutor(paymentWorkflow, "Payment", inproc.SubworkflowConfig{})
+	shipping := inproc.BindSubworkflowAsExecutor(shippingWorkflow, "Shipping", inproc.SubworkflowConfig{})
 	orderCompleted := workflow.NewExecutor("OrderCompleted", func(order OrderInfo) string {
 		demo.Assistantf("[OrderCompleted] Payment: %s", order.PaymentTransactionID)
 		demo.Assistantf("[OrderCompleted] Shipping: %s - %s", order.Carrier, order.TrackingNumber)

@@ -8,6 +8,9 @@ on:
   merge_group:
     types: [checks_requested]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Test Go Code (${{ matrix.target.name }}, Go ${{ matrix.go-version }})
@@ -35,10 +38,15 @@ jobs:
       uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
       with:
         go-version: ${{ matrix.go-version }}
-        cache-dependency-path: go.sum
+        cache-dependency-path: |
+          go.sum
+          _catalog/go.sum
     
     - name: Run tests
       run: go test -v ${{ matrix.target.name != 'windows-arm64' && '-race' || '' }} -shuffle=on ./...
+
+    - name: Run catalog tooling tests
+      run: go -C _catalog test -v ${{ matrix.target.name != 'windows-arm64' && '-race' || '' }} -shuffle=on ./...
 
   copilot-integration:
     name: GitHub Copilot integration
@@ -60,7 +68,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
@@ -78,6 +86,7 @@ jobs:
     needs: [test, copilot-integration]
     runs-on: ubuntu-latest
     if: ${{ always() }}
+    permissions: {}
     steps:
       - name: Result
         run: |

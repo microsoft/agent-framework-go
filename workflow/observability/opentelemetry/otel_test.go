@@ -4,8 +4,11 @@ package opentelemetry_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
+	"github.com/microsoft/agent-framework-go/workflow"
+	"github.com/microsoft/agent-framework-go/workflow/inproc"
 	"github.com/microsoft/agent-framework-go/workflow/observability"
 	workflowotel "github.com/microsoft/agent-framework-go/workflow/observability/opentelemetry"
 	"go.opentelemetry.io/otel"
@@ -28,6 +31,43 @@ func setupTracer(t *testing.T) *tracetest.InMemoryExporter {
 		otel.SetTextMapPropagator(originalPropagator)
 	})
 	return exporter
+}
+
+func TestWorkflowTelemetry_UsesProvidedSource(t *testing.T) {
+	exporter := setupTracer(t)
+	uppercase := workflow.NewExecutor("UppercaseExecutor", strings.ToUpper).Bind()
+	wf, err := workflow.NewBuilder(uppercase).
+		WithTelemetry(workflowotel.New(workflowotel.Config{SourceName: "UserProvidedSource"}), workflow.TelemetryOptions{}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := inproc.Default.Run(t.Context(), wf, "Hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	spans := exporter.GetSpans()
+	if len(spans) == 0 {
+		t.Fatal("expected activities on provided source")
+	}
+	for _, span := range spans {
+		if got := span.InstrumentationScope.Name; got != "UserProvidedSource" {
+			t.Errorf("activity source = %q, want UserProvidedSource", got)
+		}
+	}
+}
+
+func TestWorkflowTelemetry_DisabledByDefault(t *testing.T) {
+	exporter := setupTracer(t)
+	uppercase := workflow.NewExecutor("UppercaseExecutor", strings.ToUpper).Bind()
+	if _, err := workflow.NewBuilder(uppercase).Build(); err != nil {
+		t.Fatal(err)
+	}
+	if spans := exporter.GetSpans(); len(spans) != 0 {
+		t.Fatalf("activities = %v, want none without telemetry configuration", spans)
+	}
 }
 
 func TestNewCreatesWorkflowTracer(t *testing.T) {
