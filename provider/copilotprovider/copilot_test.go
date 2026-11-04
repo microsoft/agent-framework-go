@@ -531,6 +531,9 @@ func TestConvertToAgentResponseUpdate_UsageEvent_SurfacesModel(t *testing.T) {
 	if got, _ := response.AdditionalProperties["model"].(string); got != "gpt-5" {
 		t.Fatalf("AdditionalProperties[model] = %q, want gpt-5", got)
 	}
+	if response.ModelID != "gpt-5" {
+		t.Fatalf("ModelID = %q, want gpt-5", response.ModelID)
+	}
 }
 
 // A content-filter-triggered usage event must report the canonical
