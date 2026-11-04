@@ -81,7 +81,7 @@ func main() {
 }
 
 func run(args []string, out, diagnostics io.Writer) error {
-	const usage = "Usage: symbolmap <mappings|gaps|go-only|go|changes|reconcile|go-tests|tests> [flags]"
+	const usage = "Usage: symbolmap <mappings|gaps|go-only|go|changes|reconcile|go-tests|tests|audit-plan|audit-check> [flags]"
 	if len(args) == 0 {
 		if _, err := fmt.Fprintln(diagnostics, usage); err != nil {
 			return err
@@ -94,6 +94,8 @@ func run(args []string, out, diagnostics io.Writer) error {
 		return err
 	}
 	switch command {
+	case "audit-plan", "audit-check":
+		return runAudit(command, args[1:], out, diagnostics)
 	case "mappings", "gaps", "go-only", "go", "changes", "reconcile", "go-tests", "tests":
 	default:
 		return fmt.Errorf("unknown subcommand %q", command)
@@ -235,9 +237,13 @@ func addMappingFlags(flags *flag.FlagSet, options *reportOptions) {
 }
 
 func addIndexFlags(flags *flag.FlagSet, options *reportOptions) {
+	addGoIndexFlags(flags, options)
+	flags.BoolVar(&options.brief, "summary", false, "emit counts without declaration rows")
+}
+
+func addGoIndexFlags(flags *flag.FlagSet, options *reportOptions) {
 	flags.StringVar(&options.goRoot, "go-root", "..", "Go module root (default is the SDK checkout above the catalog module; dependencies must already be local)")
 	flags.StringVar(&options.tags, "tags", "", "Go build tags (default: inherited GOFLAGS)")
-	flags.BoolVar(&options.brief, "summary", false, "emit counts without declaration rows")
 	flags.Func("go-package", "repeat to replace the default SDK package set", func(value string) error {
 		if strings.TrimSpace(value) == "" {
 			return errors.New("go package pattern must not be empty")
