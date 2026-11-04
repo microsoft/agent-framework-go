@@ -13,6 +13,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/internal/azaiprojects"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/message/messagefilter"
 )
@@ -141,6 +142,7 @@ func newMemoryProvider(client *azaiprojects.MemoryStoresClient, memoryStoreName 
 // resulting HTTP 409 conflict is treated as success. Any other retrieval or create error is
 // returned unchanged.
 func (p *MemoryProvider) EnsureMemoryStoreCreated(ctx context.Context, chatModel, embeddingModel string, description *string) error {
+	telemetry.MarkUsed(telemetry.FeatureFoundryMemory)
 	if _, err := p.client.GetMemoryStore(ctx, p.memoryStoreName, nil); err != nil {
 		respErr, ok := errors.AsType[*azcore.ResponseError](err)
 		if !ok || respErr.StatusCode != http.StatusNotFound {
@@ -186,6 +188,7 @@ func (p *MemoryProvider) Invoked(ctx context.Context, invoked agent.InvokedConte
 // with HTTP 404, which is treated as success. Any other error is returned to the caller.
 func (p *MemoryProvider) EnsureStoredMemoriesDeleted(ctx context.Context, session *agent.Session) error {
 	scope := p.scope(session)
+	telemetry.MarkUsed(telemetry.FeatureFoundryMemory)
 	if _, err := p.client.DeleteScope(ctx, p.memoryStoreName, scope, nil); err != nil {
 		if respErr, ok := errors.AsType[*azcore.ResponseError](err); ok && respErr.StatusCode == http.StatusNotFound {
 			p.log(ctx, slog.LevelInfo, "foundrymemory: no stored memories to delete", "memory_store", p.memoryStoreName)
@@ -199,6 +202,7 @@ func (p *MemoryProvider) EnsureStoredMemoriesDeleted(ctx context.Context, sessio
 }
 
 func (p *MemoryProvider) provide(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+	telemetry.MarkUsed(telemetry.FeatureFoundryMemory)
 	items := searchMemoryItems(invoking.Messages)
 	if len(items) == 0 {
 		return nil, nil, nil
@@ -217,6 +221,9 @@ func (p *MemoryProvider) provide(ctx context.Context, invoking agent.InvokingCon
 	}
 	result, err := p.client.SearchMemories(ctx, p.memoryStoreName, scope, searchOptions)
 	if err != nil {
+		if isCallerCancellation(ctx, err) {
+			return nil, nil, ctx.Err()
+		}
 		p.log(ctx, slog.LevelError, "foundrymemory: failed to search memories", "memory_store", p.memoryStoreName, "error", err)
 		return nil, nil, nil
 	}
@@ -233,6 +240,7 @@ func (p *MemoryProvider) provide(ctx context.Context, invoking agent.InvokingCon
 }
 
 func (p *MemoryProvider) store(ctx context.Context, invoked agent.InvokedContext) error {
+	telemetry.MarkUsed(telemetry.FeatureFoundryMemory)
 	items := updateMemoryItems(invoked.RequestMessages)
 	items = append(items, updateMemoryItems(invoked.ResponseMessages)...)
 	if len(items) == 0 {
@@ -245,11 +253,18 @@ func (p *MemoryProvider) store(ctx context.Context, invoked agent.InvokedContext
 		UpdateDelay: &p.config.UpdateDelay,
 	}
 	if _, err := p.client.BeginUpdateMemories(ctx, p.memoryStoreName, scope, updateOptions); err != nil {
+		if isCallerCancellation(ctx, err) {
+			return ctx.Err()
+		}
 		p.log(ctx, slog.LevelError, "foundrymemory: failed to update memories", "memory_store", p.memoryStoreName, "count", len(items), "error", err)
 		return nil
 	}
 	p.log(ctx, slog.LevelInfo, "foundrymemory: submitted memory update", "memory_store", p.memoryStoreName, "count", len(items))
 	return nil
+}
+
+func isCallerCancellation(ctx context.Context, err error) bool {
+	return ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded))
 }
 
 func (p *MemoryProvider) log(ctx context.Context, level slog.Level, msg string, args ...any) {

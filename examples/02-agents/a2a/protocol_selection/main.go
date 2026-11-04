@@ -35,27 +35,18 @@ func main() {
 		demo.Panicf("failed to resolve agent card: %v", err)
 	}
 
-	client, err := a2aclient.NewFromCard(
-		ctx,
-		card,
+	remoteAgent, err := a2aprovider.NewAgentFromCard(
+		ctx, card,
+		a2aprovider.AgentConfig{
+			Config: agent.Config{Middlewares: []agent.Middleware{logger}},
+		},
 		a2aclient.WithConfig(a2aclient.Config{
 			PreferredTransports: []a2a.TransportProtocol{preferredTransport},
 		}),
 	)
 	if err != nil {
-		demo.Panicf("failed to create A2A client: %v", err)
+		demo.Panicf("failed to create A2A agent: %v", err)
 	}
-
-	remoteAgent := a2aprovider.NewAgent(
-		client,
-		a2aprovider.AgentConfig{
-			Config: agent.Config{
-				Name:        cmp.Or(card.Name, "RemoteA2AAgent"),
-				Description: card.Description,
-				Middlewares: []agent.Middleware{logger},
-			},
-		},
-	)
 
 	resp, err := remoteAgent.RunText(ctx, "Tell me a joke about a pirate.").Collect()
 	demo.Response(resp, err)

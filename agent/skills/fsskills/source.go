@@ -4,6 +4,7 @@ package fsskills
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -15,6 +16,7 @@ import (
 	"sync"
 
 	"github.com/microsoft/agent-framework-go/agent/skills"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 )
 
 const (
@@ -111,7 +113,8 @@ type SourceOptions struct {
 	AllowedScriptExtensions []string
 
 	// ScriptRunner executes discovered file-backed scripts. When nil, scripts are
-	// still discovered but return an error if run.
+	// still discovered but return an error if run. Arguments are raw JSON;
+	// the default file-script schema describes a positional string array.
 	ScriptRunner skills.ScriptRunner
 
 	// Logger is used for discovery diagnostics. When nil, a discard logger is
@@ -188,7 +191,9 @@ func NewSourceOptions(opts SourceOptions, filesystems ...fs.FS) *Source {
 }
 
 // Skills discovers and loads valid skills from the configured filesystems.
-func (s *Source) Skills(ctx context.Context) ([]*skills.Skill, error) {
+// Each skill retains the instruction text read during discovery.
+func (s *Source) Skills(ctx context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
+	telemetry.MarkUsed(telemetry.FeatureFileSkillsSource)
 	directories := discoverSkillDirectories(s.filesystems, s.logger)
 	s.logger.Info("Discovered potential skills", "count", len(directories))
 
@@ -287,23 +292,19 @@ func (s *Source) parseSkillDirectory(directory discoveredSkillDir) *skills.Skill
 	var (
 		contentOnce   sync.Once
 		cachedContent string
-		contentErr    error
 	)
 	return &skills.Skill{
 		Frontmatter: frontmatter,
 		GetContent: func(context.Context) (string, error) {
 			contentOnce.Do(func() {
-				data, err := fs.ReadFile(skillFS, skillFileName)
-				if err != nil {
-					contentErr = err
-					return
-				}
-				raw := string(data)
+				// Keep the body paired with its parsed metadata; do not reopen a
+				// path that may have been replaced since discovery.
+				raw := content
 				raw += "\n" + buildAvailableResourcesBlock(resources)
 				raw += "\n" + buildAvailableScriptsBlock(scripts)
 				cachedContent = raw
 			})
-			return cachedContent, contentErr
+			return cachedContent, nil
 		},
 		Resources: resources,
 		Scripts:   scripts,
@@ -717,8 +718,8 @@ func newScript(name string, fsys fs.FS, scope skillPathScope, runner skills.Scri
 	}
 }
 
-func newFileScriptRunFunc(name string, scope skillPathScope, runner skills.ScriptRunner, additionalProperties map[string]any) func(context.Context, *skills.Skill, []string) (any, error) {
-	return func(ctx context.Context, owner *skills.Skill, arguments []string) (any, error) {
+func newFileScriptRunFunc(name string, scope skillPathScope, runner skills.ScriptRunner, additionalProperties map[string]any) func(context.Context, *skills.Skill, json.RawMessage) (any, error) {
+	return func(ctx context.Context, owner *skills.Skill, arguments json.RawMessage) (any, error) {
 		if err := requireFileSkill(name, owner); err != nil {
 			return nil, err
 		}
@@ -761,7 +762,7 @@ func buildAvailableResourcesBlock(resources []skills.Resource) string {
 	var sb strings.Builder
 	sb.WriteString("\n<available_resources>\n")
 	for _, resource := range resources {
-		if resource.Description != "" {
+		if strings.TrimSpace(resource.Description) != "" {
 			fmt.Fprintf(&sb, "  <resource name=\"%s\" description=\"%s\"/>\n",
 				xmlEscapeAttr(resource.Name), xmlEscapeAttr(resource.Description))
 		} else {
@@ -780,7 +781,7 @@ func buildAvailableScriptsBlock(scripts []skills.Script) string {
 	sb.WriteString("\n<available_scripts>\n")
 	for _, script := range scripts {
 		namePart := fmt.Sprintf("  <script name=\"%s\"", xmlEscapeAttr(script.Name))
-		if script.Description != "" {
+		if strings.TrimSpace(script.Description) != "" {
 			namePart += fmt.Sprintf(" description=\"%s\"", xmlEscapeAttr(script.Description))
 		}
 		if script.ParametersSchema == "" {

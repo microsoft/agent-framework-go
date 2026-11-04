@@ -8,12 +8,13 @@ import (
 	"iter"
 	"slices"
 
+	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/message"
 )
 
 type structuredOutputMiddleware struct {
-	format    func(any) (ResponseFormat, error)
-	unmarshal func(ResponseFormat, []byte, any) error
+	format    func(any) (format.ResponseFormat, error)
+	unmarshal func(format.ResponseFormat, []byte, any) error
 }
 
 func (m *structuredOutputMiddleware) Run(next RunFunc, ctx context.Context, messages []*message.Message, options ...Option) iter.Seq2[*ResponseUpdate, error] {
@@ -48,7 +49,7 @@ func (m *structuredOutputMiddleware) Run(next RunFunc, ctx context.Context, mess
 			if update == nil {
 				continue
 			}
-			if !sawUpdate || current.isDifferent(update) {
+			if !sawUpdate || update.resetStructuredOutput || current.isDifferent(update) {
 				data = data[:0]
 				current = structuredOutputMessageKey{}
 				sawUpdate = true

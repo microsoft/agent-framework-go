@@ -47,6 +47,12 @@ func TaskIDFromSession(session *agent.Session) string {
 	return getTaskID(session)
 }
 
+// TaskStateFromSession returns the last A2A task state stored in session state.
+// It returns [a2a.TaskStateUnspecified] if the session is nil or has no task state.
+func TaskStateFromSession(session *agent.Session) a2a.TaskState {
+	return getLastTaskState(session)
+}
+
 func setLastTaskState(session *agent.Session, state a2a.TaskState) {
 	if session == nil {
 		return
