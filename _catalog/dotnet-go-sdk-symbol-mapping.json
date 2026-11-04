@@ -8657,10 +8657,12 @@
               "tool/agenttool.New",
               "agent.WithSession",
               "tool/functool.New",
-              "tool/agenttool.Config.RunOptions"
+              "tool/agenttool.Config.RunOptions",
+              "tool/agenttool.Config.ArgName",
+              "tool/agenttool.Config.ArgDescription"
             ],
             "status": "partial",
-            "note": "Agenttool supplies query-to-text invocation and a session option; functool can wrap customized metadata. Go does not automatically copy the parent's AdditionalProperties into the child run."
+            "note": "Agenttool supplies string-to-text invocation, a session option, and configurable argument name and description; functool can wrap other customized metadata. Go does not automatically copy the parent's AdditionalProperties into the child run."
           },
           "AsBuilder(AIAgent) -> AIAgentBuilder": {
             "go": "agent.New(provider, agent.Config{Middlewares: []agent.Middleware{middleware}})",
@@ -9478,7 +9480,7 @@
               "agent/skills.ScriptRunner"
             ],
             "status": "adapted",
-            "note": "Construct a named Go function value or closure instead of a CLR target/method-pointer delegate; argument-shape limitations are recorded on Invoke."
+            "note": "Use a named Go function or closure instead of a CLR target/method-pointer delegate; ScriptRunner receives raw JSON arguments."
           }
         }
       },
@@ -9512,7 +9514,7 @@
               "agent/skills/fsskills.SourceOptions.Logger"
             ],
             "status": "adapted",
-            "note": "Supply fs.FS roots instead of directory strings and put discovery settings, runner, and slog logger into a value options struct; runner arguments are positional strings."
+            "note": "Supply fs.FS roots instead of directory strings and put discovery settings, runner, and slog logger into a value options struct. The runner receives raw JSON; the default parameter schema describes positional strings."
           },
           "AgentFileSkillsSource(string, AgentFileSkillScriptRunner, AgentFileSkillsSourceOptions, ILoggerFactory)": {
             "go": "fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: runner, Logger: logger}, root)",
@@ -9665,7 +9667,7 @@
               "agent/skills.NewInMemorySource"
             ],
             "status": "adapted",
-            "note": "Retrieve the in-memory skill slice through Source.Skills(context.Context); this implementation does not need the .NET agent/session argument."
+            "note": "Source.Skills(ctx, sourceContext) returns the in-memory slice; this implementation ignores SourceContext's agent/session identity."
           }
         },
         "constructors": {
@@ -9975,10 +9977,12 @@
             "note": "Source is usable as a Go map key, but Go exposes no integer hash code for it."
           },
           "ToString() -> string": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "note": "Go Source has no formatter returning the .NET type:sourceId representation; its zero and empty source IDs are not distinct."
+            "go": "source.String()",
+            "go_symbols": [
+              "message.Source.String"
+            ],
+            "status": "adapted",
+            "note": "Formats the source type and optional identifier. Go treats an empty ID as absent, unlike .NET's distinct null and empty-string identifiers."
           },
           "op_Equality(AgentRequestMessageSourceAttribution, AgentRequestMessageSourceAttribution) -> bool": {
             "go": "var left, right message.Source; _ = left == right",
@@ -10257,8 +10261,8 @@
           "IsWrappedInObject": {
             "go_symbols": [
               "agent.WithStructuredOutput",
-              "agent/format/jsonformat.WrapNonObjectSchema",
-              "agent/format/jsonformat.Format.UnmarshalStructuredOutput"
+              "format/jsonformat.WrapNonObjectSchema",
+              "format/jsonformat.Format.UnmarshalStructuredOutput"
             ],
             "status": "partial",
             "note": "Built-in providers use shared jsonformat helpers to wrap non-object JSON schemas and decode the data property; agent middleware is format-agnostic. Go does not expose a per-response IsWrappedInObject flag or a way to query the wrapper state of a returned Response."
@@ -10267,10 +10271,10 @@
             "go_symbols": [
               "agent.WithStructuredOutput",
               "agent.ResponseStream.Collect",
-              "agent/format/jsonformat.Format.UnmarshalStructuredOutput"
+              "format/jsonformat.Format.UnmarshalStructuredOutput"
             ],
             "status": "adapted",
-            "note": "Read the caller-owned destination after successful collection, or use Format.UnmarshalStructuredOutput with the matching response format to decode existing text. Go decodes eagerly and has no generic Result property."
+            "note": "Read the caller-owned destination after successful collection; decoding occurs after automatic tool execution and uses the final response message. Format.UnmarshalStructuredOutput can decode existing text with a matching response format. Go decodes eagerly and has no generic Result property."
           }
         },
         "constructors": {
@@ -10278,9 +10282,9 @@
             "go": "format, _ := jsonformat.For[struct{ Answer string }](); decoder, _ := jsonformat.FromResponseFormat(format); var result struct{ Answer string }; decoder.Unmarshal([]byte(response.String()), &result)",
             "go_symbols": [
               "agent.Response.String",
-              "agent/format/jsonformat.For",
-              "agent/format/jsonformat.FromResponseFormat",
-              "agent/format/jsonformat.Format.Unmarshal"
+              "format/jsonformat.For",
+              "format/jsonformat.FromResponseFormat",
+              "format/jsonformat.Format.Unmarshal"
             ],
             "status": "adapted",
             "note": "Keep the response and decode its text into a destination using a JSON format; Go decoding is explicit rather than deferred to a generic Result getter."
@@ -10952,10 +10956,11 @@
           "Compatibility": {
             "go_symbols": [
               "agent/skills.Frontmatter.Compatibility",
-              "agent/skills.Frontmatter.Validate"
+              "agent/skills.Frontmatter.Validate",
+              "agent/skills.ValidateCompatibility"
             ],
             "status": "adapted",
-            "note": "Go field assignment does not run the C# setter's validation; call Validate explicitly, which also checks name and description. Empty represents absent compatibility."
+            "note": "Field assignment does not validate the value. Call ValidateCompatibility for compatibility-only validation or Frontmatter.Validate for all fields; empty represents absent compatibility."
           },
           "Description": {
             "go_symbols": [
@@ -10984,31 +10989,25 @@
         },
         "methods": {
           "ValidateCompatibility(string, out string) -> bool": {
-            "go": "frontmatter.Validate()",
+            "go": "skills.ValidateCompatibility(compatibility)",
             "go_symbols": [
-              "agent/skills.Frontmatter.Validate",
-              "agent/skills.Frontmatter.Compatibility"
+              "agent/skills.ValidateCompatibility"
             ],
-            "status": "partial",
-            "note": "Validate checks compatibility as part of the entire frontmatter and returns an error; earlier name/description failures take precedence. The 500-length limit counts UTF-16 code units."
+            "status": "mapped"
           },
           "ValidateDescription(string, out string) -> bool": {
-            "go": "frontmatter.Validate()",
+            "go": "skills.ValidateDescription(description)",
             "go_symbols": [
-              "agent/skills.Frontmatter.Validate",
-              "agent/skills.Frontmatter.Description"
+              "agent/skills.ValidateDescription"
             ],
-            "status": "partial",
-            "note": "Validate also checks name and compatibility rather than exposing an independent description validator. The 1024-length limit counts UTF-16 code units."
+            "status": "mapped"
           },
           "ValidateName(string, out string) -> bool": {
-            "go": "frontmatter.Validate()",
+            "go": "skills.ValidateName(name)",
             "go_symbols": [
-              "agent/skills.Frontmatter.Validate",
-              "agent/skills.Frontmatter.Name"
+              "agent/skills.ValidateName"
             ],
-            "status": "partial",
-            "note": "Validate checks name first and then the other frontmatter fields; Go does not export the independent name validator or a bool/out-reason contract."
+            "status": "mapped"
           }
         },
         "constructors": {
@@ -11019,7 +11018,7 @@
               "agent/skills.Frontmatter.Validate"
             ],
             "status": "adapted",
-            "note": "Use a struct literal and explicit Validate call; absent compatibility becomes an empty string. Go returns validation errors and measures string limits in bytes rather than UTF-16 code units."
+            "note": "Use a struct literal and explicit Validate call; absent compatibility becomes an empty string. Validation returns an error. Description and compatibility limits count UTF-16 code units; names use ASCII lowercase letters, digits, and interior hyphens."
           }
         }
       },
@@ -11215,14 +11214,16 @@
             "note": "Supply the skill slice in value options. The provider composes reusable source decorators with caching and first-name-wins deduplication enabled by default."
           },
           "AgentSkillsProvider(AgentSkillsSource, AgentSkillsProviderOptions, ILoggerFactory, bool)": {
-            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, Logger: logger, OwnsSources: ownsSource})",
+            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, Logger: logger, OwnsSources: ownsSource, DisableCaching: true, DisableSourceDeduplication: true})",
             "go_symbols": [
               "agent/skills.NewContextProvider",
               "agent/skills.ContextProviderOptions.Sources",
-              "agent/skills.ContextProviderOptions.OwnsSources"
+              "agent/skills.ContextProviderOptions.OwnsSources",
+              "agent/skills.ContextProviderOptions.DisableCaching",
+              "agent/skills.ContextProviderOptions.DisableSourceDeduplication"
             ],
-            "status": "adapted",
-            "note": "The constructor returns *skills.ContextProvider with Close. Sources, logging, and the ownership flag move into constructor options; source ownership defaults to false."
+            "status": "partial",
+            "note": "Configure the source, logger, and ownership flag; ownership defaults to false and Close supports io.Closer sources. Disable caching and source deduplication to match the custom-source constructor's direct pipeline. When duplicate names remain, Go tools select the last matching skill while .NET selects the first."
           },
           "AgentSkillsProvider(IEnumerable<AgentSkill>, AgentSkillsProviderOptions, ILoggerFactory)": {
             "go": "skills.NewContextProvider(skills.ContextProviderOptions{Skills: registeredSkills, Logger: logger})",
@@ -15395,8 +15396,7 @@
             "go_symbols": [
               "agent/harness/loop.Config.NonStreamingReturnsLastResponseOnly"
             ],
-            "status": "partial",
-            "note": ".NET retains usage from every iteration; Go yields only final-iteration updates in this mode, losing earlier usage."
+            "status": "mapped"
           },
           "OnBehalfOfAuthorName": {
             "go_symbols": [
@@ -20063,20 +20063,21 @@
             "note": "Set EmitUpdateEvents to a bool pointer and call New; this overload controls streaming updates, not aggregated response events."
           },
           "BindAsExecutor(RequestPort, bool) -> ExecutorBinding": {
-            "go": "port.Bind()",
+            "go": "port.BindWithWrappedRequests(allowWrapped)",
             "go_symbols": [
-              "workflow.RequestPort.Bind"
+              "workflow.RequestPort.Bind",
+              "workflow.RequestPort.BindWithWrappedRequests"
             ],
-            "status": "partial",
-            "note": "Go binds the port and accepts wrapped requests, but has no allowWrappedRequests=false setting."
+            "status": "mapped"
           },
           "BindAsExecutor(Workflow, string, ExecutorOptions) -> ExecutorBinding": {
             "go": "inproc.BindSubworkflowAsExecutor(wf, id, inproc.SubworkflowConfig{})",
             "go_symbols": [
-              "workflow/inproc.BindSubworkflowAsExecutor"
+              "workflow/inproc.BindSubworkflowAsExecutor",
+              "workflow/inproc.SubworkflowConfig"
             ],
-            "status": "partial",
-            "note": "Go hosts subworkflows through an inproc binding factory, but child outputs are always sent and yielded; the .NET host's independent ExecutorOptions forwarding gates are not exposed."
+            "status": "adapted",
+            "note": "Use value SubworkflowConfig for independent child-output send/yield gates; nil flags enable both. Go returns a general binding and snapshots flags when each host is created."
           },
           "BindAsExecutor<TInput, TAccumulate>(Func<TAccumulate, TInput, TAccumulate>, string, ExecutorOptions, bool) -> ExecutorBinding": {
             "go": "workflow.NewAggregatingExecutor(id, aggregator).SetCrossRunShareable(threadsafe).Bind()",
@@ -20312,10 +20313,11 @@
           "ConfigureSubWorkflow(Workflow, string, ExecutorOptions) -> ExecutorBinding": {
             "go": "inproc.BindSubworkflowAsExecutor(wf, id, inproc.SubworkflowConfig{})",
             "go_symbols": [
-              "workflow/inproc.BindSubworkflowAsExecutor"
+              "workflow/inproc.BindSubworkflowAsExecutor",
+              "workflow/inproc.SubworkflowConfig"
             ],
-            "status": "partial",
-            "note": "The obsolete alias has a Go subworkflow host factory, but Go always sends and yields child outputs rather than honoring the .NET host's independent ExecutorOptions forwarding gates."
+            "status": "adapted",
+            "note": "The obsolete alias maps to the same Go factory with SubworkflowConfig. Nil flags enable both forwarding gates; each created host snapshots the flags."
           }
         }
       },
@@ -20609,33 +20611,38 @@
           "go": "workflow.Executor{AutoSendMessageHandlerResultObject: new(true), AutoYieldOutputHandlerResultObject: new(true)}",
           "go_symbols": [
             "workflow.Executor.AutoSendMessageHandlerResultObject",
-            "workflow.Executor.AutoYieldOutputHandlerResultObject"
+            "workflow.Executor.AutoYieldOutputHandlerResultObject",
+            "workflow/inproc.SubworkflowConfig"
           ],
           "status": "adapted",
-          "note": "Behavior options live directly on Executor as optional bool pointers. Set them before the executor's protocol is first built; Go caches that protocol."
+          "note": "Behavior options live on Executor, or in value SubworkflowConfig for hosted workflows; nil flags enable send/yield. Configure Executor before protocol construction; subworkflow hosts snapshot flags at creation."
         },
         "properties": {
           "AutoSendMessageHandlerResultObject": {
             "go_symbols": [
-              "workflow.Executor.AutoSendMessageHandlerResultObject"
+              "workflow.Executor.AutoSendMessageHandlerResultObject",
+              "workflow/inproc.SubworkflowConfig.AutoSendMessageHandlerResultObject"
             ],
             "status": "adapted",
-            "note": "Nil means true; an explicit false pointer disables automatic sending of non-nil results from output-producing handlers, not messages sent manually through Context."
+            "note": "Nil enables automatic handler-result sending. SubworkflowConfig applies the same flag to child-output forwarding; explicit Context.SendMessage calls are unaffected."
           },
           "AutoYieldOutputHandlerResultObject": {
             "go_symbols": [
-              "workflow.Executor.AutoYieldOutputHandlerResultObject"
+              "workflow.Executor.AutoYieldOutputHandlerResultObject",
+              "workflow/inproc.SubworkflowConfig.AutoYieldOutputHandlerResultObject"
             ],
             "status": "adapted",
-            "note": "Nil means true; an explicit false pointer disables automatic yielding of non-nil handler results. Explicit Context.YieldOutput calls remain separate and require declared output types."
+            "note": "Nil enables automatic handler-result yielding. SubworkflowConfig controls child-output yielding and output declarations; explicit Context.YieldOutput calls remain separate and require declared output types."
           },
           "Default": {
             "go_symbols": [
               "workflow.Executor.AutoSendMessageHandlerResultObject",
-              "workflow.Executor.AutoYieldOutputHandlerResultObject"
+              "workflow.Executor.AutoYieldOutputHandlerResultObject",
+              "workflow/inproc.SubworkflowConfig.AutoSendMessageHandlerResultObject",
+              "workflow/inproc.SubworkflowConfig.AutoYieldOutputHandlerResultObject"
             ],
             "status": "adapted",
-            "note": "Leave both fields nil to enable automatic send and yield. Go has no shared mutable default-options object whose changes affect other executors."
+            "note": "Nil send/yield flags on Executor or SubworkflowConfig enable both behaviors. Go has no shared mutable default-options singleton."
           }
         }
       },
@@ -22897,7 +22904,7 @@
           "AllowWrapped": {
             "go_symbols": [],
             "status": "unmapped",
-            "note": "Go RequestPort has no wrapped-request policy field; its binding always registers wrapped-request handling."
+            "note": "Go RequestPort has no wrapped-request policy field; RequestPort.BindWithWrappedRequests selects acceptance per binding instead."
           }
         },
         "methods": {
@@ -22994,19 +23001,20 @@
         "area": "workflows",
         "assembly": "Microsoft.Agents.AI.Workflows",
         "mapping": {
-          "go": "port.Bind()",
+          "go": "port.BindWithWrappedRequests(allowWrapped)",
           "go_symbols": [
             "workflow.RequestPort.Bind",
+            "workflow.RequestPort.BindWithWrappedRequests",
             "workflow.ExecutorBinding"
           ],
-          "status": "partial",
-          "note": "Go creates a general binding for the request port and handles wrapped requests, but cannot disable wrapped-request acceptance."
+          "status": "adapted",
+          "note": "Go creates a general ExecutorBinding; BindWithWrappedRequests captures the wrapped-request policy in the factory rather than exposing a derived binding record."
         },
         "properties": {
           "AllowWrapped": {
             "go_symbols": [],
             "status": "unmapped",
-            "note": "Go port bindings have no AllowWrapped setting or getter; wrapped requests are always handled."
+            "note": "RequestPort.BindWithWrappedRequests configures the policy, but ExecutorBinding exposes no AllowWrapped getter."
           },
           "IsSharedInstance": {
             "go_symbols": [
@@ -23050,7 +23058,7 @@
               "workflow.ExecutorBinding.RawValue"
             ],
             "status": "partial",
-            "note": "The bound port is extractable from RawValue; the AllowWrapped component has no Go representation.",
+            "note": "The bound port is extractable from RawValue; the captured wrapped-request policy is not exposed as a binding field.",
             "compiler_generated": true
           },
           "Equals(ExecutorBinding) -> bool": {
@@ -23107,12 +23115,13 @@
         },
         "constructors": {
           "RequestPortBinding(RequestPort, bool)": {
-            "go": "port.Bind()",
+            "go": "port.BindWithWrappedRequests(allowWrapped)",
             "go_symbols": [
-              "workflow.RequestPort.Bind"
+              "workflow.RequestPort.Bind",
+              "workflow.RequestPort.BindWithWrappedRequests"
             ],
-            "status": "partial",
-            "note": "Bind constructs the port host with wrapped-request support; the false AllowWrapped case is not configurable in Go."
+            "status": "adapted",
+            "note": "The Go binding factory accepts the wrapped-request policy and returns a general ExecutorBinding rather than a derived record; Bind supplies the default true."
           }
         }
       },
@@ -24005,16 +24014,17 @@
           "go": "inproc.BindSubworkflowAsExecutor(wf, id, inproc.SubworkflowConfig{})",
           "go_symbols": [
             "workflow/inproc.BindSubworkflowAsExecutor",
-            "workflow.ExecutorBinding"
+            "workflow.ExecutorBinding",
+            "workflow/inproc.SubworkflowConfig"
           ],
-          "status": "partial",
-          "note": "Go provides ownership-taking, session-aware subworkflow hosting through a general binding; it always sends and yields child outputs instead of exposing the .NET host's independent ExecutorOptions gates."
+          "status": "adapted",
+          "note": "Ownership-taking, session-aware hosting uses a general ExecutorBinding with SubworkflowConfig for independent child-output send/yield gates. The binding is not a typed subworkflow record."
         },
         "properties": {
           "ExecutorOptions": {
             "go_symbols": [],
             "status": "unmapped",
-            "note": "The Go subworkflow binding does not retain or expose ExecutorOptions controlling child-output send/yield forwarding."
+            "note": "SubworkflowConfig configures forwarding at bind time; ExecutorBinding has no getter for the captured options."
           },
           "IsSharedInstance": {
             "go_symbols": [
@@ -24058,7 +24068,7 @@
               "workflow.ExecutorBinding.ID"
             ],
             "status": "partial",
-            "note": "Go exposes the workflow and executor ID through RawValue and ID; the ExecutorOptions component is not retained.",
+            "note": "Read the child workflow and ID from RawValue and ID; captured SubworkflowConfig cannot be read back through the binding.",
             "compiler_generated": true
           },
           "Equals(ExecutorBinding) -> bool": {
@@ -24117,10 +24127,11 @@
           "SubworkflowBinding(Workflow, string, ExecutorOptions)": {
             "go": "inproc.BindSubworkflowAsExecutor(wf, id, inproc.SubworkflowConfig{})",
             "go_symbols": [
-              "workflow/inproc.BindSubworkflowAsExecutor"
+              "workflow/inproc.BindSubworkflowAsExecutor",
+              "workflow/inproc.SubworkflowConfig"
             ],
-            "status": "partial",
-            "note": "The Go factory constructs the subworkflow binding, but cannot configure the .NET host's independent child-output send/yield forwarding gates."
+            "status": "adapted",
+            "note": "The factory returns a general ExecutorBinding with ownership-taking, session-aware hosting and independent send/yield flags in SubworkflowConfig; nil enables both."
           }
         }
       },
@@ -24641,7 +24652,8 @@
             "go_symbols": [
               "workflow.Builder.AddFanOutEdge"
             ],
-            "status": "mapped"
+            "status": "partial",
+            "note": "Go delivers once per selected target ID. The .NET builder accepts repeated target bindings and can deliver once per occurrence."
           },
           "AddFanOutEdge(ExecutorBinding, IEnumerable<ExecutorBinding>, string) -> WorkflowBuilder": {
             "go": "builder.AddFanOutEdge(source, targets, workflow.WithEdgeLabel(label))",
@@ -24649,8 +24661,8 @@
               "workflow.Builder.AddFanOutEdge",
               "workflow.WithEdgeLabel"
             ],
-            "status": "adapted",
-            "note": "The label becomes an edge option rather than a positional overload argument."
+            "status": "partial",
+            "note": "The label becomes a Go edge option. Go delivers once per selected target ID, while .NET accepts repeated target bindings and can deliver once per occurrence."
           },
           "AddFanOutEdge<T>(ExecutorBinding, IEnumerable<ExecutorBinding>, Func<T, int, IEnumerable<int>>) -> WorkflowBuilder": {
             "go": "builder.AddFanOutEdge(source, targets, workflow.WithEdgeAssigner[string](assigner))",
@@ -24658,8 +24670,8 @@
               "workflow.Builder.AddFanOutEdge",
               "workflow.WithEdgeAssigner"
             ],
-            "status": "adapted",
-            "note": "Use a typed assigner option whose Go callback takes target count before message and returns iter.Seq[int], rather than message/count and IEnumerable<int>."
+            "status": "partial",
+            "note": "Use a typed Go assigner option whose callback takes target count before message and returns iter.Seq[int]. Go delivers once per selected target ID; .NET preserves repeated target bindings and repeated assigner indexes, which can produce repeated deliveries."
           },
           "AddFanOutEdge<T>(ExecutorBinding, IEnumerable<ExecutorBinding>, Func<T, int, IEnumerable<int>>, string) -> WorkflowBuilder": {
             "go": "builder.AddFanOutEdge(source, targets, workflow.WithEdgeAssigner[any](assigner), workflow.WithEdgeLabel(label))",
@@ -24668,8 +24680,8 @@
               "workflow.WithEdgeAssigner",
               "workflow.WithEdgeLabel"
             ],
-            "status": "adapted",
-            "note": "Selector and label become options; the selector takes count/message rather than message/count and returns iter.Seq[int]."
+            "status": "partial",
+            "note": "Selector and label become Go options; the selector takes count before message and returns iter.Seq[int]. Go delivers once per selected target ID; .NET preserves repeated target bindings and repeated assigner indexes, which can produce repeated deliveries."
           },
           "BindExecutor(ExecutorBinding) -> WorkflowBuilder": {
             "go": "builder.BindExecutor(binding)",
