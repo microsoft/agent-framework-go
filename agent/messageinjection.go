@@ -20,6 +20,9 @@ type pendingInjectedMessagesState struct {
 
 // MessageInjector queues messages for injection between provider calls.
 // Its zero value is ready to use.
+// To retain delivered messages across stateless provider calls, enable
+// [Config.RequirePerServiceCallHistoryPersistence] and use a [HistoryProvider]
+// that preserves their content, including images and other non-text parts.
 type MessageInjector struct {
 	mu sync.Mutex
 }

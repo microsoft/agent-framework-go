@@ -27,7 +27,7 @@ func TestSubworkflowBinding_ForwardsOutputsAsParentOutputsAndMessages(t *testing
 		t.Fatalf("Build child: %v", err)
 	}
 
-	host := inproc.BindSubworkflowAsExecutor(child, "child")
+	host := inproc.BindSubworkflowAsExecutor(child, "child", inproc.SubworkflowConfig{})
 	var gotAtSink []dataMessage
 	sink := workflow.NewExecutor("sink", func(msg dataMessage) {
 		gotAtSink = append(gotAtSink, msg)
@@ -61,6 +61,56 @@ func TestSubworkflowBinding_ForwardsOutputsAsParentOutputsAndMessages(t *testing
 	}
 }
 
+func TestSubworkflowBindingWithConfig_OutputForwardingGates(t *testing.T) {
+	tests := []struct {
+		name      string
+		cfg       inproc.SubworkflowConfig
+		wantSink  int
+		wantYield int
+	}{
+		{"default", inproc.SubworkflowConfig{}, 1, 1},
+		{"no send", inproc.SubworkflowConfig{AutoSendMessageHandlerResultObject: new(false)}, 0, 1},
+		{"no yield", inproc.SubworkflowConfig{AutoYieldOutputHandlerResultObject: new(false)}, 1, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			childStart := workflow.NewExecutor("child-start", func(in textMessage) dataMessage {
+				return dataMessage{Bytes: []byte(in.Text)}
+			}).Bind()
+			child, err := workflow.NewBuilder(childStart).WithOutputFrom(childStart).Build()
+			if err != nil {
+				t.Fatalf("Build child: %v", err)
+			}
+
+			host := inproc.BindSubworkflowAsExecutor(child, "child", tt.cfg)
+			sinkCount := 0
+			sink := workflow.NewExecutor("sink", func(dataMessage) { sinkCount++ }).Bind()
+			parent, err := workflow.NewBuilder(host).AddEdge(host, sink).WithOutputFrom(host).Build()
+			if err != nil {
+				t.Fatalf("Build parent: %v", err)
+			}
+			descriptor, err := parent.DescribeProtocol()
+			if err != nil {
+				t.Fatalf("DescribeProtocol: %v", err)
+			}
+			if got := containsType(descriptor.Yields, reflect.TypeFor[dataMessage]()); got != (tt.wantYield != 0) {
+				t.Fatalf("protocol declares dataMessage output = %v, want %v", got, tt.wantYield != 0)
+			}
+
+			run, err := inproc.Lockstep.Run(t.Context(), parent, textMessage{Text: "abc"})
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if sinkCount != tt.wantSink {
+				t.Fatalf("sink messages = %d, want %d", sinkCount, tt.wantSink)
+			}
+			if got := len(outputEvents(slicesCollect(run.OutgoingEvents()))); got != tt.wantYield {
+				t.Fatalf("output count = %d, want %d", got, tt.wantYield)
+			}
+		})
+	}
+}
+
 func TestSubworkflowBinding_ForwardsWorkflowWarningAsWorkflowWarning(t *testing.T) {
 	childStart := workflow.NewExecutor("child-start", func(ctx *workflow.Context, _ textMessage) error {
 		return ctx.AddEvent(workflow.WorkflowWarningEvent{Message: "child warning"})
@@ -70,7 +120,7 @@ func TestSubworkflowBinding_ForwardsWorkflowWarningAsWorkflowWarning(t *testing.
 		t.Fatalf("Build child: %v", err)
 	}
 
-	host := inproc.BindSubworkflowAsExecutor(child, "child")
+	host := inproc.BindSubworkflowAsExecutor(child, "child", inproc.SubworkflowConfig{})
 	parent, err := workflow.NewBuilder(host).Build()
 	if err != nil {
 		t.Fatalf("Build parent: %v", err)
@@ -121,7 +171,7 @@ func TestSubworkflowBinding_UsesActiveRunnerInputTypes(t *testing.T) {
 		t.Fatalf("Build child: %v", err)
 	}
 
-	host := inproc.BindSubworkflowAsExecutor(child, "child")
+	host := inproc.BindSubworkflowAsExecutor(child, "child", inproc.SubworkflowConfig{})
 	parent, err := workflow.NewBuilder(host).
 		WithOutputFrom(host).
 		Build()
@@ -177,7 +227,7 @@ func TestSubworkflowBinding_QualifiedRequestPortRoundTrip(t *testing.T) {
 		t.Fatalf("Build child: %v", err)
 	}
 
-	host := inproc.BindSubworkflowAsExecutor(child, "child")
+	host := inproc.BindSubworkflowAsExecutor(child, "child", inproc.SubworkflowConfig{})
 	qualifiedPort := workflow.RequestPort{
 		ID:       "child.ask",
 		Request:  port.Request,
@@ -225,7 +275,7 @@ func TestSubworkflowBinding_RejectsUnqualifiedResponseBeforeChildRun(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := inproc.BindSubworkflowAsExecutor(child, "child")
+	host := inproc.BindSubworkflowAsExecutor(child, "child", inproc.SubworkflowConfig{})
 	response := &workflow.ExternalResponse{
 		PortInfo:  workflow.RequestPortInfo{PortID: "other.port"},
 		RequestID: "request",
@@ -311,7 +361,7 @@ func TestSubworkflowBinding_ParentInterceptsChildRequestLocally(t *testing.T) {
 		}
 
 		const hostID = "approver"
-		host := inproc.BindSubworkflowAsExecutor(child, hostID)
+		host := inproc.BindSubworkflowAsExecutor(child, hostID, inproc.SubworkflowConfig{})
 		escalationPort := workflow.RequestPort{
 			ID:       hostID + "." + approvePort.ID,
 			Request:  approvePort.Request,
@@ -468,7 +518,7 @@ func TestSubworkflowBinding_CheckpointedEchoSampleCanResumeTwice(t *testing.T) {
 				t.Fatalf("Build subworkflow: %v", err)
 			}
 
-			host := inproc.BindSubworkflowAsExecutor(sub, "EchoSubworkflow")
+			host := inproc.BindSubworkflowAsExecutor(sub, "EchoSubworkflow", inproc.SubworkflowConfig{})
 			parent, err := workflow.NewBuilder(host).
 				WithOutputFrom(host).
 				Build()
@@ -512,7 +562,7 @@ func TestSubworkflowBinding_TextProcessingSample(t *testing.T) {
 				t.Fatalf("Build subworkflow: %v", err)
 			}
 
-			host := inproc.BindSubworkflowAsExecutor(sub, "TextProcessingSubWorkflow")
+			host := inproc.BindSubworkflowAsExecutor(sub, "TextProcessingSubWorkflow", inproc.SubworkflowConfig{})
 			prefix := stringTransformBinding("prefix", func(s string) string { return "INPUT: " + s })
 			post := stringTransformBinding("post", func(s string) string { return "[FINAL] " + s + " [END]" })
 			parent, err := workflow.NewBuilder(prefix).
@@ -551,7 +601,7 @@ func TestSubworkflowBinding_NestedOrderProcessingSample(t *testing.T) {
 			}
 
 			validatePayment := orderTransformBinding("ValidatePayment", func(order sampleOrderInfo) sampleOrderInfo { return order })
-			fraudCheckHost := inproc.BindSubworkflowAsExecutor(fraudCheck, "FraudCheck")
+			fraudCheckHost := inproc.BindSubworkflowAsExecutor(fraudCheck, "FraudCheck", inproc.SubworkflowConfig{})
 			chargePayment := orderTransformBinding("ChargePayment", func(order sampleOrderInfo) sampleOrderInfo {
 				order.PaymentTransactionID = "TXN-ORD-001"
 				return order
@@ -579,8 +629,8 @@ func TestSubworkflowBinding_NestedOrderProcessingSample(t *testing.T) {
 			}
 
 			orderReceived := orderReceivedBinding("OrderReceived")
-			paymentHost := inproc.BindSubworkflowAsExecutor(payment, "Payment")
-			shippingHost := inproc.BindSubworkflowAsExecutor(shipping, "Shipping")
+			paymentHost := inproc.BindSubworkflowAsExecutor(payment, "Payment", inproc.SubworkflowConfig{})
+			shippingHost := inproc.BindSubworkflowAsExecutor(shipping, "Shipping", inproc.SubworkflowConfig{})
 			orderCompleted := orderCompletedBinding("OrderCompleted")
 			parent, err := workflow.NewBuilder(orderReceived).
 				AddEdge(orderReceived, paymentHost).
@@ -646,7 +696,7 @@ func TestSubworkflowBinding_SharedStateWorksWithinSubworkflow(t *testing.T) {
 						t.Fatalf("Build subworkflow: %v", err)
 					}
 
-					host := inproc.BindSubworkflowAsExecutor(sub, "internalStateSubworkflow")
+					host := inproc.BindSubworkflowAsExecutor(sub, "internalStateSubworkflow", inproc.SubworkflowConfig{})
 					parent, err := workflow.NewBuilder(host).
 						WithOutputFrom(host).
 						Build()
@@ -700,7 +750,7 @@ func TestSubworkflowBinding_SharedStateIsIsolatedAcrossSubworkflowBoundary(t *te
 			}
 
 			textRead := textReadBinding("text-read")
-			host := inproc.BindSubworkflowAsExecutor(sub, "textTrimSubworkflow")
+			host := inproc.BindSubworkflowAsExecutor(sub, "textTrimSubworkflow", inproc.SubworkflowConfig{})
 			charCount := charCountBinding("char-count")
 			parent, err := workflow.NewBuilder(textRead).
 				AddEdge(textRead, host).
@@ -793,7 +843,7 @@ func createCheckpointedSubworkflowRequestWorkflow(t *testing.T) *workflow.Workfl
 		t.Fatalf("Build child request workflow: %v", err)
 	}
 
-	host := inproc.BindSubworkflowAsExecutor(child, "Subworkflow")
+	host := inproc.BindSubworkflowAsExecutor(child, "Subworkflow", inproc.SubworkflowConfig{})
 	qualifiedPort := workflow.RequestPort{
 		ID:       "ForwardedSubworkflowRequest",
 		Request:  innerPort.Request,

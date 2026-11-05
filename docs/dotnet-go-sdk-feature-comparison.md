@@ -27,7 +27,7 @@ Go symbols combine the module-relative package and exported symbol: `agent.Agent
 
 Notes are optional for `mapped` entries: the targets and example usually convey the correspondence without repeating it in prose. Keep a note only when it adds useful context. `adapted`, `partial`, `unmapped`, and `intentional` assessments still require a note explaining the adaptation, limitation, missing counterpart, or confirmed decision. Go-only assessments also require their explanation. Omitting a mapped note does not certify behavioral parity or establish current verification.
 
-For non-property declarations, `go` is a minimal Go snippet showing the correspondence. It is an empty string only when no counterpart is recorded. Property mappings intentionally omit `go`: their `go_symbols` identify the field, accessor, or composed API without adding a contrived usage example. Examples contain no imports or synthetic outer function; conventional free identifiers such as `ctx`, `session`, and `logger` denote caller-supplied values. Reconciliation resolves and type-checks package-qualified APIs against the indexed Go API without executing them.
+For non-property declarations, `go` is a minimal Go snippet showing the correspondence. It is an empty string only when no counterpart is recorded. Property mappings intentionally omit `go`: their `go_symbols` identify the field, accessor, or composed API without adding a contrived usage example. Examples contain no imports or synthetic outer function; conventional free identifiers such as `ctx`, `session`, and `logger` denote caller-supplied values. Reconciliation resolves and type-checks package-qualified APIs against the indexed Go API without executing them. When package names collide, recorded Go target packages disambiguate otherwise matching imports; unresolved ambiguity fails.
 
 Extraction-added API placeholders have `unreviewed: true`, `status: unmapped`, empty `go_symbols`, and an empty `go` for non-properties. They have no `note`; the stored status is not an assessed gap. Remove `unreviewed` only when recording an actual assessment, preserving declaration keys and extraction markers. Placeholders do not claim an assessment against the original baseline. Existing assessments outside the extracted assembly scope remain valid catalog entries without being treated as current extracted declarations.
 
@@ -92,6 +92,29 @@ JSON is the default for every subcommand; use `-json=false` for human-readable t
 Mapping output includes the original baseline and a flat `mappings` array with short `dotnet` labels, their `namespace`/`assembly`, and assessments or `unreviewed` placeholders. The hierarchy remains the single maintained source. Summary counts include explicit leaves, not grouping-only type containers, and deduplicate Go targets shared by several .NET declarations. The optional `unreviewed_symbols` count identifies placeholders; default `unmapped` totals include their storage status. Use `mappings -assessed -summary` for assessed-only counts. Counts are not a parity percentage or a count of implementation tasks.
 
 The `go-only` view returns the original baseline and a paged `go_only` object. It supports `-file` and `-symbol`, not .NET filters. `mappings -summary` reports the separate, unfiltered `go_only_symbols` count when nonzero; these symbols do not enter .NET mapping/status/gap counts or the mapped `go_symbols` count.
+
+### Weekly audit coverage
+
+The [weekly maintenance workflow](../.github/workflows/symbolmap-maintenance-weekly.md) keeps one agent session, but validates completion independently before allowing a PR or `noop`. Its pre-agent step builds a trusted validator and freezes an `audit-plan.json` with a flat `items` list for:
+
+- Every original assessed leaf, including all statuses and out-of-inventory-scope assessments.
+- Every API-report entry and exported member of added types/packages.
+- Every recent commit/file diff, including behavioral changes without API changes.
+- Existing Go-only assessments, counted separately from .NET leaves.
+
+`go -C _catalog run ./cmd/symbolmap audit-plan -changes <complete-changes.json> -patch <recent-go-changes.patch>` creates the plan without changing the catalog. Each item has an `id`, `kind`, and `subject`. It requires the complete unfiltered `changes` report and the matching indexed Go checkout. It preserves original API/assessment indexes, pinned source revisions, parent API IDs for additional members, and complete patch line ranges. The agent groups items into bounded review batches following the workflow prompt; batch IDs, grouping, and size limits are not part of the coverage format.
+
+Reviewers return one receipt per item as a JSON stream, conventionally one object per line:
+
+```json
+{"id":"assessment:0","subject":"<exact plan subject>","outcome":"no-change","reason":"<source-backed conclusion>","evidence":[{"repository":"<plan Go repository>","commit":"<plan head>","path":"agent/agent.go","line":1},{"repository":"<item .NET repository>","commit":"<item .NET commit>","path":"dotnet/src/Example.cs","line":1}]}
+```
+
+Every required identity must have exactly one receipt with its exact subject, a substantive outcome, nonempty reason, and source references. Receipt order does not matter. Outcomes are `no-change`, `correction`, `addition`, `go-specific`, or `scope-limitation`; unresolved work is not complete. New assessments require an `implementing_commit` from the plan's recent commits and never increase original-leaf coverage.
+
+`go -C _catalog run ./cmd/symbolmap audit-check -plan <audit-plan.json> -plan-sha256 <pre-agent SHA-256> -results <audit-results.jsonl>` rejects modified plans, missing or duplicate items, unknown identities, unresolved outcomes, and missing or incorrectly pinned evidence. Successful output reports per-kind item counts. The workflow records the plan and validator hashes in step outputs before agent execution and runs that same validator afterward; it does not execute agent-modified tooling for the publication gate. Error-only safe outputs remain available on failure.
+
+This is a structural coverage/provenance gate, not proof that references were actually inspected, that conclusions are correct, or that reviewer invocations occurred. It cannot force an early-exiting agent to continue. Behavioral review and reconciliation remain required.
 
 ## Extract the .NET Declaration Inventory
 
@@ -307,7 +330,7 @@ Reconciliation states are separate from mapping statuses:
 
 Unresolved assessments never consume an unreviewed declaration. The queue includes type declarations even when only members have assessments. Experimental markers and compiler-generated/delegate machinery are identified separately. `suggested_go` contains name-based candidates, preferably under an existing type mapping; candidates are not assessments and can be unrelated APIs.
 
-`reconcile -file` selects a different catalog; there is no `-inventory` flag. `go` and `reconcile` accept `-go-root` to select a Go checkout. The standalone `go` subcommand discovers its module from that checkout, without reading the mapping catalog; `reconcile` also checks that the module matches the catalog baseline. Repeat `-go-package` to replace the default agent/message/tool/provider/workflow package set, and use `-tags` for an explicit build-tag selection. The report records the effective platform, architecture, CGO setting, Go version, tags, Git commit and dirty state. It describes one build configuration, not the union of all platforms. Missing dependencies or invalid packages fail indexing rather than producing misleading missing-symbol results.
+`reconcile -file` selects a different catalog; there is no `-inventory` flag. `go` and `reconcile` accept `-go-root` to select a Go checkout. The standalone `go` subcommand discovers its module from that checkout, without reading the mapping catalog; `reconcile` also checks that the module matches the catalog baseline. Repeat `-go-package` to replace the default agent/format/message/tool/provider/workflow package set, and use `-tags` for an explicit build-tag selection. The root format packages are included when present so older checkouts remain indexable. The report records the effective platform, architecture, CGO setting, Go version, tags, Git commit and dirty state. It describes one build configuration, not the union of all platforms. Missing dependencies or invalid packages fail indexing rather than producing misleading missing-symbol results.
 
 Indexing requires the local Go toolchain and cached SDK dependencies, prepared with `go mod download` from the repository root. Preload the separate tooling module with `go -C _catalog mod download`. The indexer disables module/toolchain downloads and uses read-only module loading. The outer `go run` itself follows the caller's ordinary Go environment. Configured custom tool/cache programs are rejected by the indexer. No .NET SDK is used.
 

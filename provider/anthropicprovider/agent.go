@@ -21,8 +21,9 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/internal/modelcall"
 	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
@@ -85,15 +86,15 @@ func NewAgent(aclient anthropic.Client, config AgentConfig) *agent.Agent {
 	}, config.Config)
 }
 
-func (a *client) formatOf(v any) (agent.ResponseFormat, error) {
-	format, err := jsonformat.ForType(reflect.TypeOf(v))
+func (a *client) formatOf(v any) (format.ResponseFormat, error) {
+	responseFormat, err := jsonformat.ForType(reflect.TypeOf(v))
 	if err != nil {
-		return agent.ResponseFormat{}, err
+		return format.ResponseFormat{}, err
 	}
-	return jsonformat.WrapNonObjectSchema(format)
+	return jsonformat.WrapNonObjectSchema(responseFormat)
 }
 
-func (a *client) unmarshal(f agent.ResponseFormat, data []byte, v any) error {
+func (a *client) unmarshal(f format.ResponseFormat, data []byte, v any) error {
 	format, err := jsonformat.FromResponseFormat(f)
 	if err != nil {
 		return err
@@ -258,8 +259,9 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 }
 
 // mapStopReason maps an Anthropic stop_reason to the canonical FinishReason
-// values shared across providers (mirroring the OpenAI/Copilot providers). It
-// returns "" for empty or unrecognized reasons so callers can fall through.
+// values shared across providers (mirroring the OpenAI/Copilot providers). An
+// empty reason returns ""; an unrecognized non-empty reason is passed through
+// unchanged so newer Anthropic values still reach the caller.
 func mapStopReason(reason anthropic.StopReason) string {
 	switch reason {
 	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence, anthropic.StopReasonPauseTurn:
@@ -271,7 +273,11 @@ func mapStopReason(reason anthropic.StopReason) string {
 	case anthropic.StopReasonRefusal:
 		return "content_filter"
 	default:
-		return ""
+		// Pass through stop reasons we don't explicitly map (e.g. a newer
+		// value like model_context_window_exceeded) so they still reach the
+		// caller instead of being reported as no finish reason, matching the
+		// Python client. An empty reason maps to "".
+		return string(reason)
 	}
 }
 

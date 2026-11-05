@@ -23,7 +23,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/internal/modelcall"
-	"github.com/microsoft/agent-framework-go/internal/otelx"
+	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/anthropicprovider"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
@@ -617,7 +617,7 @@ func TestOtel_ModelTracing_Lifecycle(t *testing.T) {
 					modelCalls += point.Count
 					if spanErr != nil {
 						value, ok := metricAttribute(point.Attributes, "error.type")
-						if !ok || value != otelx.ErrorTypeName(spanErr) {
+						if !ok || value != telemetry.ErrorTypeName(spanErr) {
 							t.Errorf("metric error type = %q, present = %v", value, ok)
 						}
 					}
@@ -655,7 +655,7 @@ func TestOtel_ModelTracing_AdapterFailures(t *testing.T) {
 				span := findSpanByOperation(t, spansInScope(exporter.GetSpans(), "model-test"), "chat")
 				attrs := modelSpanAttributes(span)
 				if span.Status.Code != codes.Error || span.EndTime.IsZero() ||
-					attrs["error.type"].AsString() != otelx.ErrorTypeName(err) {
+					attrs["error.type"].AsString() != telemetry.ErrorTypeName(err) {
 					t.Fatalf("model failure span = %+v", span)
 				}
 				if _, ok := attrs["gen_ai.usage.input_tokens"]; ok {
@@ -1738,80 +1738,120 @@ func TestOtel_Run_HandlesMultipleUpdates(t *testing.T) {
 }
 
 func TestOtel_Run_EmitsExecuteToolSpanForAutocall(t *testing.T) {
-	exporter := setupTracer(t)
+	for _, tc := range []struct {
+		name       string
+		middleware bool
+		explicit   bool
+		source     string
+		wantSource string
+	}{
+		{name: "middleware fallback", middleware: true, wantSource: "test-source"},
+		{name: "explicit override", middleware: true, explicit: true, source: "tool-source", wantSource: "tool-source"},
+		{name: "tool only", explicit: true, source: "tool-source", wantSource: "tool-source"},
+		{name: "default source", explicit: true, wantSource: "github.com/microsoft/agent-framework-go"},
+		{name: "disabled"},
+	} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", tc.name, stream), func(t *testing.T) {
+				exporter := setupTracer(t)
+				runner := &agenttest.Runner{
+					Responses: agenttest.NewResponseBuilder().
+						Add(&agent.ResponseUpdate{
+							Role: message.RoleAssistant,
+							Contents: []message.Content{
+								&message.FunctionCallContent{CallID: "call-1", Name: "get_weather", Arguments: `{}`},
+							},
+						}).
+						NewTurn().
+						AddText("sunny").
+						Build(),
+				}
 
-	runner := &agenttest.Runner{
-		Responses: agenttest.NewResponseBuilder().
-			Add(&agent.ResponseUpdate{
-				Role: message.RoleAssistant,
-				Contents: []message.Content{
-					&message.FunctionCallContent{CallID: "call-1", Name: "get_weather", Arguments: `{}`},
-				},
-			}).
-			NewTurn().
-			AddText("sunny").
-			Build(),
-	}
+				var toolSpanContext trace.SpanContext
+				getWeather := functool.MustNew(
+					functool.Config{Name: "get_weather", Description: "Returns the current weather"},
+					func(ctx context.Context, args struct{}) (string, error) {
+						toolSpanContext = trace.SpanContextFromContext(ctx)
+						return "sunny", nil
+					},
+				)
+				var middlewares []agent.Middleware
+				var wantSpans int
+				if tc.middleware {
+					middlewares = append(middlewares, otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "test-source"}))
+					wantSpans++
+				}
+				var config toolautocall.Config
+				if tc.explicit {
+					config.Tracer = otelprovider.NewToolTracer(tc.source)
+				}
+				if tc.wantSource != "" {
+					wantSpans++
+				}
+				middlewares = append(middlewares, toolautocall.New(config))
+				a := agent.New(agent.ProviderConfig{
+					Run: runner.Run,
+				}, agent.Config{
+					ID:          "test-agent-id",
+					Name:        "test-agent",
+					Middlewares: middlewares,
+					Tools:       []tool.Tool{getWeather},
+				})
 
-	var toolSpanContext trace.SpanContext
-	getWeather := functool.MustNew(
-		functool.Config{Name: "get_weather", Description: "Returns the current weather"},
-		func(ctx context.Context, args struct{}) (string, error) {
-			toolSpanContext = trace.SpanContextFromContext(ctx)
-			return "sunny", nil
-		},
-	)
+				if _, err := a.RunText(t.Context(), "weather?", agent.Stream(stream)).Collect(); err != nil {
+					t.Fatal(err)
+				}
+				spans := exporter.GetSpans()
+				if len(spans) != wantSpans {
+					t.Fatalf("spans = %d, want %d", len(spans), wantSpans)
+				}
+				if tc.wantSource == "" {
+					if toolSpanContext.IsValid() {
+						t.Fatal("unexpected tool span context without a tracer")
+					}
+					return
+				}
+				executeToolSpan := findSpanByOperation(t, spans, "execute_tool")
+				if !toolSpanContext.IsValid() || toolSpanContext.SpanID() != executeToolSpan.SpanContext.SpanID() {
+					t.Fatal("tool did not receive its execute_tool span context")
+				}
+				if executeToolSpan.InstrumentationScope.Name != tc.wantSource {
+					t.Fatalf("execute_tool source = %q, want %q", executeToolSpan.InstrumentationScope.Name, tc.wantSource)
+				}
+				if tc.middleware {
+					invokeSpan := findSpanByOperation(t, spans, "invoke_agent")
+					if executeToolSpan.Parent.SpanID() != invokeSpan.SpanContext.SpanID() {
+						t.Fatalf("execute_tool parent = %s, want %s", executeToolSpan.Parent.SpanID(), invokeSpan.SpanContext.SpanID())
+					}
+				} else if executeToolSpan.Parent.IsValid() {
+					t.Fatal("tool-only tracing unexpectedly created a parent span")
+				}
+				if executeToolSpan.Name != "execute_tool get_weather" {
+					t.Fatalf("execute_tool span name = %q, want execute_tool get_weather", executeToolSpan.Name)
+				}
 
-	a := agent.New(agent.ProviderConfig{
-		Run: runner.Run,
-	}, agent.Config{
-		ID:   "test-agent-id",
-		Name: "test-agent",
-		Middlewares: []agent.Middleware{
-			otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "test-source"}),
-			toolautocall.New(toolautocall.Config{}),
-		},
-		Tools: []tool.Tool{getWeather},
-	})
-
-	_, err := a.RunMessage(t.Context(), message.NewText("weather?")).Collect()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !toolSpanContext.IsValid() {
-		t.Fatal("expected tool call to observe a valid span context")
-	}
-
-	spans := exporter.GetSpans()
-	if len(spans) != 2 {
-		t.Fatalf("expected 2 spans, got %d", len(spans))
-	}
-
-	invokeSpan := findSpanByOperation(t, spans, "invoke_agent")
-	executeToolSpan := findSpanByOperation(t, spans, "execute_tool")
-
-	if executeToolSpan.InstrumentationScope.Name != "test-source" {
-		t.Fatalf("expected execute_tool span scope %q, got %q", "test-source", executeToolSpan.InstrumentationScope.Name)
-	}
-	if executeToolSpan.Parent.SpanID() != invokeSpan.SpanContext.SpanID() {
-		t.Fatalf("expected execute_tool parent %s, got %s", invokeSpan.SpanContext.SpanID(), executeToolSpan.Parent.SpanID())
-	}
-	if executeToolSpan.Name != "execute_tool get_weather" {
-		t.Fatalf("expected execute_tool span name %q, got %q", "execute_tool get_weather", executeToolSpan.Name)
-	}
-
-	executeToolAttrs := make(map[string]string)
-	for _, attr := range executeToolSpan.Attributes {
-		executeToolAttrs[string(attr.Key)] = attr.Value.AsString()
-	}
-	if executeToolAttrs["gen_ai.tool.call.id"] != "call-1" {
-		t.Errorf("expected gen_ai.tool.call.id %q, got %q", "call-1", executeToolAttrs["gen_ai.tool.call.id"])
-	}
-	if executeToolAttrs["gen_ai.tool.type"] != "function" {
-		t.Errorf("expected gen_ai.tool.type %q, got %q", "function", executeToolAttrs["gen_ai.tool.type"])
-	}
-	if executeToolAttrs["gen_ai.tool.description"] != "Returns the current weather" {
-		t.Errorf("expected gen_ai.tool.description %q, got %q", "Returns the current weather", executeToolAttrs["gen_ai.tool.description"])
+				attrs := make(map[string]string)
+				for _, attr := range executeToolSpan.Attributes {
+					attrs[string(attr.Key)] = attr.Value.AsString()
+				}
+				for key, want := range map[string]string{
+					"gen_ai.tool.name":        "get_weather",
+					"gen_ai.tool.call.id":     "call-1",
+					"gen_ai.tool.type":        "function",
+					"gen_ai.tool.description": "Returns the current weather",
+				} {
+					if attrs[key] != want {
+						t.Errorf("%s = %q, want %q", key, attrs[key], want)
+					}
+				}
+				if _, ok := attrs["gen_ai.tool.call.arguments"]; ok {
+					t.Error("tool arguments should not be recorded")
+				}
+				if _, ok := attrs["gen_ai.tool.call.result"]; ok {
+					t.Error("tool results should not be recorded")
+				}
+			})
+		}
 	}
 }
 
@@ -1871,66 +1911,68 @@ func TestOtel_Run_ExecuteToolSpan_EmptyCallIDFallsBackToUnknown(t *testing.T) {
 }
 
 func TestOtel_Run_ExecuteToolSpan_SetsErrorTypeOnToolError(t *testing.T) {
-	exporter := setupTracer(t)
-
 	toolErr := errors.New("tool failure")
-
-	runner := &agenttest.Runner{
-		Responses: agenttest.NewResponseBuilder().
-			Add(&agent.ResponseUpdate{
-				Role: message.RoleAssistant,
-				Contents: []message.Content{
-					&message.FunctionCallContent{CallID: "call-err", Name: "failing_tool", Arguments: `{}`},
+	for _, tc := range []struct {
+		name    string
+		err     error
+		panic   bool
+		wantErr error
+	}{
+		{name: "error", err: toolErr, wantErr: toolErr},
+		{name: "panic", err: toolErr, panic: true, wantErr: fmt.Errorf("tool execution panic: %w", toolErr)},
+		{name: "cancellation", err: context.Canceled, wantErr: context.Canceled},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exporter := setupTracer(t)
+			runner := &agenttest.Runner{
+				Responses: agenttest.NewResponseBuilder().
+					Add(&agent.ResponseUpdate{
+						Role: message.RoleAssistant,
+						Contents: []message.Content{
+							&message.FunctionCallContent{CallID: "call-err", Name: "failing_tool", Arguments: `{}`},
+						},
+					}).
+					NewTurn().
+					AddText("done").
+					Build(),
+			}
+			failingTool := functool.MustNew(
+				functool.Config{Name: "failing_tool"},
+				func(ctx context.Context, args struct{}) (string, error) {
+					if tc.panic {
+						panic(tc.err)
+					}
+					return "", tc.err
 				},
-			}).
-			NewTurn().
-			AddText("done").
-			Build(),
-	}
-
-	failingTool := functool.MustNew(
-		functool.Config{Name: "failing_tool"},
-		func(ctx context.Context, args struct{}) (string, error) {
-			return "", toolErr
-		},
-	)
-
-	a := agent.New(agent.ProviderConfig{
-		Run: runner.Run,
-	}, agent.Config{
-		Name: "test-agent",
-		Middlewares: []agent.Middleware{
-			otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "test-source"}),
-			toolautocall.New(toolautocall.Config{}),
-		},
-		Tools: []tool.Tool{failingTool},
-	})
-
-	_, err := a.RunMessage(t.Context(), message.NewText("go")).Collect()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	spans := exporter.GetSpans()
-	executeToolSpan := findSpanByOperation(t, spans, "execute_tool")
-
-	attrs := make(map[string]string)
-	for _, attr := range executeToolSpan.Attributes {
-		attrs[string(attr.Key)] = attr.Value.AsString()
-	}
-	if attrs["error.type"] != "errorString" {
-		t.Errorf("expected error.type %q, got %q", "errorString", attrs["error.type"])
-	}
-
-	hasErrorEvent := false
-	for _, event := range executeToolSpan.Events {
-		if event.Name == "exception" {
-			hasErrorEvent = true
-			break
-		}
-	}
-	if !hasErrorEvent {
-		t.Error("expected execute_tool span to have an exception event")
+			)
+			a := agent.New(agent.ProviderConfig{
+				Run: runner.Run,
+			}, agent.Config{
+				Name: "test-agent",
+				Middlewares: []agent.Middleware{
+					otelprovider.NewMiddleware(otelprovider.MiddlewareConfig{SourceName: "test-source"}),
+					toolautocall.New(toolautocall.Config{}),
+				},
+				Tools: []tool.Tool{failingTool},
+			})
+			if _, err := a.RunText(t.Context(), "go").Collect(); err != nil {
+				t.Fatal(err)
+			}
+			executeToolSpan := findSpanByOperation(t, exporter.GetSpans(), "execute_tool")
+			attrs := make(map[string]string)
+			for _, attr := range executeToolSpan.Attributes {
+				attrs[string(attr.Key)] = attr.Value.AsString()
+			}
+			if want := telemetry.ErrorTypeName(tc.wantErr); attrs["error.type"] != want {
+				t.Errorf("error.type = %q, want %q", attrs["error.type"], want)
+			}
+			if executeToolSpan.Status.Code != codes.Error || executeToolSpan.Status.Description != tc.wantErr.Error() {
+				t.Errorf("span status = %+v, want error %q", executeToolSpan.Status, tc.wantErr)
+			}
+			if !slices.ContainsFunc(executeToolSpan.Events, func(event sdktrace.Event) bool { return event.Name == "exception" }) {
+				t.Error("expected execute_tool span to have an exception event")
+			}
+		})
 	}
 }
 

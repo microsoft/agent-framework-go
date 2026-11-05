@@ -612,6 +612,30 @@ func TestMessageIndex_MessageGroupStoresPassedCounts(t *testing.T) {
 	}
 }
 
+func TestCompactionProvider_DefaultStateKeyUsesStrategyTypeName(t *testing.T) {
+	for _, tc := range []struct {
+		strategy Strategy
+		want     string
+	}{
+		{new(TruncationStrategy), "TruncationStrategy"},
+		{new(SlidingWindowStrategy), "SlidingWindowStrategy"},
+		{new(ToolResultStrategy), "ToolResultStrategy"},
+		{new(SummarizationStrategy), "SummarizationStrategy"},
+		{new(PipelineStrategy), "PipelineStrategy"},
+		{new(ContextWindowStrategy), "ContextWindowStrategy"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			provider := NewContextProvider(ContextProviderConfig{Strategy: tc.strategy}).(*contextProvider)
+			if provider.stateKey != tc.want {
+				t.Fatalf("state key = %q, want %q", provider.stateKey, tc.want)
+			}
+			if provider.sourceID != defaultProviderSourceID {
+				t.Fatalf("source ID changed to %q", provider.sourceID)
+			}
+		})
+	}
+}
+
 func TestCompactionProvider_StateKeysAreStableAcrossEquivalentInstances(t *testing.T) {
 	first := NewContextProvider(ContextProviderConfig{
 		Strategy: &TruncationStrategy{Trigger: TokensExceed(100000)},
@@ -626,9 +650,18 @@ func TestCompactionProvider_StateKeysAreStableAcrossEquivalentInstances(t *testi
 
 func TestCompactionProvider_StateKeysReturnsCustomKeyWhenProvided(t *testing.T) {
 	provider := NewContextProvider(ContextProviderConfig{
-		Strategy: &TruncationStrategy{Trigger: TokensExceed(100000)}, StateKey: "my-custom-key",
+		Strategy: &TruncationStrategy{Trigger: TokensExceed(100000)}, StateKey: "my-custom-key", SourceID: "custom-source",
 	}).(*contextProvider)
 	if provider.stateKey != "my-custom-key" {
 		t.Fatalf("state key = %q, want my-custom-key", provider.stateKey)
+	}
+}
+
+func TestCompactionProvider_CustomSourceIDRemainsDefaultStateKey(t *testing.T) {
+	provider := NewContextProvider(ContextProviderConfig{
+		Strategy: new(TruncationStrategy), SourceID: "custom-source",
+	}).(*contextProvider)
+	if provider.stateKey != "custom-source" {
+		t.Fatalf("state key = %q, want custom-source", provider.stateKey)
 	}
 }

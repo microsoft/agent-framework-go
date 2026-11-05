@@ -556,7 +556,7 @@ func sampleTextProcessingWorkflow(t *testing.T) *workflow.Workflow {
 	if err != nil {
 		t.Fatal(err)
 	}
-	textProcessor := inproc.BindSubworkflowAsExecutor(child, "TextProcessor")
+	textProcessor := inproc.BindSubworkflowAsExecutor(child, "TextProcessor", inproc.SubworkflowConfig{})
 	orchestrator := workflow.BindNewExecutorFunc("TextProcessingOrchestrator", func(_ string, id string) (*workflow.Executor, error) {
 		cache := &workflow.StatefulExecutorCache[*sampleTextState]{StateKey: "State", InitialStateFactory: func() *sampleTextState { return &sampleTextState{Pending: map[string]bool{}} }}
 		return &workflow.Executor{
@@ -734,7 +734,7 @@ func sampleEchoSubworkflow(t *testing.T) *workflow.Workflow {
 	if err != nil {
 		t.Fatal(err)
 	}
-	host := inproc.BindSubworkflowAsExecutor(child, "EchoSubworkflow")
+	host := inproc.BindSubworkflowAsExecutor(child, "EchoSubworkflow", inproc.SubworkflowConfig{})
 	parent, err := workflow.NewBuilder(host).WithOutputFrom(host).Build()
 	if err != nil {
 		t.Fatal(err)

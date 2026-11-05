@@ -6,6 +6,7 @@ import (
 	"cmp"
 	"context"
 	"log/slog"
+	"reflect"
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -25,7 +26,11 @@ type ContextProviderConfig struct {
 	SourceID string
 
 	// StateKey identifies where provider state is stored in the session.
-	// When empty, SourceID is used.
+	// When empty, an explicitly configured SourceID is used; otherwise the concrete
+	// strategy's unqualified type name is used (without a pointer prefix). Unnamed strategy types
+	// use their type's string representation. Set distinct keys to isolate providers
+	// whose defaults would match, including multiple instances of the same strategy type.
+	// To reuse state saved under the former default, set this to "CompactionProvider".
 	StateKey string
 
 	// TokenCounter computes token counts for message groups.
@@ -52,16 +57,23 @@ type contextProvider struct {
 // NewContextProvider creates a context provider that applies compaction before each agent run.
 //
 // When a local session is available, the provider stores message-group state so subsequent runs can
-// incrementally update the index. Without a session, it still performs stateless compaction over the
-// current message list. Service-managed sessions are skipped because the service owns history.
+// incrementally update the index. Without a session, messages and options are returned unchanged.
+// Use [Compact] for stateless compaction. Service-managed sessions are skipped because the service owns history.
 // Generated summaries are marked as history so the default history store filter skips them.
 // It panics if Strategy is nil or the resolved StateKey is blank.
 func NewContextProvider(cfg ContextProviderConfig) agent.ContextProvider {
 	if cfg.Strategy == nil {
 		panic("Strategy is required")
 	}
-	cfg.SourceID = cmp.Or(cfg.SourceID, defaultProviderSourceID)
 	cfg.StateKey = cmp.Or(cfg.StateKey, cfg.SourceID)
+	if cfg.StateKey == "" {
+		strategyType := reflect.TypeOf(cfg.Strategy)
+		if strategyType.Kind() == reflect.Pointer {
+			strategyType = strategyType.Elem()
+		}
+		cfg.StateKey = cmp.Or(strategyType.Name(), strategyType.String())
+	}
+	cfg.SourceID = cmp.Or(cfg.SourceID, defaultProviderSourceID)
 	if strings.TrimSpace(cfg.StateKey) == "" {
 		panic("StateKey must not be blank")
 	}
@@ -87,11 +99,10 @@ func (p *contextProvider) Invoking(ctx context.Context, invoking agent.InvokingC
 		return messages, options, nil
 	}
 	if session == nil {
-		compactedMessages, err := Compact(ctx, p.strategy, messages, p.tokenCounter)
-		if err != nil {
-			return nil, nil, err
+		if p.logger != nil {
+			p.logger.DebugContext(ctx, "compaction provider skipped", slog.String("reason", "no session"))
 		}
-		return p.markGeneratedMessages(compactedMessages, messages), options, nil
+		return messages, options, nil
 	}
 	mu := p.locks.forOptions(options)
 	mu.Lock()

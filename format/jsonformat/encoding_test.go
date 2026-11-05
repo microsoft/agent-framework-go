@@ -9,11 +9,11 @@ import (
 	"testing"
 
 	"github.com/google/jsonschema-go/jsonschema"
-	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 )
 
-func requireFormat(t *testing.T, responseFormat agent.ResponseFormat) *jsonformat.Format {
+func requireFormat(t *testing.T, responseFormat format.ResponseFormat) *jsonformat.Format {
 	t.Helper()
 	format, err := jsonformat.FromResponseFormat(responseFormat)
 	if err != nil {
@@ -37,7 +37,7 @@ func TestNew_NilSchemaIsUnconstrained(t *testing.T) {
 
 func TestFromResponseFormat_RejectsTypedNilSchema(t *testing.T) {
 	var schema *jsonschema.Schema
-	format, err := jsonformat.FromResponseFormat(agent.ResponseFormat{Kind: "json", Schema: schema})
+	format, err := jsonformat.FromResponseFormat(format.ResponseFormat{Kind: "json", Schema: schema})
 	if err == nil || err.Error() != "response format schema cannot be nil" {
 		t.Fatalf("FromResponseFormat() error = %v, want nil-schema error", err)
 	}

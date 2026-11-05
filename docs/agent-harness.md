@@ -118,6 +118,58 @@ The harness does not override those settings. Approval-required tools can still
 pause a run when `DisableToolApproval` is true; the application must return the
 approval response through the same session. The runnable example shows that flow.
 
+### Partial work and cancellation
+
+Tool invocation does not roll back side effects. When request cancellation stops
+a tool batch, automatic invocation yields the actual outcomes of completed calls
+and failure results for calls that were not invoked, before returning the terminal
+error. The original tool error is preserved when a tool fails during cancellation.
+The same reporting applies when the consecutive-error limit stops a batch.
+
+With [`agent.Stream(false)`](../agent/options.go), updates remain buffered until
+the tool loop stops, including when it fails. To inspect or checkpoint partial
+work, consume the returned sequence directly or from middleware.
+[`ResponseStream.Collect`](../agent/response.go) still returns no response on
+error. Save completed tool exchanges before forwarding the terminal error.
+Cancellation cleanup may need a bounded context that is independent of request
+cancellation; do not use that context to continue tool execution.
+
+For incremental tool-round updates with non-streaming model requests, compose
+`toolautocall` with provider-boundary middleware that applies `agent.Stream(false)`
+only to the individual model call, and run the outer loop with `agent.Stream(true)`.
+Applying the non-streaming option outside the tool loop also enables buffering.
+The normal non-streaming default is unchanged.
+
+### Injected messages and external history
+
+The harness enables per-service-call history persistence. When configuring an
+agent directly, enable `RequirePerServiceCallHistoryPersistence` to retain
+injected messages across stateless model calls. The configured history provider
+can use SQLite or another external store; session-backed in-memory history is
+not required.
+
+Use [`agent.NewHistoryProvider`](../agent/history.go) with `Provide` returning
+only stored history and `Store` saving the new request and response messages:
+
+```go
+cfg := agent.Config{
+	HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{
+		SourceID: "external-history",
+		Provide:  loadHistory,
+		Store:    storeMessages,
+	}),
+	MessageInjector:                         &agent.MessageInjector{},
+	RequirePerServiceCallHistoryPersistence: true,
+}
+```
+
+Here, `loadHistory` and `storeMessages` are application-supplied storage callbacks.
+The helper source-stamps loaded messages and excludes them from the default
+stored request messages, avoiding duplicate history. Preserve typed message
+content, for example by JSON-encoding complete `message.Message` values. Saving
+only `Message.String()` loses images and other non-text content; enabling
+per-call persistence cannot recover content discarded by the storage adapter.
+
 ### Provider-managed history
 
 `AgentConfig` does not change provider request-storage settings. The usage example

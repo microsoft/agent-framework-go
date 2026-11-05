@@ -5,8 +5,10 @@
 // Use [NewMiddleware] for agent, function-tool, and supported model-adapter calls,
 // and [WrapEmbeddingGenerator] for embedding generation. Model calls are
 // instrumented by default; [MiddlewareConfig.DisableModelTracing] omits their
-// spans and metrics. Both use the global OpenTelemetry providers and leave their
-// lifetime to the caller.
+// spans and metrics. [NewToolTracer] allows explicit tool-only tracing or a
+// source-name override through the automatic tool middleware's tracer
+// configuration. These APIs use the global OpenTelemetry providers and leave
+// their lifetime to the caller.
 //
 // Model calls produce client spans with operation "chat", model identifiers,
 // token usage, and errors. They are children of the agent span; tool execution

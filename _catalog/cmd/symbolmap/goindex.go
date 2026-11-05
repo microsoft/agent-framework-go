@@ -61,6 +61,12 @@ func indexGo(root string, patterns []string, tags string) (goInventory, error) {
 	}
 	if len(patterns) == 0 {
 		patterns = []string{"./agent/...", "./message/...", "./tool/...", "./provider/...", "./workflow/..."}
+		// Older SDK checkouts have no root format directory.
+		if _, err := os.Stat(filepath.Join(dir, "format")); err == nil {
+			patterns = append(patterns, "./format/...")
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return goInventory{}, fmt.Errorf("inspect Go format package in %q: %w", dir, err)
+		}
 	}
 
 	// GONOPROXY must not let private modules bypass GOPROXY=off. Disable

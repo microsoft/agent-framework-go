@@ -18,31 +18,50 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/internal/otelx"
 	"github.com/microsoft/agent-framework-go/internal/slogx"
 	"github.com/microsoft/agent-framework-go/internal/toolmiddleware"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
-
-	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/trace"
 )
 
 const (
 	defaultMaximumConsecutiveErrorsPerRequest = 3
 	defaultMaximumIterationsPerRequest        = 40
-	opExecuteTool                             = "execute_tool"
 	pendingApprovalRequestsStateKey           = "toolautocall.pendingApprovalRequests"
 	pendingAutoApprovedCallsStateKey          = "toolautocall.pendingAutoApprovedCalls"
-
-	attrKeyOperationName = "gen_ai.operation.name"
-	attrKeyToolName      = "gen_ai.tool.name"
-	attrKeyToolCallID    = "gen_ai.tool.call.id"
-	attrKeyToolType      = "gen_ai.tool.type"
-	attrKeyToolDesc      = "gen_ai.tool.description"
-	attrKeyErrorType     = "error.type"
 )
+
+// Tracer instruments individual tool invocations without depending on a tracing
+// backend. Implementations must be safe for concurrent calls.
+type Tracer interface {
+	// StartToolCall begins tracing an invocation. The non-nil call and definition
+	// are read-only. Calls awaiting approval and tools that cannot be invoked are
+	// not traced.
+	//
+	// The returned context is passed to the tool. The returned completion
+	// function is called exactly once with the invocation's final error, or nil
+	// on success, after any tool panic has been recovered. Both return values
+	// must be non-nil.
+	StartToolCall(ctx context.Context, call *message.FunctionCallContent, definition tool.Tool) (context.Context, func(error))
+}
+
+type tracerContextKey struct{}
+
+type tracerContextValue struct {
+	tracer Tracer
+}
+
+// WithTracer returns a context that supplies tracer to automatic tool invocations.
+// A nil tracer disables context-provided tracing. [Config.Tracer] takes precedence
+// over the context-provided tracer.
+func WithTracer(ctx context.Context, tracer Tracer) context.Context {
+	return context.WithValue(ctx, tracerContextKey{}, tracerContextValue{tracer: tracer})
+}
+
+func tracerFromContext(ctx context.Context) Tracer {
+	value, _ := ctx.Value(tracerContextKey{}).(tracerContextValue)
+	return value.tracer
+}
 
 // Config configures the automatic tool invocation middleware.
 //
@@ -60,6 +79,11 @@ type Config struct {
 	// LogSensitiveData controls whether sensitive function arguments and results
 	// are included in logs. The default is false.
 	LogSensitiveData bool
+
+	// Tracer instruments tool invocations. It takes precedence over the tracer
+	// supplied through [WithTracer]. If nil, the context-provided tracer is used
+	// when available; otherwise tool invocations are not traced.
+	Tracer Tracer
 
 	// AdditionalTools are tools the middleware can invoke without adding them to
 	// provider requests. Request tools supplied through agent options take
@@ -118,6 +142,7 @@ type Config struct {
 
 type autocall struct {
 	logger                              slogx.Logger
+	tracer                              Tracer
 	additionalTools                     []tool.Tool
 	includeDetailedErrors               bool
 	terminateOnUnknownCalls             bool
@@ -149,6 +174,7 @@ func New(cfg Config) agent.Middleware {
 			Type:          slogx.TypeMiddleware,
 			Name:          "autocall",
 		},
+		tracer:                              cfg.Tracer,
 		additionalTools:                     cfg.AdditionalTools,
 		includeDetailedErrors:               cfg.IncludeDetailedErrors,
 		terminateOnUnknownCalls:             cfg.TerminateOnUnknownCalls,
@@ -168,18 +194,28 @@ func (f *autocall) Run(next agent.RunFunc, ctx context.Context, messages []*mess
 	}
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		var finalConversationID *string
-		response, err := agent.ResponseStream(f.run(next, ctx, messages, opts, &finalConversationID)).Collect()
-		if err != nil {
-			yield(nil, err)
-			return
+		var response agent.Response
+		var runErr error
+		for update, err := range f.run(next, ctx, messages, opts, &finalConversationID) {
+			response.Update(update)
+			if err != nil {
+				runErr = err
+				break
+			}
 		}
+		response.Coalesce()
 		// A completed non-streaming run uses the final provider response's ID,
 		// even when it is nil. Earlier tool rounds still contribute messages.
-		response.ConversationID = finalConversationID
+		if runErr == nil {
+			response.ConversationID = finalConversationID
+		}
 		for _, update := range response.ToUpdates() {
 			if !yield(update, nil) {
 				return
 			}
+		}
+		if runErr != nil {
+			yield(nil, runErr)
 		}
 	}
 }
@@ -282,10 +318,6 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			// Invoke approved approval responses, which generates some additional FRC wrapped in ChatMessage.
 			var newMsg *message.Message
 			newMsg, errCount, err = f.invokeApprovedToolApprovalResponses(ctx, notInvokedMsgs, tools, 0)
-			if err != nil {
-				yield(nil, err)
-				return
-			}
 			if newMsg != nil {
 				opts = updateOptionsForNextIteration(opts)
 				messages = slices.Insert(messages, approvedResultInsertIdx, newMsg)
@@ -297,6 +329,10 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 				if !yield(update, nil) {
 					return
 				}
+			}
+			if err != nil {
+				yield(nil, err)
+				return
 			}
 		}
 		// At this point, we've fully handled all approval responses that were part of the original messages,
@@ -413,16 +449,16 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			var newMsg *message.Message
 			var err error
 			newMsg, errCount, err = f.processFunctionCalls(ctx, tools, functionCallContents, errCount)
-			if err != nil {
-				yield(nil, err)
-				return
-			}
 
 			// Stream any generated function results. This mirrors what's done for ResponseAsync, where the returned messages
 			// includes all activities, including generated function results.
 			resultUpdate := convertToolResultMsgToUpdate(newMsg, toolMsgID)
 			resultUpdate.ConversationID = conversationID
 			if !yield(resultUpdate, nil) {
+				return
+			}
+			if err != nil {
+				yield(nil, err)
 				return
 			}
 
@@ -1119,12 +1155,7 @@ func (f *autocall) invokeApprovedToolApprovalResponses(ctx context.Context, appr
 	if len(funcCalls) == 0 {
 		return nil, errCount, nil
 	}
-	newMsg, errCount, err := f.processFunctionCalls(ctx, tools, funcCalls, errCount)
-	if err != nil {
-		return nil, errCount, err
-	}
-
-	return newMsg, errCount, nil
+	return f.processFunctionCalls(ctx, tools, funcCalls, errCount)
 }
 
 type functionInvocationStatus int
@@ -1133,6 +1164,7 @@ const (
 	functionInvocationStatusRanToCompletion functionInvocationStatus = iota
 	functionInvocationStatusNotFound
 	functionInvocationStatusException
+	functionInvocationStatusNotInvoked
 )
 
 type functionInvocationResult struct {
@@ -1151,6 +1183,7 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 	captureCurrentIterationErrors := errCount < f.maximumConsecutiveErrorsPerRequest
 	// Process all functions. If there's more than one and concurrent invocation is enabled, do so in parallel.
 	results := make([]functionInvocationResult, 0, len(funcCalls))
+	var runErr error
 	if len(funcCalls) > 1 && f.allowConcurrentInvocations {
 		// Rather than awaiting each function before invoking the next, invoke all of them
 		// and then await all of them. We avoid forcibly introducing parallelism via Task.Run,
@@ -1166,6 +1199,7 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 			}()
 		}
 		wg.Wait()
+		results = parallelResults
 		if err := ctx.Err(); err != nil {
 			var toolErrors []error
 			for _, result := range parallelResults {
@@ -1174,29 +1208,40 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 				}
 			}
 			if len(toolErrors) == 1 {
-				return nil, errCount, toolErrors[0]
+				runErr = toolErrors[0]
+			} else if len(toolErrors) > 1 {
+				runErr = errors.Join(toolErrors...)
+			} else {
+				runErr = err
 			}
-			if len(toolErrors) > 1 {
-				return nil, errCount, errors.Join(toolErrors...)
-			}
-			return nil, errCount, err
 		}
-		results = parallelResults
 	} else {
 		// Invoke each function serially.
 		for _, fc := range funcCalls {
 			result := f.processFunctionCall(ctx, tools, fc)
+			results = append(results, result)
 			// Request cancellation must bypass the recoverable tool-error path.
 			if err := ctx.Err(); err != nil {
 				if result.err != nil {
-					return nil, errCount, result.err
+					runErr = result.err
+				} else {
+					runErr = err
 				}
-				return nil, errCount, err
+				break
 			}
 			if !captureCurrentIterationErrors && result.status == functionInvocationStatusException {
-				return nil, errCount, result.err
+				runErr = result.err
+				break
 			}
-			results = append(results, result)
+		}
+	}
+	if len(results) < len(funcCalls) {
+		skippedErr := runErr
+		if err := ctx.Err(); err != nil {
+			skippedErr = err
+		}
+		for _, fc := range funcCalls[len(results):] {
+			results = append(results, functionInvocationResult{status: functionInvocationStatusNotInvoked, call: fc, err: skippedErr})
 		}
 	}
 	for _, result := range results {
@@ -1204,13 +1249,11 @@ func (f *autocall) processFunctionCalls(ctx context.Context, tools map[string]to
 	}
 
 	newMsg := f.createResponseMessage(results)
-	var err error
-	errCount, err = f.updateConsecutiveErrorCountOrThrow(ctx, newMsg, errCount)
-	if err != nil {
-		return nil, errCount, err
+	if runErr == nil {
+		errCount, runErr = f.updateConsecutiveErrorCountOrThrow(ctx, newMsg, errCount)
 	}
 
-	return newMsg, errCount, nil
+	return newMsg, errCount, runErr
 }
 
 func (f *autocall) updateConsecutiveErrorCountOrThrow(ctx context.Context, added *message.Message, errCount int) (int, error) {
@@ -1242,7 +1285,7 @@ func (f *autocall) updateConsecutiveErrorCountOrThrow(ctx context.Context, added
 
 func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]tool.SchemaTool, funcCall *message.FunctionCallContent) functionInvocationResult {
 	if err := ctx.Err(); err != nil {
-		return functionInvocationResult{status: functionInvocationStatusException, call: funcCall, err: err}
+		return functionInvocationResult{status: functionInvocationStatusNotInvoked, call: funcCall, err: err}
 	}
 	declaration, ok := tools[funcCall.Name]
 	if !ok {
@@ -1257,12 +1300,17 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	f.logger.Debug(ctx, "calling function", "funcName", funcCall.Name, slogx.SensitiveData("arguments", funcCall.Arguments))
 	start := time.Now()
 	ctx = agent.WithFuncCallID(ctx, funcCall.CallID)
-	ctx, span := startToolSpan(ctx, funcCall, declaration)
-	if span != nil {
-		defer span.End()
-	}
 	var result any
 	var err error
+	tracer := f.tracer
+	if tracer == nil {
+		tracer = tracerFromContext(ctx)
+	}
+	if tracer != nil {
+		var complete func(error)
+		ctx, complete = tracer.StartToolCall(ctx, funcCall, declaration)
+		defer func() { complete(err) }()
+	}
 	func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -1276,11 +1324,6 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 		result, err = tl.Call(ctx, funcCall.Arguments)
 	}()
 	if err != nil {
-		if span != nil {
-			span.SetAttributes(attribute.String(attrKeyErrorType, otelx.ErrorTypeName(err)))
-			span.RecordError(err, trace.WithTimestamp(time.Now()))
-			span.SetStatus(codes.Error, err.Error())
-		}
 		if errors.Is(err, context.Canceled) {
 			f.logger.Debug(ctx, "call canceled", "funcName", funcCall.Name)
 		} else {
@@ -1294,32 +1337,6 @@ func (f *autocall) processFunctionCall(ctx context.Context, tools map[string]too
 	}
 
 	return functionInvocationResult{status: functionInvocationStatusRanToCompletion, call: funcCall, result: result}
-}
-
-func startToolSpan(ctx context.Context, funcCall *message.FunctionCallContent, tl tool.Tool) (context.Context, trace.Span) {
-	tracer, ok := otelx.TracerFromContext(ctx)
-	if !ok || funcCall == nil {
-		return ctx, nil
-	}
-	name := opExecuteTool
-	if funcCall.Name != "" {
-		name += " " + funcCall.Name
-	}
-	attrs := []attribute.KeyValue{
-		attribute.String(attrKeyOperationName, opExecuteTool),
-		attribute.String(attrKeyToolName, funcCall.Name),
-		attribute.String(attrKeyToolCallID, cmp.Or(funcCall.CallID, "unknown")),
-		attribute.String(attrKeyToolType, "function"),
-	}
-	if tl != nil {
-		if desc := tl.Description(); desc != "" {
-			attrs = append(attrs, attribute.String(attrKeyToolDesc, desc))
-		}
-	}
-	// TODO: add gen_ai.tool.call.arguments and gen_ai.tool.call.result when an
-	// opt-in EnableSensitiveData flag is available on Config (parity with Python's
-	// get_function_span_attributes and .NET's OpenTelemetryAgent.EnableSensitiveData).
-	return tracer.Start(ctx, name, trace.WithAttributes(attrs...))
 }
 
 func (f *autocall) createResponseMessage(results []functionInvocationResult) *message.Message {
@@ -1353,6 +1370,11 @@ func (f *autocall) createFunctionResultContent(result functionInvocationResult) 
 		functionResult = fmt.Sprintf("Error: Requested function %q not found.", result.call.Name)
 	case functionInvocationStatusException:
 		functionResult = "Error: Function failed."
+		if f.includeDetailedErrors && result.err != nil {
+			functionResult = fmt.Sprintf("%s Exception: %v", functionResult, result.err)
+		}
+	case functionInvocationStatusNotInvoked:
+		functionResult = "Error: Function was not invoked."
 		if f.includeDetailedErrors && result.err != nil {
 			functionResult = fmt.Sprintf("%s Exception: %v", functionResult, result.err)
 		}

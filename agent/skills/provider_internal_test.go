@@ -4,9 +4,10 @@ package skills
 
 import (
 	"context"
-	"log/slog"
+	"encoding/json"
 	"strings"
 	"testing"
+	"testing/synctest"
 
 	"github.com/microsoft/agent-framework-go/agent"
 )
@@ -14,25 +15,32 @@ import (
 // Cache waiters retry the build path after an unsuccessful owner; that retry
 // must preserve the same panic-to-error behavior as the cache owner.
 func TestProvider_CacheWaiterBuildPanicIsReturnedAsError(t *testing.T) {
-	loading := make(chan struct{})
-	close(loading)
-	state := &providerState{
-		sources: []Source{SourceFunc(func(context.Context) ([]*Skill, error) {
-			panic("boom")
-		})},
-		logger: slog.New(slog.DiscardHandler),
-		caches: map[string]*providerCache{"": {loading: loading}},
-	}
-
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			t.Fatalf("cache waiter allowed source panic to escape: %v", recovered)
+	synctest.Test(t, func(t *testing.T) {
+		started := make(chan struct{}, 2)
+		release := make(chan struct{})
+		provider := NewContextProvider(ContextProviderOptions{
+			Sources: []Source{SourceFunc(func(context.Context, SourceContext) ([]*Skill, error) {
+				started <- struct{}{}
+				<-release
+				panic("boom")
+			})},
+		})
+		done := make(chan error, 2)
+		invoke := func() {
+			_, _, err := provider.Invoking(t.Context(), agent.InvokingContext{})
+			done <- err
 		}
-	}()
-	_, _, err := state.provide(context.Background(), agent.InvokingContext{})
-	if err == nil || !strings.Contains(err.Error(), "building skills context panicked: boom") {
-		t.Fatalf("provider error = %v, want recovered source panic", err)
-	}
+		go invoke()
+		<-started
+		go invoke()
+		synctest.Wait()
+		close(release)
+		for range 2 {
+			if err := <-done; err == nil || !strings.Contains(err.Error(), "building skills context panicked: boom") {
+				t.Fatalf("provider error = %v, want recovered source panic", err)
+			}
+		}
+	})
 }
 
 func fullLookupSkill() *Skill {
@@ -103,6 +111,17 @@ func TestProvidedCodeDefinedSkill_NoScripts_ReturnsNotFound(t *testing.T) {
 	}
 }
 
+func TestInlineSkill_WithoutAddedScripts_HasNilCollection(t *testing.T) {
+	skill := &Skill{
+		Frontmatter: Frontmatter{Name: "my-skill", Description: "A valid skill."},
+		GetContent:  func(context.Context) (string, error) { return "Instructions.", nil },
+	}
+
+	if scripts := skill.Scripts; scripts != nil {
+		t.Fatalf("Scripts = %#v, want nil when no scripts were added", scripts)
+	}
+}
+
 func TestProvidedInlineSkill_WithoutAddedScripts_ReturnsNotFound(t *testing.T) {
 	skill := newProvidedSkill(&Skill{
 		Frontmatter: Frontmatter{Name: "my-skill", Description: "A valid skill."},
@@ -158,8 +177,8 @@ func TestProvidedInlineSkill_ExistingScript_ReturnsDescriptor(t *testing.T) {
 		Frontmatter: Frontmatter{Name: "my-skill", Description: "A valid skill."},
 		GetContent:  func(context.Context) (string, error) { return "Instructions.", nil },
 		Scripts: []Script{
-			{Name: "s1", Run: func(context.Context, *Skill, []string) (any, error) { return "first", nil }},
-			{Name: "s2", Run: func(context.Context, *Skill, []string) (any, error) { return "second", nil }},
+			{Name: "s1", Run: func(context.Context, *Skill, json.RawMessage) (any, error) { return "first", nil }},
+			{Name: "s2", Run: func(context.Context, *Skill, json.RawMessage) (any, error) { return "second", nil }},
 		},
 	})
 
@@ -173,7 +192,7 @@ func TestProvidedInlineSkill_MissingScript_ReturnsNotFound(t *testing.T) {
 	skill := newProvidedSkill(&Skill{
 		Frontmatter: Frontmatter{Name: "my-skill", Description: "A valid skill."},
 		GetContent:  func(context.Context) (string, error) { return "Instructions.", nil },
-		Scripts:     []Script{{Name: "s1", Run: func(context.Context, *Skill, []string) (any, error) { return "ok", nil }}},
+		Scripts:     []Script{{Name: "s1", Run: func(context.Context, *Skill, json.RawMessage) (any, error) { return "ok", nil }}},
 	})
 
 	if script, ok := skill.lookupScript("missing"); ok {

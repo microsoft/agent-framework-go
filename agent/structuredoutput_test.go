@@ -16,8 +16,9 @@ import (
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	responseformat "github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -225,14 +226,14 @@ func newAbstractionStructuredOutputAgent(t *testing.T, responseJSON string) (*ag
 	t.Helper()
 	var capturedSchema *jsonschema.Schema
 	a := newStructuredOutputTestAgent(
-		func(value any) (agent.ResponseFormat, error) {
+		func(value any) (responseformat.ResponseFormat, error) {
 			format, err := jsonformat.ForType(reflect.TypeOf(value))
 			if err != nil {
-				return agent.ResponseFormat{}, err
+				return responseformat.ResponseFormat{}, err
 			}
 			return jsonformat.WrapNonObjectSchema(format)
 		},
-		func(responseFormat agent.ResponseFormat, data []byte, value any) error {
+		func(responseFormat responseformat.ResponseFormat, data []byte, value any) error {
 			format, err := jsonformat.FromResponseFormat(responseFormat)
 			if err != nil {
 				return err
@@ -257,10 +258,10 @@ func newAbstractionStructuredOutputAgent(t *testing.T, responseJSON string) (*ag
 func TestAgent_StructuredOutput_NoStructuredOutputOption(t *testing.T) {
 	baseCalled := false
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{Kind: "json"}, nil
+		func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{Kind: "json"}, nil
 		},
-		func(format agent.ResponseFormat, data []byte, v any) error {
+		func(format responseformat.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -284,10 +285,10 @@ func TestAgent_StructuredOutput_NoStructuredOutputOption(t *testing.T) {
 func TestAgent_StructuredOutput_NilStructuredOutputOption(t *testing.T) {
 	baseCalled := false
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{Kind: "json"}, nil
+		func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{Kind: "json"}, nil
 		},
-		func(format agent.ResponseFormat, data []byte, v any) error {
+		func(format responseformat.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -311,7 +312,7 @@ func TestAgent_StructuredOutput_NilStructuredOutputOption(t *testing.T) {
 func TestAgent_StructuredOutput_MissingFormat(t *testing.T) {
 	a := newStructuredOutputTestAgent(
 		nil,
-		func(format agent.ResponseFormat, data []byte, v any) error {
+		func(format responseformat.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -331,8 +332,8 @@ func TestAgent_StructuredOutput_MissingFormat(t *testing.T) {
 
 func TestAgent_StructuredOutput_MissingUnmarshal(t *testing.T) {
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{Kind: "json"}, nil
+		func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{Kind: "json"}, nil
 		},
 		nil,
 		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -353,10 +354,10 @@ func TestAgent_StructuredOutput_MissingUnmarshal(t *testing.T) {
 func TestAgent_StructuredOutput_FormatError(t *testing.T) {
 	expectedErr := errors.New("format creation failed")
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{}, expectedErr
+		func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{}, expectedErr
 		},
-		func(format agent.ResponseFormat, data []byte, v any) error {
+		func(format responseformat.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -373,14 +374,14 @@ func TestAgent_StructuredOutput_FormatError(t *testing.T) {
 
 func TestAgent_StructuredOutput_CustomFormat(t *testing.T) {
 	type schema struct{ Unit string }
-	format := agent.ResponseFormat{Kind: "number", Name: "plain", Schema: schema{Unit: "integer"}}
+	format := responseformat.ResponseFormat{Kind: "number", Name: "plain", Schema: schema{Unit: "integer"}}
 	var formatCalls, unmarshalCalls int
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
+		func(v any) (responseformat.ResponseFormat, error) {
 			formatCalls++
 			return format, nil
 		},
-		func(got agent.ResponseFormat, data []byte, v any) error {
+		func(got responseformat.ResponseFormat, data []byte, v any) error {
 			unmarshalCalls++
 			if got != format {
 				return errors.New("structured output format was changed")
@@ -418,10 +419,10 @@ func TestAgent_StructuredOutput_CustomFormat(t *testing.T) {
 
 func TestAgent_StructuredOutput_SuccessfulUnmarshal(t *testing.T) {
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{Kind: "json"}, nil
+		func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{Kind: "json"}, nil
 		},
-		func(format agent.ResponseFormat, data []byte, v any) error {
+		func(format responseformat.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -468,10 +469,10 @@ func TestAgent_StructuredOutput_SuccessfulUnmarshal(t *testing.T) {
 
 func TestAgent_StructuredOutput_DoesNotMutateInputOptions(t *testing.T) {
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{Kind: "json"}, nil
+		func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{Kind: "json"}, nil
 		},
-		func(format agent.ResponseFormat, data []byte, v any) error {
+		func(format responseformat.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -499,10 +500,10 @@ func TestAgent_StructuredOutput_DoesNotMutateInputOptions(t *testing.T) {
 
 func TestAgent_StructuredOutput_UsesLastMessageOnly(t *testing.T) {
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{Kind: "json"}, nil
+		func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{Kind: "json"}, nil
 		},
-		func(format agent.ResponseFormat, data []byte, v any) error {
+		func(format responseformat.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -549,10 +550,10 @@ func TestAgent_StructuredOutput_NewMessageChunksNotMistakenForDifferentMessage(t
 	// boundary, stale key values from the previous message would cause isDifferent to
 	// return true mid-message, clearing data and breaking JSON unmarshalling.
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{Kind: "json"}, nil
+		func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{Kind: "json"}, nil
 		},
-		func(format agent.ResponseFormat, data []byte, v any) error {
+		func(format responseformat.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -599,10 +600,10 @@ func TestAgent_StructuredOutput_NewMessageChunksNotMistakenForDifferentMessage(t
 func TestAgent_StructuredOutput_UnmarshalError(t *testing.T) {
 	expectedErr := errors.New("unmarshal failed")
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{Kind: "json"}, nil
+		func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{Kind: "json"}, nil
 		},
-		func(format agent.ResponseFormat, data []byte, v any) error {
+		func(format responseformat.ResponseFormat, data []byte, v any) error {
 			return expectedErr
 		},
 		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -620,10 +621,10 @@ func TestAgent_StructuredOutput_UnmarshalError(t *testing.T) {
 func TestAgent_StructuredOutput_BaseErrorPropagation(t *testing.T) {
 	expectedErr := errors.New("base function error")
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{Kind: "json"}, nil
+		func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{Kind: "json"}, nil
 		},
-		func(format agent.ResponseFormat, data []byte, v any) error {
+		func(format responseformat.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -640,10 +641,10 @@ func TestAgent_StructuredOutput_BaseErrorPropagation(t *testing.T) {
 
 func TestAgent_StructuredOutput_SkipsNilUpdates(t *testing.T) {
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{Kind: "json"}, nil
+		func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{Kind: "json"}, nil
 		},
-		func(format agent.ResponseFormat, data []byte, v any) error {
+		func(format responseformat.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -681,10 +682,10 @@ func TestAgent_StructuredOutput_ComplexStructure(t *testing.T) {
 	}
 
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{Kind: "json"}, nil
+		func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{Kind: "json"}, nil
 		},
-		func(format agent.ResponseFormat, data []byte, v any) error {
+		func(format responseformat.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -717,10 +718,10 @@ func TestAgent_StructuredOutput_ComplexStructure(t *testing.T) {
 
 func TestAgent_StructuredOutput_EmptyResponse(t *testing.T) {
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{Kind: "json"}, nil
+		func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{Kind: "json"}, nil
 		},
-		func(format agent.ResponseFormat, data []byte, v any) error {
+		func(format responseformat.ResponseFormat, data []byte, v any) error {
 			if len(data) == 0 {
 				return errors.New("empty data")
 			}
@@ -743,10 +744,10 @@ func TestAgent_StructuredOutput_EmptyResponse(t *testing.T) {
 
 func TestAgent_StructuredOutput_MultipleContentTypes(t *testing.T) {
 	a := newStructuredOutputTestAgent(
-		func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{Kind: "json"}, nil
+		func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{Kind: "json"}, nil
 		},
-		func(format agent.ResponseFormat, data []byte, v any) error {
+		func(format responseformat.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 		func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
@@ -787,10 +788,10 @@ func TestAgent_StructuredOutput_StoresAssistantMessages(t *testing.T) {
 		Run: func(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 			return singleStructuredOutputTestUpdate(`{"name":"Ivy"}`)
 		},
-		Format: func(v any) (agent.ResponseFormat, error) {
-			return agent.ResponseFormat{Kind: "json"}, nil
+		Format: func(v any) (responseformat.ResponseFormat, error) {
+			return responseformat.ResponseFormat{Kind: "json"}, nil
 		},
-		Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
+		Unmarshal: func(format responseformat.ResponseFormat, data []byte, v any) error {
 			return json.Unmarshal(data, v)
 		},
 	}, agent.Config{ID: "structured-output-store-agent", HistoryProvider: historyProvider})
@@ -904,11 +905,11 @@ func TestAgent_StructuredOutput_WithAutomaticTools(t *testing.T) {
 							AllowConcurrentInvocations:         tc.concurrent,
 							MaximumConsecutiveErrorsPerRequest: new(0),
 						})},
-						Format: func(v any) (agent.ResponseFormat, error) {
+						Format: func(v any) (responseformat.ResponseFormat, error) {
 							formatCalls++
 							return jsonformat.ForType(reflect.TypeOf(v))
 						},
-						Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
+						Unmarshal: func(format responseformat.ResponseFormat, data []byte, v any) error {
 							unmarshalCalls++
 							f, err := jsonformat.FromResponseFormat(format)
 							if err != nil {
@@ -1066,15 +1067,15 @@ func TestAgent_StructuredOutput_WithMessageInjection(t *testing.T) {
 									}
 								}
 							},
-							Format: func(v any) (agent.ResponseFormat, error) {
+							Format: func(v any) (responseformat.ResponseFormat, error) {
 								formatCalls++
 								format, err := jsonformat.ForType(reflect.TypeOf(v))
 								if err != nil {
-									return agent.ResponseFormat{}, err
+									return responseformat.ResponseFormat{}, err
 								}
 								return jsonformat.WrapNonObjectSchema(format)
 							},
-							Unmarshal: func(format agent.ResponseFormat, data []byte, v any) error {
+							Unmarshal: func(format responseformat.ResponseFormat, data []byte, v any) error {
 								unmarshalCalls++
 								f, err := jsonformat.FromResponseFormat(format)
 								if err != nil {
@@ -1161,7 +1162,7 @@ func TestAgent_StructuredOutput_MessageInjectionWithoutOutput(t *testing.T) {
 	}
 }
 
-func newStructuredOutputTestAgent(format func(any) (agent.ResponseFormat, error), unmarshal func(agent.ResponseFormat, []byte, any) error, run agent.RunFunc) *agent.Agent {
+func newStructuredOutputTestAgent(format func(any) (responseformat.ResponseFormat, error), unmarshal func(responseformat.ResponseFormat, []byte, any) error, run agent.RunFunc) *agent.Agent {
 	return agent.New(agent.ProviderConfig{
 		Run:       run,
 		Format:    format,

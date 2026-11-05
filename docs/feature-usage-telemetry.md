@@ -95,7 +95,7 @@ These switches do not configure OpenTelemetry or change service telemetry.
 | 4 | `core.chat_history_memory_provider` | Automatic retrieval or on-demand search-tool provisioning |
 | 5 | `core.file_memory_provider` | File-memory context provider participation |
 | 6 | `core.text_search_provider` | Automatic search or on-demand search-tool provisioning |
-| 8 | `core.skills_provider` | Skills context provider participation |
+| 8 | `core.skills_provider` | Nonempty skills provided after filtering |
 | 9 | `core.compaction_provider` | Compaction context/history provider participation |
 | 10 | `core.todo_provider` | Todo context provider participation |
 | 11 | `core.agent_mode_provider` | Agent-mode context provider participation |

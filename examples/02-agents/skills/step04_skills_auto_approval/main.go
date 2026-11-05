@@ -1,12 +1,14 @@
 // Copyright (c) Microsoft. All rights reserved.
 
-// This sample demonstrates how to auto-approve Agent Skills tool calls with
-// reusable helper rules from the skills package.
+// This sample auto-approves read-only skill tools and prompts before scripts run.
+// Approval responses resume the same session, including when a call is rejected.
 
 package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
@@ -53,7 +55,13 @@ var unitConverterSkill = &skills.Skill{
 		{
 			Name:        "convert",
 			Description: "Multiplies a value by a conversion factor and returns the result as JSON.",
-			Run: func(_ context.Context, _ *skills.Skill, args []string) (any, error) {
+			Run: func(_ context.Context, _ *skills.Skill, rawScriptArguments json.RawMessage) (any, error) {
+				var args []string
+				if len(rawScriptArguments) != 0 {
+					if err := json.Unmarshal(rawScriptArguments, &args); err != nil {
+						return nil, err
+					}
+				}
 				value, err := skillhelpers.NumberArg(args, 0)
 				if err != nil {
 					return nil, err
@@ -70,21 +78,33 @@ var unitConverterSkill = &skills.Skill{
 
 var logger = demo.NewLogger(
 	"Skills Auto Approval",
-	"Uses skills.AllToolsAutoApprovalRule to auto-approve skill tool calls, including script execution. Only use with trusted skills and scripts.",
+	"Auto-approves loading skills and reading resources; script execution requires explicit approval.",
 	"Model", demo.FoundryModel,
 )
 
 func main() {
+	if err := run(context.Background()); err != nil {
+		demo.Panic(err)
+	}
+}
+
+func skillsAgentConfig(provider *skills.ContextProvider) agent.Config {
+	return agent.Config{
+		Name: "UnitConverterAutoApprovalAgent",
+		Middlewares: []agent.Middleware{logger, toolapproval.New(toolapproval.Config{
+			AutoApprovalRules: []toolapproval.AutoApprovalRule{skills.ReadOnlyToolsAutoApprovalRule},
+		})},
+		ContextProviders: []agent.ContextProvider{provider},
+	}
+}
+
+func run(ctx context.Context) (err error) {
 	token := demo.FoundryTokenCredential()
 
 	skillsProvider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Skills: []*skills.Skill{unitConverterSkill},
 	})
-	approvalMiddleware := toolapproval.New(toolapproval.Config{
-		AutoApprovalRules: []toolapproval.AutoApprovalRule{
-			skills.AllToolsAutoApprovalRule,
-		},
-	})
+	defer func() { err = errors.Join(err, skillsProvider.Close()) }()
 
 	unitConverterAgent := foundryprovider.NewAgent(
 		demo.FoundryProjectEndpoint,
@@ -92,17 +112,20 @@ func main() {
 		foundryprovider.ModelDeployment(demo.FoundryModel),
 		foundryprovider.AgentConfig{
 			Instructions: "You are a helpful assistant that can convert units.",
-			Config: agent.Config{
-				Name:             "UnitConverterAutoApprovalAgent",
-				Middlewares:      []agent.Middleware{logger, approvalMiddleware},
-				ContextProviders: []agent.ContextProvider{skillsProvider},
-			},
+			Config:       skillsAgentConfig(skillsProvider),
 		},
 	)
 
-	response, err := unitConverterAgent.RunText(
-		context.Background(),
+	session, err := unitConverterAgent.CreateSession(ctx)
+	if err != nil {
+		return err
+	}
+	response, err := skillhelpers.RunWithApprovals(ctx, unitConverterAgent, session,
 		"How many kilometers is a marathon (26.2 miles)? And how many pounds is 75 kilograms?",
-	).Collect()
-	demo.Response(response, err)
+		demo.UserInputRequest)
+	if err != nil {
+		return err
+	}
+	demo.Response(response, nil)
+	return nil
 }

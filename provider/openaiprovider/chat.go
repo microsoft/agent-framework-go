@@ -15,8 +15,9 @@ import (
 	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/internal/modelcall"
 	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
@@ -107,15 +108,15 @@ func NewChatCompletionsAgent(oclient openai.Client, config AgentConfig) *agent.A
 	}, config.Config)
 }
 
-func (a *chatClient) formatOf(v any) (agent.ResponseFormat, error) {
-	format, err := jsonformat.ForType(reflect.TypeOf(v))
+func (a *chatClient) formatOf(v any) (format.ResponseFormat, error) {
+	responseFormat, err := jsonformat.ForType(reflect.TypeOf(v))
 	if err != nil {
-		return agent.ResponseFormat{}, err
+		return format.ResponseFormat{}, err
 	}
-	return jsonformat.WrapNonObjectSchema(format)
+	return jsonformat.WrapNonObjectSchema(responseFormat)
 }
 
-func (a *chatClient) unmarshal(format agent.ResponseFormat, data []byte, v any) error {
+func (a *chatClient) unmarshal(format format.ResponseFormat, data []byte, v any) error {
 	jsonFormat, err := jsonformat.FromResponseFormat(format)
 	if err != nil {
 		return err
@@ -197,23 +198,17 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		stream := a.client.Chat.Completions.NewStreaming(ctx, body, telemetryOption)
 		defer func() { _ = stream.Close() }()
 		var acc openai.ChatCompletionAccumulator
+		var created int64
 		for stream.Next() {
 			chunk := stream.Current()
 			modelcall.RecordResponse(ctx, chunk.Model, chunk.ID)
 			if !acc.AddChunk(chunk) {
 				continue
 			}
+			if created <= 0 && chunk.Created > 0 {
+				created = chunk.Created
+			}
 			var contents []message.Content
-			if tc, ok := acc.JustFinishedToolCall(); ok {
-				contents = append(contents, &message.FunctionCallContent{
-					CallID:    tc.ID,
-					Name:      tc.Name,
-					Arguments: tc.Arguments,
-				})
-			}
-			if refusal, ok := acc.JustFinishedRefusal(); ok {
-				contents = append(contents, &message.ErrorContent{Message: refusal, ErrorCode: "Refusal"})
-			}
 			role := message.RoleAssistant
 			if len(chunk.Choices) > 0 {
 				choice := chunk.Choices[0]
@@ -242,8 +237,34 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				return
 			}
 		}
-		if stream.Err() != nil {
-			yield(nil, stream.Err())
+		if err := stream.Err(); err != nil {
+			yield(nil, err)
+			return
+		}
+		if len(acc.Choices) == 0 {
+			return
+		}
+		choice := acc.Choices[0]
+		var contents []message.Content
+		for _, tc := range choice.Message.ToolCalls {
+			contents = append(contents, &message.FunctionCallContent{
+				CallID:    tc.ID,
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			})
+		}
+		if choice.Message.Refusal != "" {
+			contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal, ErrorCode: "Refusal"})
+		}
+		if len(contents) > 0 {
+			yield(&agent.ResponseUpdate{
+				Contents:     contents,
+				Role:         mapRole(string(choice.Message.Role)),
+				ResponseID:   acc.ID,
+				MessageID:    acc.ID,
+				FinishReason: normalizeChatFinishReason(choice.FinishReason),
+				CreatedAt:    time.Unix(created, 0),
+			}, nil)
 		}
 	}
 }

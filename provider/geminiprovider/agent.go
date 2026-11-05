@@ -19,8 +19,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/internal/modelcall"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -83,15 +84,15 @@ func NewAgent(gclient *genai.Client, config AgentConfig) *agent.Agent {
 	}, config.Config)
 }
 
-func (a *client) formatOf(v any) (agent.ResponseFormat, error) {
-	format, err := jsonformat.ForType(reflect.TypeOf(v))
+func (a *client) formatOf(v any) (format.ResponseFormat, error) {
+	responseFormat, err := jsonformat.ForType(reflect.TypeOf(v))
 	if err != nil {
-		return agent.ResponseFormat{}, err
+		return format.ResponseFormat{}, err
 	}
-	return jsonformat.WrapNonObjectSchema(format)
+	return jsonformat.WrapNonObjectSchema(responseFormat)
 }
 
-func (a *client) unmarshal(f agent.ResponseFormat, data []byte, v any) error {
+func (a *client) unmarshal(f format.ResponseFormat, data []byte, v any) error {
 	format, err := jsonformat.FromResponseFormat(f)
 	if err != nil {
 		return err

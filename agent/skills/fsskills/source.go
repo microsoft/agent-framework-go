@@ -4,6 +4,7 @@ package fsskills
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -112,7 +113,8 @@ type SourceOptions struct {
 	AllowedScriptExtensions []string
 
 	// ScriptRunner executes discovered file-backed scripts. When nil, scripts are
-	// still discovered but return an error if run.
+	// still discovered but return an error if run. Arguments are raw JSON;
+	// the default file-script schema describes a positional string array.
 	ScriptRunner skills.ScriptRunner
 
 	// Logger is used for discovery diagnostics. When nil, a discard logger is
@@ -190,7 +192,7 @@ func NewSourceOptions(opts SourceOptions, filesystems ...fs.FS) *Source {
 
 // Skills discovers and loads valid skills from the configured filesystems.
 // Each skill retains the instruction text read during discovery.
-func (s *Source) Skills(ctx context.Context) ([]*skills.Skill, error) {
+func (s *Source) Skills(ctx context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
 	telemetry.MarkUsed(telemetry.FeatureFileSkillsSource)
 	directories := discoverSkillDirectories(s.filesystems, s.logger)
 	s.logger.Info("Discovered potential skills", "count", len(directories))
@@ -716,8 +718,8 @@ func newScript(name string, fsys fs.FS, scope skillPathScope, runner skills.Scri
 	}
 }
 
-func newFileScriptRunFunc(name string, scope skillPathScope, runner skills.ScriptRunner, additionalProperties map[string]any) func(context.Context, *skills.Skill, []string) (any, error) {
-	return func(ctx context.Context, owner *skills.Skill, arguments []string) (any, error) {
+func newFileScriptRunFunc(name string, scope skillPathScope, runner skills.ScriptRunner, additionalProperties map[string]any) func(context.Context, *skills.Skill, json.RawMessage) (any, error) {
+	return func(ctx context.Context, owner *skills.Skill, arguments json.RawMessage) (any, error) {
 		if err := requireFileSkill(name, owner); err != nil {
 			return nil, err
 		}

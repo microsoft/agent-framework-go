@@ -197,6 +197,41 @@ func TestCustomModes_SetModeValidatesAgainstList(t *testing.T) {
 	}
 }
 
+func TestRestoredUnconfiguredModeFallsBackToDefault(t *testing.T) {
+	v1 := agentmode.New(agentmode.Config{
+		Modes: []agentmode.Mode{
+			{Name: "draft", Instructions: "Draft instructions."},
+			{Name: "review", Instructions: "Review instructions."},
+		},
+	})
+	opts := sessionOpts()
+	session := mustSession(t, opts)
+	if err := v1.SetMode(session, "review", false); err != nil {
+		t.Fatal(err)
+	}
+
+	v2 := agentmode.New(agentmode.Config{
+		Modes: []agentmode.Mode{
+			{Name: "draft", Instructions: "Draft instructions."},
+			{Name: "publish", Instructions: "Publish instructions."},
+		},
+	})
+	if mode := v2.Mode(session); mode != "draft" {
+		t.Fatalf("expected fallback to 'draft', got %q", mode)
+	}
+
+	ctx := context.Background()
+	msgs, _, err := invokeProvider(v2, ctx, newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range msgs {
+		if strings.Contains(m.Contents.Text(), "Mode changed") {
+			t.Errorf("unexpected mode change notification: %q", m.Contents.Text())
+		}
+	}
+}
+
 // 5. Options_CustomDefaultMode_IsUsed
 func TestCustomDefaultMode_IsUsed(t *testing.T) {
 	p := agentmode.New(agentmode.Config{

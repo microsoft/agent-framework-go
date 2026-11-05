@@ -28,6 +28,30 @@ const (
 	featureUserAgentEnvVar           = "AGENT_FRAMEWORK_TEST_USER_AGENT"
 )
 
+type typeNameError struct{}
+
+func (typeNameError) Error() string { return "test error" }
+
+func TestErrorTypeName(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "nil", want: "<nil>"},
+		{name: "value", err: typeNameError{}, want: "typeNameError"},
+		{name: "pointer", err: &typeNameError{}, want: "typeNameError"},
+		{name: "typed nil", err: (*typeNameError)(nil), want: "typeNameError"},
+		{name: "wrapped", err: fmt.Errorf("wrapped: %w", typeNameError{}), want: "wrapError"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := telemetry.ErrorTypeName(tc.err); got != tc.want {
+				t.Errorf("ErrorTypeName(%T) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestVersionHasLeadingV(t *testing.T) {
 	got := runHelper(t, "user-agent", foundryHostingEnvVar+"=", userAgentTelemetryDisabledEnvVar+"=")
 	if !strings.HasPrefix(got, "agent-framework-go/v") {

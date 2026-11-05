@@ -13,7 +13,8 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/microsoft/agent-framework-go/agent"
-	"github.com/microsoft/agent-framework-go/agent/format/jsonformat"
+	responseformat "github.com/microsoft/agent-framework-go/format"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/microsoft/agent-framework-go/tool"
@@ -540,7 +541,7 @@ type e2eFoundryCityInfo struct {
 	Name string `json:"name"`
 }
 
-func e2eFoundryCityFormat(t *testing.T) agent.ResponseFormat {
+func e2eFoundryCityFormat(t *testing.T) responseformat.ResponseFormat {
 	t.Helper()
 	format, err := jsonformat.ForType(reflect.TypeFor[e2eFoundryCityInfo]())
 	if err != nil {

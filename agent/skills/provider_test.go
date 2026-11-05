@@ -4,8 +4,11 @@ package skills_test
 
 import (
 	"context"
+	"encoding/json"
 	"encoding/xml"
 	"errors"
+	"fmt"
+	"iter"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,9 +17,11 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/fstest"
 	"testing/synctest"
 	"time"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
 	"github.com/microsoft/agent-framework-go/agent/skills"
@@ -75,7 +80,7 @@ func invokeProvider(provider agent.ContextProvider, ctx context.Context, message
 	return provider.Invoking(ctx, agent.InvokingContext{Messages: messages, Options: options})
 }
 
-func (s *countingSource) Skills(context.Context) ([]*skills.Skill, error) {
+func (s *countingSource) Skills(_ context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
 	s.count++
 	return s.skills, nil
 }
@@ -86,7 +91,7 @@ type panicOnceSource struct {
 	skill    *skills.Skill
 }
 
-func (s *panicOnceSource) Skills(context.Context) ([]*skills.Skill, error) {
+func (s *panicOnceSource) Skills(_ context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if !s.panicked {
@@ -104,7 +109,7 @@ type blockingSource struct {
 	skill       *skills.Skill
 }
 
-func (s *blockingSource) Skills(ctx context.Context) ([]*skills.Skill, error) {
+func (s *blockingSource) Skills(ctx context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
 	s.startedOnce.Do(func() { close(s.started) })
 	select {
 	case <-s.release:
@@ -182,7 +187,7 @@ func TestProvider_FromFileSourceWithOptions_DiscoversSkills(t *testing.T) {
 			createSkillDir(t, root, "opts-skill", "Options skill", "Options body.")
 			provider := providerFromFileSource(
 				fsskills.NewSourceOptions(fsskills.SourceOptions{
-					ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+					ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 						return nil, nil
 					},
 				}, os.DirFS(root)),
@@ -211,7 +216,7 @@ func TestProvider_FromFileSourceWithMultipleFileSystems_DiscoversMultipleSkills(
 			createSkillDir(t, filepath.Join(root, "multi-opts-2"), "skill-y", "Skill Y", "Body Y.")
 			provider := providerFromFileSource(
 				fsskills.NewSourceOptions(fsskills.SourceOptions{
-					ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+					ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 						return nil, nil
 					},
 				}, os.DirFS(filepath.Join(root, "multi-opts-1")), os.DirFS(filepath.Join(root, "multi-opts-2"))),
@@ -231,7 +236,7 @@ func TestProvider_DefaultApproval_RequiresAllSkillTools(t *testing.T) {
 	createSkillDir(t, root, "approval-skill", "Approval test", "Body.")
 	createRelativeFile(t, filepath.Join(root, "approval-skill"), "docs/readme.md", "hello")
 	createRelativeFile(t, filepath.Join(root, "approval-skill"), "scripts/run.py", "print('hello')")
-	provider := newProviderWithConfig(t, &fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+	provider := newProviderWithConfig(t, &fsskills.SourceOptions{ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 		return "ok", nil
 	}}, nil, root)
 
@@ -333,7 +338,7 @@ func TestProvider_AllToolsAutoApprovalRule(t *testing.T) {
 	}
 }
 
-func TestProvider_MultipleInvocations_ToolsAreSharedWhenCached(t *testing.T) {
+func TestProvider_MultipleInvocations_ToolsAreScopedWhenSourceCached(t *testing.T) {
 	root := t.TempDir()
 	createSkillDir(t, root, "cached-tools-skill", "Cached tools test", "Body.")
 	provider := newProvider(t, root)
@@ -342,8 +347,8 @@ func TestProvider_MultipleInvocations_ToolsAreSharedWhenCached(t *testing.T) {
 	_, tools2 := captureProviderContext(t, provider)
 	ptr1 := funcToolPointer(t, findTool(t, tools1, "load_skill"))
 	ptr2 := funcToolPointer(t, findTool(t, tools2, "load_skill"))
-	if ptr1 != ptr2 {
-		t.Fatal("expected cached provider to reuse the same tool instance")
+	if ptr1 == ptr2 {
+		t.Fatal("expected each invocation to assemble its own tools from cached skills")
 	}
 }
 
@@ -425,10 +430,10 @@ func TestProvider_CacheIsolationKey_LoadsEachBucketOnce(t *testing.T) {
 	source := &countingSource{skills: []*skills.Skill{skill}}
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Sources: []skills.Source{source},
-		CacheIsolationKeySelector: func(ctx context.Context, invoking agent.InvokingContext) *string {
+		CacheIsolationKeySelector: func(ctx context.Context, sourceContext skills.SourceContext) *string {
 			key, _ := ctx.Value(tenantContextKey{}).(string)
-			if len(invoking.Messages) > 0 {
-				key += ":with-messages"
+			if sourceContext.Session != nil {
+				key += ":with-session"
 			}
 			return &key
 		},
@@ -438,9 +443,13 @@ func TestProvider_CacheIsolationKey_LoadsEachBucketOnce(t *testing.T) {
 		ctx := context.WithValue(t.Context(), tenantContextKey{}, tenant)
 		_, _, _ = invokeProvider(provider, ctx, nil)
 		_, _, _ = invokeProvider(provider, ctx, nil)
-		messages := []*message.Message{message.NewText("request")}
-		_, _, _ = invokeProvider(provider, ctx, messages)
-		_, _, _ = invokeProvider(provider, ctx, messages)
+		session := agenttest.CreateSession()
+		if _, _, err := invokeProvider(provider, ctx, nil, agent.WithSession(session)); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := invokeProvider(provider, ctx, nil, agent.WithSession(session)); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if source.count != 4 {
@@ -682,7 +691,13 @@ func TestProvider_WithScripts_ExposesRunSkillScriptTool(t *testing.T) {
 
 	runnerCalled := false
 	provider := newProviderWithConfig(t, &fsskills.SourceOptions{
-		ScriptRunner: func(_ context.Context, skill *skills.Skill, script *skills.Script, arguments []string) (any, error) {
+		ScriptRunner: func(_ context.Context, skill *skills.Skill, script *skills.Script, rawScriptArguments json.RawMessage) (any, error) {
+			var arguments []string
+			if len(rawScriptArguments) != 0 {
+				if err := json.Unmarshal(rawScriptArguments, &arguments); err != nil {
+					return nil, err
+				}
+			}
 			runnerCalled = true
 			if skill.Frontmatter.Name != "script-skill" {
 				t.Fatalf("expected script-skill, got %q", skill.Frontmatter.Name)
@@ -719,7 +734,7 @@ func TestProvider_RunSkillScript_RequiresExactName(t *testing.T) {
 	createRelativeFile(t, filepath.Join(root, "script-skill"), "scripts/run.py", "print('ok')")
 
 	provider := newProviderWithConfig(t, &fsskills.SourceOptions{
-		ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ []string) (any, error) {
+		ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ json.RawMessage) (any, error) {
 			t.Fatal("did not expect script runner to be called")
 			return nil, nil
 		},
@@ -747,7 +762,7 @@ func TestProvider_SkillMemberLookupErrors(t *testing.T) {
 		[]skills.Resource{{Name: "docs/readme.md", Read: func(context.Context) (any, error) {
 			return "docs", nil
 		}}},
-		[]skills.Script{{Name: "scripts/run", Run: func(context.Context, *skills.Skill, []string) (any, error) {
+		[]skills.Script{{Name: "scripts/run", Run: func(context.Context, *skills.Skill, json.RawMessage) (any, error) {
 			return "ok", nil
 		}}},
 	)
@@ -807,7 +822,7 @@ func TestProvider_RunSkillScript_PropagatesErrorByDefault(t *testing.T) {
 		nil,
 		[]skills.Script{{
 			Name: "explode",
-			Run: func(context.Context, *skills.Skill, []string) (any, error) {
+			Run: func(context.Context, *skills.Skill, json.RawMessage) (any, error) {
 				return nil, wantErr
 			},
 		}},
@@ -858,7 +873,7 @@ func TestProvider_RunSkillScript_IncludesDetailsWhenEnabled(t *testing.T) {
 		nil,
 		[]skills.Script{{
 			Name: "explode",
-			Run: func(context.Context, *skills.Skill, []string) (any, error) {
+			Run: func(context.Context, *skills.Skill, json.RawMessage) (any, error) {
 				return nil, errors.New("boom-script")
 			},
 		}},
@@ -911,7 +926,7 @@ func TestProvider_DisableSkillToolApprovalOptions_DisableApprovalPerTool(t *test
 	createRelativeFile(t, filepath.Join(root, "approval-skill"), "docs/readme.md", "docs")
 
 	provider := newProviderWithConfig(t, &fsskills.SourceOptions{
-		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 			return "ok", nil
 		},
 	}, &skills.ContextProviderOptions{
@@ -969,7 +984,7 @@ func TestProvider_DisableSkillToolApprovalOptions_AffectOnlyTargetTool(t *testin
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			provider := newProviderWithConfig(t, &fsskills.SourceOptions{
-				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 					return "ok", nil
 				},
 			}, &tt.opts, root)
@@ -990,7 +1005,7 @@ func TestProvider_FromFileSourceWithRunner_UsesScriptRunner(t *testing.T) {
 	runnerCalled := false
 	provider := providerFromFileSource(
 		fsskills.NewSourceOptions(fsskills.SourceOptions{
-			ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ []string) (any, error) {
+			ScriptRunner: func(_ context.Context, _ *skills.Skill, _ *skills.Script, _ json.RawMessage) (any, error) {
 				runnerCalled = true
 				return "executed", nil
 			},
@@ -1093,7 +1108,7 @@ func TestProvider_AggregatesMultipleSources(t *testing.T) {
 		Skills: []*skills.Skill{inline},
 		Sources: []skills.Source{
 			fsskills.NewSourceOptions(fsskills.SourceOptions{
-				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, []string) (any, error) {
+				ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
 					return "ok", nil
 				},
 			}, os.DirFS(fileRoot)),
@@ -1122,7 +1137,7 @@ func TestProvider_SkillFilter_FiltersInlineAndSourceSkills(t *testing.T) {
 		Sources: []skills.Source{
 			fsskills.NewSourceOptions(fsskills.SourceOptions{}, os.DirFS(fileRoot)),
 		},
-		SkillFilter: func(skill *skills.Skill) bool {
+		SkillFilter: func(_ context.Context, skill *skills.Skill, sourceContext skills.SourceContext) bool {
 			return strings.HasPrefix(skill.Frontmatter.Name, "keep-")
 		},
 	})
@@ -1157,7 +1172,7 @@ func TestProvider_SkillFilter_CanFilterOutAllSkills(t *testing.T) {
 	skill := mustInlineSkill(skills.Frontmatter{Name: "inline-skill", Description: "Inline skill"}, "Inline instructions.", nil, nil)
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Skills: []*skills.Skill{skill},
-		SkillFilter: func(*skills.Skill) bool {
+		SkillFilter: func(_ context.Context, _ *skills.Skill, sourceContext skills.SourceContext) bool {
 			return false
 		},
 	})
@@ -1209,31 +1224,27 @@ func TestLoadSkill_GetContentFunc_ReturnsContent(t *testing.T) {
 	}
 }
 
-func TestLoadSkill_GetContentFunc_ErrorReturnsErrorMessage(t *testing.T) {
+func TestLoadSkill_GetContentFunc_ErrorPropagates(t *testing.T) {
+	failure := errors.New("backend unavailable")
 	skill := &skills.Skill{
 		Frontmatter: skills.Frontmatter{Name: "failing-skill", Description: "Content always fails"},
 		GetContent: func(context.Context) (string, error) {
-			return "", errors.New("backend unavailable")
+			return "", failure
 		},
 	}
-	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
-	_, tools := captureProviderContext(t, provider)
-
-	loadTool := findTool(t, tools, "load_skill")
-	result, err := loadTool.Call(t.Context(), `{"skillName":"failing-skill"}`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resultStr, ok := result.(string)
-	if !ok {
-		t.Fatalf("expected string result, got %T", result)
-	}
-	if !strings.HasPrefix(resultStr, "Error:") {
-		t.Fatalf("expected error message, got %q", resultStr)
+	for _, detailed := range []bool{false, true} {
+		provider := skills.NewContextProvider(skills.ContextProviderOptions{
+			Skills: []*skills.Skill{skill}, IncludeDetailedErrors: detailed,
+		})
+		_, tools := captureProviderContext(t, provider)
+		result, err := findTool(t, tools, loadSkillToolName).Call(t.Context(), `{"skillName":"failing-skill"}`)
+		if !errors.Is(err, failure) || result != nil {
+			t.Fatalf("load_skill with detailed=%t returned (%v, %v), want original failure", detailed, result, err)
+		}
 	}
 }
 
-func TestLoadSkill_GetContentFunc_NilReturnsErrorMessage(t *testing.T) {
+func TestLoadSkill_GetContentFunc_NilReturnsError(t *testing.T) {
 	skill := &skills.Skill{
 		Frontmatter: skills.Frontmatter{Name: "missing-content", Description: "Content loader missing"},
 	}
@@ -1242,15 +1253,35 @@ func TestLoadSkill_GetContentFunc_NilReturnsErrorMessage(t *testing.T) {
 
 	loadTool := findTool(t, tools, "load_skill")
 	result, err := loadTool.Call(t.Context(), `{"skillName":"missing-content"}`)
-	if err != nil {
-		t.Fatal(err)
+	if err == nil || result != nil || !strings.Contains(err.Error(), "content loader") {
+		t.Fatalf("missing content loader returned (%v, %v), want an error", result, err)
 	}
-	resultStr, ok := result.(string)
-	if !ok {
-		t.Fatalf("expected string result, got %T", result)
+}
+
+func TestLoadSkill_GetContentFunc_PreservesCancellation(t *testing.T) {
+	skill := &skills.Skill{
+		Frontmatter: skills.Frontmatter{Name: "cancelled-skill", Description: "Cancellation test"},
+		GetContent: func(ctx context.Context) (string, error) {
+			return "", ctx.Err()
+		},
 	}
-	if !strings.HasPrefix(resultStr, "Error:") {
-		t.Fatalf("expected error message, got %q", resultStr)
+	_, tools := captureProviderContext(t, skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}}))
+	loadTool := findTool(t, tools, loadSkillToolName)
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	expired, expireCancel := context.WithDeadline(t.Context(), time.Unix(0, 0))
+	defer expireCancel()
+	for _, tc := range []struct {
+		ctx  context.Context
+		want error
+	}{
+		{cancelled, context.Canceled},
+		{expired, context.DeadlineExceeded},
+	} {
+		result, err := loadTool.Call(tc.ctx, `{"skillName":"cancelled-skill"}`)
+		if !errors.Is(err, tc.want) || result != nil {
+			t.Fatalf("load_skill cancellation returned (%v, %v), want %v", result, err, tc.want)
+		}
 	}
 }
 
@@ -1265,8 +1296,11 @@ func TestProvider_Cache_MultipleInvocations_LoadsOnce(t *testing.T) {
 	if source.count != 1 {
 		t.Fatalf("source calls = %d, want 1", source.count)
 	}
-	if funcToolPointer(t, findTool(t, first, loadSkillToolName)) != funcToolPointer(t, findTool(t, second, loadSkillToolName)) {
-		t.Fatal("cached calls must reuse the same skill tools")
+	for _, tools := range [][]tool.Tool{first, second} {
+		content, err := findTool(t, tools, loadSkillToolName).Call(t.Context(), `{"skillName":"skill-a"}`)
+		if err != nil || content != "Instructions A." {
+			t.Fatalf("cached skill content = (%v, %v)", content, err)
+		}
 	}
 }
 
@@ -1274,7 +1308,7 @@ func TestProvider_Cache_ConcurrentInvocations_LoadOnceAndShareTools(t *testing.T
 	var calls atomic.Int32
 	skill := mustInlineSkill(skills.Frontmatter{Name: "skill-b", Description: "B"}, "Instructions B.", nil, nil)
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{
-		skills.SourceFunc(func(context.Context) ([]*skills.Skill, error) {
+		skills.SourceFunc(func(_ context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
 			calls.Add(1)
 			return []*skills.Skill{skill}, nil
 		}),
@@ -1295,17 +1329,14 @@ func TestProvider_Cache_ConcurrentInvocations_LoadOnceAndShareTools(t *testing.T
 	if calls.Load() != 1 {
 		t.Fatalf("source calls = %d, want 1", calls.Load())
 	}
-	var first uintptr
-	for i, result := range results {
+	for _, result := range results {
 		if result.err != nil {
 			t.Fatal(result.err)
 		}
 		tools := slices.Collect(agent.AllOptions(result.options, agent.WithTool))
-		current := funcToolPointer(t, findTool(t, tools, loadSkillToolName))
-		if i == 0 {
-			first = current
-		} else if current != first {
-			t.Fatal("concurrent cached calls returned different skill tools")
+		content, err := findTool(t, tools, loadSkillToolName).Call(t.Context(), `{"skillName":"skill-b"}`)
+		if err != nil || content != "Instructions B." {
+			t.Fatalf("concurrent cached skill content = (%v, %v)", content, err)
 		}
 	}
 }
@@ -1313,7 +1344,7 @@ func TestProvider_Cache_ConcurrentInvocations_LoadOnceAndShareTools(t *testing.T
 func TestProvider_Cache_SourceErrorIsNotCached(t *testing.T) {
 	calls := 0
 	failure := errors.New("Simulated failure.")
-	source := skills.SourceFunc(func(context.Context) ([]*skills.Skill, error) {
+	source := skills.SourceFunc(func(_ context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
 		calls++
 		if calls == 1 {
 			return nil, failure
@@ -1360,7 +1391,7 @@ func TestProvider_Cache_SameIsolationKeySharesResult(t *testing.T) {
 	}}
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Sources: []skills.Source{source},
-		CacheIsolationKeySelector: func(context.Context, agent.InvokingContext) *string {
+		CacheIsolationKeySelector: func(context.Context, skills.SourceContext) *string {
 			return new("same-key")
 		},
 	})
@@ -1372,7 +1403,7 @@ func TestProvider_Cache_SameIsolationKeySharesResult(t *testing.T) {
 	}
 	first := slices.Collect(agent.AllOptions(firstOptions, agent.WithTool))
 	second := slices.Collect(agent.AllOptions(secondOptions, agent.WithTool))
-	if source.count != 1 || funcToolPointer(t, findTool(t, first, loadSkillToolName)) != funcToolPointer(t, findTool(t, second, loadSkillToolName)) {
+	if source.count != 1 || len(first) != 3 || len(second) != 3 {
 		t.Fatalf("same isolation key did not share the cache; source calls = %d", source.count)
 	}
 }
@@ -1384,9 +1415,8 @@ func TestProvider_Cache_DifferentIsolationKeysLoadSeparately(t *testing.T) {
 	}}
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Sources: []skills.Source{source},
-		CacheIsolationKeySelector: func(_ context.Context, invoking agent.InvokingContext) *string {
-			session, _ := agent.GetOption(invoking.Options, agent.WithSession)
-			if session == firstSession {
+		CacheIsolationKeySelector: func(_ context.Context, sourceContext skills.SourceContext) *string {
+			if sourceContext.Session == firstSession {
 				return new("agent-1")
 			}
 			return new("agent-2")
@@ -1409,7 +1439,7 @@ func TestProvider_Cache_NilIsolationKeyUsesSharedResult(t *testing.T) {
 	}}
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Sources: []skills.Source{source},
-		CacheIsolationKeySelector: func(context.Context, agent.InvokingContext) *string {
+		CacheIsolationKeySelector: func(context.Context, skills.SourceContext) *string {
 			return nil
 		},
 	})
@@ -1421,7 +1451,7 @@ func TestProvider_Cache_NilIsolationKeyUsesSharedResult(t *testing.T) {
 	}
 	first := slices.Collect(agent.AllOptions(firstOptions, agent.WithTool))
 	second := slices.Collect(agent.AllOptions(secondOptions, agent.WithTool))
-	if source.count != 1 || funcToolPointer(t, findTool(t, first, loadSkillToolName)) != funcToolPointer(t, findTool(t, second, loadSkillToolName)) {
+	if source.count != 1 || len(first) != 3 || len(second) != 3 {
 		t.Fatalf("nil isolation keys did not share the cache; source calls = %d", source.count)
 	}
 }
@@ -1433,7 +1463,7 @@ func TestProvider_Cache_EmptyIsolationKeyIsDistinctFromSharedCache(t *testing.T)
 	}}
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Sources:                   []skills.Source{source},
-		CacheIsolationKeySelector: func(context.Context, agent.InvokingContext) *string { return key },
+		CacheIsolationKeySelector: func(context.Context, skills.SourceContext) *string { return key },
 	})
 
 	captureProviderContext(t, provider)
@@ -1450,7 +1480,7 @@ type gatedCacheSource struct {
 	release chan struct{}
 }
 
-func (s *gatedCacheSource) Skills(ctx context.Context) ([]*skills.Skill, error) {
+func (s *gatedCacheSource) Skills(ctx context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
 	s.calls.Add(1)
 	s.started <- ctx
 	select {
@@ -1591,7 +1621,7 @@ func TestProvider_Cache_WithinRefreshIntervalSharesResult(t *testing.T) {
 
 	_, first := captureProviderContext(t, provider)
 	_, second := captureProviderContext(t, provider)
-	if source.count != 1 || funcToolPointer(t, findTool(t, first, loadSkillToolName)) != funcToolPointer(t, findTool(t, second, loadSkillToolName)) {
+	if source.count != 1 || len(first) != 3 || len(second) != 3 {
 		t.Fatalf("fresh cache was not reused; source calls = %d", source.count)
 	}
 }
@@ -1623,7 +1653,7 @@ func TestProvider_Cache_NilRefreshIntervalNeverExpires(t *testing.T) {
 
 	_, first := captureProviderContext(t, provider)
 	_, second := captureProviderContext(t, provider)
-	if source.count != 1 || funcToolPointer(t, findTool(t, first, loadSkillToolName)) != funcToolPointer(t, findTool(t, second, loadSkillToolName)) {
+	if source.count != 1 || len(first) != 3 || len(second) != 3 {
 		t.Fatalf("non-expiring cache was not reused; source calls = %d", source.count)
 	}
 }
@@ -1687,8 +1717,10 @@ func TestProvider_BuildWithFilter_AppliesToSourceSkills(t *testing.T) {
 		mustInlineSkill(skills.Frontmatter{Name: "drop-me", Description: "Drop"}, "Instructions.", nil, nil),
 	)
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{
-		Sources:     []skills.Source{source},
-		SkillFilter: func(skill *skills.Skill) bool { return strings.HasPrefix(skill.Frontmatter.Name, "keep") },
+		Sources: []skills.Source{source},
+		SkillFilter: func(_ context.Context, skill *skills.Skill, sourceContext skills.SourceContext) bool {
+			return strings.HasPrefix(skill.Frontmatter.Name, "keep")
+		},
 	})
 
 	instructions, _ := captureProviderContext(t, provider)
@@ -1704,9 +1736,8 @@ func TestProvider_BuildWithIsolationKey_CachesPerInvocationIdentity(t *testing.T
 	}}
 	provider := skills.NewContextProvider(skills.ContextProviderOptions{
 		Sources: []skills.Source{source},
-		CacheIsolationKeySelector: func(_ context.Context, invoking agent.InvokingContext) *string {
-			session, _ := agent.GetOption(invoking.Options, agent.WithSession)
-			if session == firstSession {
+		CacheIsolationKeySelector: func(_ context.Context, sourceContext skills.SourceContext) *string {
+			if sourceContext.Session == firstSession {
 				return new("agent-1")
 			}
 			return new("agent-2")
@@ -1756,14 +1787,9 @@ func TestProvider_Filter_IncludingAllPreservesBothSkills(t *testing.T) {
 		mustInlineSkill(skills.Frontmatter{Name: "skill-a", Description: "A"}, "Instructions A.", nil, nil),
 		mustInlineSkill(skills.Frontmatter{Name: "skill-b", Description: "B"}, "Instructions B.", nil, nil),
 	)
-	provider := skills.NewContextProvider(skills.ContextProviderOptions{
-		Sources:     []skills.Source{source},
-		SkillFilter: func(*skills.Skill) bool { return true },
-	})
-
-	instructions, _ := captureProviderContext(t, provider)
-	if got := advertisedSkills(t, instructions); len(got) != 2 {
-		t.Fatalf("advertised skills = %#v, want both input skills", got)
+	filter := skills.NewFilteringSource(source, func(context.Context, *skills.Skill, skills.SourceContext) bool { return true }, nil)
+	if got, err := filter.Skills(t.Context(), skills.SourceContext{}); err != nil || len(got) != 2 {
+		t.Fatalf("filtered skills = (%v, %v), want both input skills", got, err)
 	}
 }
 
@@ -1772,14 +1798,9 @@ func TestProvider_Filter_ExcludingAllReturnsEmptyContext(t *testing.T) {
 		mustInlineSkill(skills.Frontmatter{Name: "skill-a", Description: "A"}, "Instructions A.", nil, nil),
 		mustInlineSkill(skills.Frontmatter{Name: "skill-b", Description: "B"}, "Instructions B.", nil, nil),
 	)
-	provider := skills.NewContextProvider(skills.ContextProviderOptions{
-		Sources:     []skills.Source{source},
-		SkillFilter: func(*skills.Skill) bool { return false },
-	})
-
-	instructions, tools := captureProviderContext(t, provider)
-	if instructions != "" || len(tools) != 0 {
-		t.Fatalf("excluded skills produced instructions %q or tools %v", instructions, tools)
+	filter := skills.NewFilteringSource(source, func(context.Context, *skills.Skill, skills.SourceContext) bool { return false }, nil)
+	if got, err := filter.Skills(t.Context(), skills.SourceContext{}); err != nil || len(got) != 0 {
+		t.Fatalf("excluded skill list = (%v, %v), want empty", got, err)
 	}
 }
 
@@ -1789,45 +1810,39 @@ func TestProvider_Filter_ReturnsOnlyMatchingSkills(t *testing.T) {
 		mustInlineSkill(skills.Frontmatter{Name: "drop-me", Description: "Drop"}, "Instructions.", nil, nil),
 		mustInlineSkill(skills.Frontmatter{Name: "keep-also", Description: "KeepAlso"}, "Instructions.", nil, nil),
 	)
-	provider := skills.NewContextProvider(skills.ContextProviderOptions{
-		Sources:     []skills.Source{source},
-		SkillFilter: func(skill *skills.Skill) bool { return strings.HasPrefix(skill.Frontmatter.Name, "keep") },
-	})
-
-	instructions, _ := captureProviderContext(t, provider)
-	got := advertisedSkills(t, instructions)
+	filter := skills.NewFilteringSource(source,
+		func(_ context.Context, skill *skills.Skill, _ skills.SourceContext) bool {
+			return strings.HasPrefix(skill.Frontmatter.Name, "keep")
+		}, nil)
+	got, err := filter.Skills(t.Context(), skills.SourceContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(got) != 2 {
 		t.Fatalf("advertised skills = %#v, want 2", got)
 	}
 	for _, skill := range got {
-		if !strings.HasPrefix(skill.Name, "keep") {
+		if !strings.HasPrefix(skill.Frontmatter.Name, "keep") {
 			t.Fatalf("unmatched skill advertised: %#v", skill)
 		}
 	}
 }
 
 func TestProvider_Filter_EmptySourceReturnsEmptyContext(t *testing.T) {
-	provider := skills.NewContextProvider(skills.ContextProviderOptions{
-		Sources:     []skills.Source{skills.NewInMemorySource()},
-		SkillFilter: func(*skills.Skill) bool { return true },
-	})
-
-	instructions, tools := captureProviderContext(t, provider)
-	if instructions != "" || len(tools) != 0 {
-		t.Fatalf("empty source produced instructions %q or tools %v", instructions, tools)
+	source := skills.NewFilteringSource(skills.NewInMemorySource(),
+		func(context.Context, *skills.Skill, skills.SourceContext) bool { return true }, nil)
+	if got, err := source.Skills(t.Context(), skills.SourceContext{}); err != nil || len(got) != 0 {
+		t.Fatalf("empty source produced (%v, %v)", got, err)
 	}
 }
 
 func TestProvider_Filter_NilSourcePanics(t *testing.T) {
 	defer func() {
-		if got := recover(); got != "source 0 is nil" {
+		if got := recover(); got != "skills: source 0 is nil" {
 			t.Fatalf("panic = %v, want indexed nil source error", got)
 		}
 	}()
-	skills.NewContextProvider(skills.ContextProviderOptions{
-		Sources:     []skills.Source{nil},
-		SkillFilter: func(*skills.Skill) bool { return true },
-	})
+	skills.NewFilteringSource(nil, func(context.Context, *skills.Skill, skills.SourceContext) bool { return true }, nil)
 }
 
 func TestProvider_Filter_PreservesMatchingOrder(t *testing.T) {
@@ -1837,16 +1852,15 @@ func TestProvider_Filter_PreservesMatchingOrder(t *testing.T) {
 		mustInlineSkill(skills.Frontmatter{Name: "gamma", Description: "Gamma"}, "Instructions.", nil, nil),
 		mustInlineSkill(skills.Frontmatter{Name: "delta", Description: "Delta"}, "Instructions.", nil, nil),
 	)
-	provider := skills.NewContextProvider(skills.ContextProviderOptions{
-		Sources: []skills.Source{source},
-		SkillFilter: func(skill *skills.Skill) bool {
+	filter := skills.NewFilteringSource(source,
+		func(_ context.Context, skill *skills.Skill, _ skills.SourceContext) bool {
 			return skill.Frontmatter.Name == "alpha" || skill.Frontmatter.Name == "gamma"
-		},
-	})
-
-	instructions, _ := captureProviderContext(t, provider)
-	got := advertisedSkills(t, instructions)
-	if len(got) != 2 || got[0].Name != "alpha" || got[1].Name != "gamma" {
+		}, nil)
+	got, err := filter.Skills(t.Context(), skills.SourceContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].Frontmatter.Name != "alpha" || got[1].Frontmatter.Name != "gamma" {
 		t.Fatalf("advertised skills = %#v, want alpha followed by gamma", got)
 	}
 }
@@ -1856,10 +1870,8 @@ func TestProvider_Deduplication_NoDuplicatesReturnsBothSkills(t *testing.T) {
 		mustInlineSkill(skills.Frontmatter{Name: "skill-a", Description: "A"}, "Instructions A.", nil, nil),
 		mustInlineSkill(skills.Frontmatter{Name: "skill-b", Description: "B"}, "Instructions B.", nil, nil),
 	)
-	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
-
-	instructions, _ := captureProviderContext(t, provider)
-	if got := advertisedSkills(t, instructions); len(got) != 2 {
+	deduplicator := skills.NewDeduplicatingSource(source, nil)
+	if got, err := deduplicator.Skills(t.Context(), skills.SourceContext{}); err != nil || len(got) != 2 {
 		t.Fatalf("advertised skills = %#v, want 2", got)
 	}
 }
@@ -1870,40 +1882,31 @@ func TestProvider_Deduplication_KeepsFirstAndRetainsUniqueSkill(t *testing.T) {
 		mustInlineSkill(skills.Frontmatter{Name: "dupe", Description: "Second"}, "Instructions 2.", nil, nil),
 		mustInlineSkill(skills.Frontmatter{Name: "unique", Description: "Unique"}, "Instructions 3.", nil, nil),
 	)
-	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
-
-	instructions, _ := captureProviderContext(t, provider)
-	got := advertisedSkills(t, instructions)
-	want := []advertisedSkill{{Name: "dupe", Description: "First"}, {Name: "unique", Description: "Unique"}}
-	if !slices.Equal(got, want) {
-		t.Fatalf("advertised skills = %#v, want %#v", got, want)
+	deduplicator := skills.NewDeduplicatingSource(source, nil)
+	got, err := deduplicator.Skills(t.Context(), skills.SourceContext{})
+	if err != nil || len(got) != 2 || got[0].Frontmatter.Description != "First" || got[1].Frontmatter.Name != "unique" {
+		t.Fatalf("deduplicated skills = (%v, %v), want first dupe and unique", got, err)
 	}
 }
 
 func TestProvider_Deduplication_CustomSourceKeepsFirst(t *testing.T) {
-	source := skills.SourceFunc(func(context.Context) ([]*skills.Skill, error) {
+	source := skills.SourceFunc(func(_ context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
 		return []*skills.Skill{
 			mustInlineSkill(skills.Frontmatter{Name: "my-skill", Description: "First"}, "Instructions 1.", nil, nil),
 			mustInlineSkill(skills.Frontmatter{Name: "my-skill", Description: "Second"}, "Instructions 2.", nil, nil),
 		}, nil
 	})
-	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
-
-	instructions, _ := captureProviderContext(t, provider)
-	got := advertisedSkills(t, instructions)
-	if len(got) != 1 || got[0].Description != "First" {
+	deduplicator := skills.NewDeduplicatingSource(source, nil)
+	got, err := deduplicator.Skills(t.Context(), skills.SourceContext{})
+	if err != nil || len(got) != 1 || got[0].Frontmatter.Description != "First" {
 		t.Fatalf("advertised skills = %#v, want only the first duplicate", got)
 	}
 }
 
 func TestProvider_Deduplication_EmptySourceReturnsNoSkills(t *testing.T) {
-	provider := skills.NewContextProvider(skills.ContextProviderOptions{
-		Sources: []skills.Source{skills.NewInMemorySource()},
-	})
-
-	instructions, tools := captureProviderContext(t, provider)
-	if instructions != "" || len(tools) != 0 {
-		t.Fatalf("empty source produced instructions %q or tools %v", instructions, tools)
+	source := skills.NewDeduplicatingSource(skills.NewInMemorySource(), nil)
+	if got, err := source.Skills(t.Context(), skills.SourceContext{}); err != nil || len(got) != 0 {
+		t.Fatalf("empty source produced (%v, %v)", got, err)
 	}
 }
 
@@ -1987,7 +1990,7 @@ func TestProvider_FileSkills_PreservesExistingInputTools(t *testing.T) {
 
 func TestProvider_ConcurrentCalls_LoadSourceOnce(t *testing.T) {
 	var calls atomic.Int32
-	source := skills.SourceFunc(func(context.Context) ([]*skills.Skill, error) {
+	source := skills.SourceFunc(func(_ context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
 		calls.Add(1)
 		return []*skills.Skill{
 			mustInlineSkill(skills.Frontmatter{Name: "concurrent-skill", Description: "Concurrent test"}, "Body.", nil, nil),
@@ -2452,5 +2455,729 @@ func TestProvider_DuplicateFileSkillNames_KeepsOne(t *testing.T) {
 	got := advertisedSkills(t, instructions)
 	if len(got) != 1 || got[0].Description != "First" && got[0].Description != "Second" {
 		t.Fatalf("advertised skills = %#v, want one of the duplicate file skills", got)
+	}
+}
+
+func TestProvider_SourceReceivesRunAgentAndSession(t *testing.T) {
+	session := agenttest.CreateSession()
+	var observedAgent *agent.Agent
+	var observedSession *agent.Session
+	source := skills.SourceFunc(func(ctx context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
+		observedAgent = sourceContext.Agent
+		observedSession = sourceContext.Session
+		return nil, nil
+	})
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
+	a := agent.New(agent.ProviderConfig{
+		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "ok"}}}, nil)
+			}
+		},
+	}, agent.Config{ContextProviders: []agent.ContextProvider{provider}})
+	if _, err := a.RunText(t.Context(), "hello", agent.WithSession(session)).Collect(); err != nil {
+		t.Fatal(err)
+	}
+	if observedAgent != a || observedSession != session {
+		t.Fatalf("source context = (%p, %p), want (%p, %p)", observedAgent, observedSession, a, session)
+	}
+}
+
+func TestProvider_SourceSessionContextReplacedForEachInvocation(t *testing.T) {
+	var observed []*agent.Session
+	var captured context.Context
+	source := skills.SourceFunc(func(ctx context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
+		session := sourceContext.Session
+		observed = append(observed, session)
+		captured = ctx
+		return nil, nil
+	})
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources: []skills.Source{source}, DisableCaching: true,
+	})
+	first, second := agenttest.CreateSession(), agenttest.CreateSession()
+	for _, session := range []*agent.Session{first, second, nil} {
+		ctx := t.Context()
+		if captured != nil {
+			ctx = captured
+		}
+		if _, _, err := invokeProvider(provider, ctx, nil, agent.WithSession(session)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !slices.Equal(observed, []*agent.Session{first, second, nil}) {
+		t.Fatalf("source sessions = %v, want current session on every call", observed)
+	}
+}
+
+func TestProvider_SourceReceivesNilSessionWithoutSessionOption(t *testing.T) {
+	called := false
+	source := skills.SourceFunc(func(ctx context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
+		called = true
+		if session := sourceContext.Session; session != nil {
+			t.Errorf("source session = %p, want no session", session)
+		}
+		return nil, nil
+	})
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
+	if _, _, err := invokeProvider(provider, t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("source was not called")
+	}
+}
+
+func TestProvider_FilterWithContextReceivesInvocationSession(t *testing.T) {
+	first, second := agenttest.CreateSession(), agenttest.CreateSession()
+	skill := mustInlineSkill(skills.Frontmatter{Name: "context-skill", Description: "Context"}, "Body.", nil, nil)
+	source := &countingSource{skills: []*skills.Skill{skill}}
+	var observed []*agent.Session
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources: []skills.Source{source},
+		SkillFilter: func(ctx context.Context, actual *skills.Skill, sourceContext skills.SourceContext) bool {
+			session := sourceContext.Session
+			if session == nil || actual != skill {
+				t.Errorf("filter session = %p, skill = %p", session, actual)
+			}
+			observed = append(observed, session)
+			return session == second
+		},
+	})
+	for _, session := range []*agent.Session{first, second} {
+		_, options, err := invokeProvider(provider, t.Context(), nil, agent.WithSession(session))
+		if err != nil {
+			t.Fatal(err)
+		}
+		instructions, _ := agent.GetOption(options, agent.WithInstructions)
+		if strings.Contains(instructions, "context-skill") != (session == second) {
+			t.Fatalf("instructions for session %p = %q", session, instructions)
+		}
+	}
+	if source.count != 1 || !slices.Equal(observed, []*agent.Session{first, second}) {
+		t.Fatalf("source loads = %d, filter sessions = %v", source.count, observed)
+	}
+}
+
+func TestProvider_FilterReevaluatedAfterCache(t *testing.T) {
+	first := mustInlineSkill(skills.Frontmatter{Name: "first", Description: "First"}, "First.", nil, nil)
+	second := mustInlineSkill(skills.Frontmatter{Name: "second", Description: "Second"}, "Second.", nil, nil)
+	source := &countingSource{skills: []*skills.Skill{first, second}}
+	allowed := "first"
+	filterCalls := 0
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources: []skills.Source{source},
+		SkillFilter: func(_ context.Context, skill *skills.Skill, sourceContext skills.SourceContext) bool {
+			filterCalls++
+			return skill.Frontmatter.Name == allowed
+		},
+	})
+	_, firstTools := captureProviderContext(t, provider)
+	allowed = "second"
+	instructions, secondTools := captureProviderContext(t, provider)
+	if !strings.Contains(instructions, "<name>second</name>") || strings.Contains(instructions, "<name>first</name>") {
+		t.Fatalf("filtered cached instructions = %q", instructions)
+	}
+	for _, tc := range []struct {
+		tools []tool.Tool
+		name  string
+		want  string
+	}{{firstTools, "first", "First."}, {secondTools, "second", "Second."}} {
+		got, err := findTool(t, tc.tools, loadSkillToolName).Call(t.Context(), `{"skillName":"`+tc.name+`"}`)
+		if err != nil || got != tc.want {
+			t.Fatalf("load %q = (%v, %v)", tc.name, got, err)
+		}
+	}
+	got, err := findTool(t, secondTools, loadSkillToolName).Call(t.Context(), `{"skillName":"first"}`)
+	if err != nil || got != "Error: Skill 'first' not found." {
+		t.Fatalf("excluded skill = (%v, %v)", got, err)
+	}
+	if source.count != 1 || filterCalls != 4 || !slices.Equal(source.skills, []*skills.Skill{first, second}) {
+		t.Fatalf("loads = %d, filter calls = %d, source skills = %v", source.count, filterCalls, source.skills)
+	}
+}
+
+func TestProvider_FilterRunsBeforeDedupOnEveryInvocation(t *testing.T) {
+	first := mustInlineSkill(skills.Frontmatter{Name: "duplicate", Description: "First"}, "First.", nil, nil)
+	second := mustInlineSkill(skills.Frontmatter{Name: "duplicate", Description: "Second"}, "Second.", nil, nil)
+	source := &countingSource{skills: []*skills.Skill{first, second}}
+	allowed := first
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources: []skills.Source{source},
+		SkillFilter: func(_ context.Context, skill *skills.Skill, sourceContext skills.SourceContext) bool {
+			return skill == allowed
+		},
+	})
+	for _, skill := range []*skills.Skill{first, second} {
+		allowed = skill
+		_, tools := captureProviderContext(t, provider)
+		got, err := findTool(t, tools, loadSkillToolName).Call(t.Context(), `{"skillName":"duplicate"}`)
+		want, wantErr := skill.GetContent(t.Context())
+		if wantErr != nil {
+			t.Fatal(wantErr)
+		}
+		if err != nil || got != want {
+			t.Fatalf("filtered duplicate = (%v, %v), want %q", got, err, want)
+		}
+	}
+	if source.count != 1 {
+		t.Fatalf("source loads = %d, want 1", source.count)
+	}
+}
+
+func TestProvider_FilterPanicDoesNotPoisonSourceCache(t *testing.T) {
+	source := &countingSource{skills: []*skills.Skill{
+		mustInlineSkill(skills.Frontmatter{Name: "recovered", Description: "Recovered"}, "Body.", nil, nil),
+	}}
+	fail := true
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources: []skills.Source{source},
+		SkillFilter: func(_ context.Context, _ *skills.Skill, sourceContext skills.SourceContext) bool {
+			if fail {
+				panic("filter failed")
+			}
+			return true
+		},
+	})
+	if _, _, err := invokeProvider(provider, t.Context(), nil); err == nil || !strings.Contains(err.Error(), "filter failed") {
+		t.Fatalf("filter panic = %v", err)
+	}
+	fail = false
+	instructions, _ := captureProviderContext(t, provider)
+	if source.count != 1 || !strings.Contains(instructions, "recovered") {
+		t.Fatalf("source loads = %d, retry instructions = %q", source.count, instructions)
+	}
+}
+
+func TestProvider_CachedSourceFiltersConcurrentSessionsIndependently(t *testing.T) {
+	source := &countingSource{skills: []*skills.Skill{
+		mustInlineSkill(skills.Frontmatter{Name: "first", Description: "First"}, "First.", nil, nil),
+		mustInlineSkill(skills.Frontmatter{Name: "second", Description: "Second"}, "Second.", nil, nil),
+	}}
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources: []skills.Source{source},
+		SkillFilter: func(ctx context.Context, skill *skills.Skill, sourceContext skills.SourceContext) bool {
+			session := sourceContext.Session
+			if session == nil {
+				t.Error("filter has no session")
+				return false
+			}
+			var allowed string
+			if ok, err := session.Get("allowed", &allowed); !ok || err != nil {
+				t.Errorf("session filter state = (%q, %t, %v)", allowed, ok, err)
+				return false
+			}
+			return skill.Frontmatter.Name == allowed
+		},
+	})
+	initial := agenttest.CreateSession()
+	initial.Set("allowed", "first")
+	if _, _, err := invokeProvider(provider, t.Context(), nil, agent.WithSession(initial)); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := range 8 {
+		name := []string{"first", "second"}[i%2]
+		session := agenttest.CreateSession()
+		session.Set("allowed", name)
+		wg.Go(func() {
+			_, options, err := invokeProvider(provider, t.Context(), nil, agent.WithSession(session))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			instructions, _ := agent.GetOption(options, agent.WithInstructions)
+			if got := strings.Count(instructions, "<skill>"); got != 1 || !strings.Contains(instructions, "<name>"+name+"</name>") {
+				t.Errorf("session %q instructions = %q", name, instructions)
+			}
+		})
+	}
+	wg.Wait()
+	if source.count != 1 {
+		t.Fatalf("source loads = %d, want 1", source.count)
+	}
+}
+
+type closeTrackingSkillsSource struct {
+	skills     []*skills.Skill
+	closeCalls atomic.Int32
+	closeErr   error
+}
+
+func (s *closeTrackingSkillsSource) Skills(_ context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
+	return s.skills, nil
+}
+
+func (s *closeTrackingSkillsSource) Close() error {
+	s.closeCalls.Add(1)
+	return s.closeErr
+}
+
+func TestProvider_Close_DefaultOwnershipDoesNotCloseSources(t *testing.T) {
+	source := new(closeTrackingSkillsSource)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
+	if err := provider.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if calls := source.closeCalls.Load(); calls != 0 {
+		t.Fatalf("borrowed source close calls = %d, want 0", calls)
+	}
+}
+
+func TestProvider_Close_OwnedSourcesClosedOnce(t *testing.T) {
+	source := new(closeTrackingSkillsSource)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources: []skills.Source{source}, OwnsSources: true,
+	})
+	if err := provider.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if calls := source.closeCalls.Load(); calls != 1 {
+		t.Fatalf("owned source close calls = %d, want 1", calls)
+	}
+}
+
+func TestProvider_Close_OwnedSourceCloseIsIdempotent(t *testing.T) {
+	source := new(closeTrackingSkillsSource)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources: []skills.Source{source}, OwnsSources: true,
+	})
+	closer := provider
+	for range 2 {
+		if err := closer.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls := source.closeCalls.Load(); calls != 1 {
+		t.Fatalf("owned source close calls = %d, want 1", calls)
+	}
+}
+
+func TestProvider_Close_OwnedSourceErrorsArePreserved(t *testing.T) {
+	firstErr, secondErr := errors.New("first close"), errors.New("second close")
+	first := &closeTrackingSkillsSource{closeErr: firstErr}
+	second := &closeTrackingSkillsSource{closeErr: secondErr}
+	third := new(closeTrackingSkillsSource)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources: []skills.Source{first, second, third}, OwnsSources: true,
+	})
+	closer := provider
+	for range 2 {
+		if err := closer.Close(); !errors.Is(err, firstErr) || !errors.Is(err, secondErr) {
+			t.Fatalf("close error = %v, want both source failures", err)
+		}
+	}
+	for _, source := range []*closeTrackingSkillsSource{first, second, third} {
+		if calls := source.closeCalls.Load(); calls != 1 {
+			t.Errorf("source close calls = %d, want 1", calls)
+		}
+	}
+}
+
+func TestProvider_Close_RejectsInvocationsAndTools(t *testing.T) {
+	skill := mustInlineSkill(skills.Frontmatter{Name: "closed", Description: "Closed"}, "Body.",
+		[]skills.Resource{{Name: "resource", Read: func(context.Context) (any, error) {
+			t.Error("closed provider called resource")
+			return nil, nil
+		}}},
+		[]skills.Script{{Name: "script", Run: func(context.Context, *skills.Skill, json.RawMessage) (any, error) {
+			t.Error("closed provider called script")
+			return nil, nil
+		}}},
+	)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+	_, tools := captureProviderContext(t, provider)
+	if err := provider.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := invokeProvider(provider, t.Context(), nil); err == nil {
+		t.Fatal("closed provider accepted invocation")
+	}
+	if err := provider.Invoked(t.Context(), agent.InvokedContext{}); err == nil {
+		t.Fatal("closed provider accepted completion")
+	}
+	for _, tc := range []struct{ name, args string }{
+		{loadSkillToolName, `{"skillName":"closed"}`},
+		{readSkillResourceToolName, `{"skillName":"closed","resourceName":"resource"}`},
+		{runSkillScriptToolName, `{"skillName":"closed","scriptName":"script"}`},
+	} {
+		if _, err := findTool(t, tools, tc.name).Call(t.Context(), tc.args); err == nil || !strings.Contains(err.Error(), "closed") {
+			t.Errorf("closed tool %q error = %v", tc.name, err)
+		}
+	}
+}
+
+func TestProvider_Close_ConcurrentCallsCloseOwnedSourceOnce(t *testing.T) {
+	source := new(closeTrackingSkillsSource)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources: []skills.Source{source}, OwnsSources: true,
+	})
+	closer := provider
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Go(func() {
+			if err := closer.Close(); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if calls := source.closeCalls.Load(); calls != 1 {
+		t.Fatalf("source close calls = %d, want 1", calls)
+	}
+}
+
+func TestProvider_RunJSONScript_ObjectArguments(t *testing.T) {
+	var observed int64
+	skill := mustInlineSkill(skills.Frontmatter{Name: "json-skill", Description: "JSON skill"}, "Body.", nil,
+		[]skills.Script{{
+			Name: "search",
+			Run: func(_ context.Context, skill *skills.Skill, args json.RawMessage) (any, error) {
+				var input struct {
+					Query      string `json:"query"`
+					MaxResults int    `json:"maxResults"`
+					Large      int64  `json:"large"`
+				}
+				if err := json.Unmarshal(args, &input); err != nil {
+					return nil, err
+				}
+				observed = input.Large
+				if skill.Frontmatter.Name != "json-skill" {
+					t.Errorf("owning skill = %q", skill.Frontmatter.Name)
+				}
+				return fmt.Sprintf("%s:%d", input.Query, input.MaxResults), nil
+			},
+		}},
+	)
+	_, tools := captureProviderContext(t, skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}}))
+	result, err := findTool(t, tools, runSkillScriptToolName).Call(t.Context(),
+		`{"skillName":"json-skill","scriptName":"search","arguments":{"query":"hello","maxResults":5,"large":9007199254740993}}`)
+	if err != nil || result != "hello:5" || observed != 9007199254740993 {
+		t.Fatalf("JSON script result = (%v, %v), large argument = %d", result, err, observed)
+	}
+}
+
+func TestProvider_RunJSONScript_ArgumentsShapes(t *testing.T) {
+	for _, tc := range []struct{ name, arguments, want string }{
+		{"omitted", "", ""},
+		{"null", `,"arguments":null`, "null"},
+		{"object", `,"arguments":{"query":"hello"}`, `{"query":"hello"}`},
+		{"array", `,"arguments":["hello",5]`, `["hello",5]`},
+		{"string", `,"arguments":"hello"`, `"hello"`},
+		{"number", `,"arguments":42`, "42"},
+		{"boolean", `,"arguments":true`, "true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			skill := mustInlineSkill(skills.Frontmatter{Name: "json-skill", Description: "JSON"}, "Body.", nil,
+				[]skills.Script{{Name: "raw", Run: func(_ context.Context, _ *skills.Skill, args json.RawMessage) (any, error) {
+					return string(args), nil
+				}}},
+			)
+			_, tools := captureProviderContext(t, skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}}))
+			result, err := findTool(t, tools, runSkillScriptToolName).Call(t.Context(),
+				`{"skillName":"json-skill","scriptName":"raw"`+tc.arguments+`}`)
+			if err != nil || result != tc.want {
+				t.Fatalf("raw arguments = (%v, %v), want %q", result, err, tc.want)
+			}
+		})
+	}
+}
+
+func TestProvider_RunJSONScript_CustomMarshaling(t *testing.T) {
+	skill := mustInlineSkill(skills.Frontmatter{Name: "json-skill", Description: "JSON"}, "Body.", nil,
+		[]skills.Script{{Name: "custom", Run: func(_ context.Context, _ *skills.Skill, args json.RawMessage) (any, error) {
+			var wrapped string
+			if err := json.Unmarshal(args, &wrapped); err != nil {
+				return nil, err
+			}
+			var input struct{ Query string }
+			if err := json.Unmarshal([]byte(wrapped), &input); err != nil {
+				return nil, err
+			}
+			return "result: " + input.Query, nil
+		}}},
+	)
+	_, tools := captureProviderContext(t, skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}}))
+	result, err := findTool(t, tools, runSkillScriptToolName).Call(t.Context(),
+		`{"skillName":"json-skill","scriptName":"custom","arguments":"{\"query\":\"hello\"}"}`)
+	if err != nil || result != "result: hello" {
+		t.Fatalf("custom argument marshaling = (%v, %v)", result, err)
+	}
+}
+
+func TestProvider_RunJSONScript_MixedPositionalScripts(t *testing.T) {
+	var positional []string
+	skill := mustInlineSkill(skills.Frontmatter{Name: "mixed", Description: "Mixed scripts"}, "Body.", nil,
+		[]skills.Script{
+			{Name: "positional", Run: func(_ context.Context, _ *skills.Skill, rawScriptArguments json.RawMessage) (any, error) {
+				var args []string
+				if len(rawScriptArguments) != 0 {
+					if err := json.Unmarshal(rawScriptArguments, &args); err != nil {
+						return nil, err
+					}
+				}
+				positional = args
+				return "positional", nil
+			}},
+			{
+				Name: "json", Run: func(context.Context, *skills.Skill, json.RawMessage) (any, error) { return "json", nil },
+			},
+		},
+	)
+	_, tools := captureProviderContext(t, skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}}))
+	run := findTool(t, tools, runSkillScriptToolName)
+	if got, err := run.Call(t.Context(), `{"skillName":"mixed","scriptName":"positional","arguments":["--value","42"]}`); err != nil || got != "positional" {
+		t.Fatalf("positional script = (%v, %v)", got, err)
+	}
+	if !slices.Equal(positional, []string{"--value", "42"}) {
+		t.Fatalf("positional arguments = %v", positional)
+	}
+	if got, err := run.Call(t.Context(), `{"skillName":"mixed","scriptName":"json","arguments":{"value":42}}`); err != nil || got != "json" {
+		t.Fatalf("JSON script = (%v, %v)", got, err)
+	}
+	positional = nil
+	if _, err := run.Call(t.Context(), `{"skillName":"mixed","scriptName":"positional","arguments":{"value":42}}`); err == nil || positional != nil {
+		t.Fatalf("object passed to positional script: arguments=%v, error=%v", positional, err)
+	}
+}
+
+func TestProvider_ScriptArgumentsSchemaAcceptsJSON(t *testing.T) {
+	skill := mustInlineSkill(skills.Frontmatter{Name: "positional", Description: "Positional"}, "Body.", nil,
+		[]skills.Script{{Name: "run", Run: func(context.Context, *skills.Skill, json.RawMessage) (any, error) { return nil, nil }}},
+	)
+	_, tools := captureProviderContext(t, skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}}))
+	schema, ok := findTool(t, tools, runSkillScriptToolName).Schema().(*jsonschema.Schema)
+	if !ok {
+		t.Fatalf("unexpected script tool schema type")
+	}
+	arguments := schema.Properties["arguments"]
+	if arguments == nil || arguments.Type != "" || len(arguments.Types) != 0 || arguments.Items != nil {
+		t.Fatalf("script argument schema = %#v, want unconstrained JSON", arguments)
+	}
+}
+
+func TestProvider_RunJSONScript_RejectsMalformedCalls(t *testing.T) {
+	skill := mustInlineSkill(skills.Frontmatter{Name: "json-skill", Description: "JSON"}, "Body.", nil,
+		[]skills.Script{{Name: "run", Run: func(context.Context, *skills.Skill, json.RawMessage) (any, error) {
+			t.Error("invalid script call reached callback")
+			return nil, nil
+		}}},
+	)
+	_, tools := captureProviderContext(t, skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}}))
+	run := findTool(t, tools, runSkillScriptToolName)
+	for _, arguments := range []string{
+		`{"skillName":"json-skill","scriptName":"run","arguments":`,
+		`{"scriptName":"run"}`,
+		`{"skillName":"json-skill"}`,
+		`{"skillName":null,"scriptName":"run"}`,
+		`{"skillName":42,"scriptName":"run"}`,
+		`{"skillName":"json-skill","scriptName":"run","unknown":true}`,
+		`null`,
+		`[]`,
+	} {
+		if _, err := run.Call(t.Context(), arguments); err == nil {
+			t.Errorf("invalid script call accepted: %s", arguments)
+		}
+	}
+}
+
+func TestProvider_RunJSONScript_PreservesApprovalAndErrors(t *testing.T) {
+	failure := errors.New("script failed")
+	for _, detailed := range []bool{false, true} {
+		skill := mustInlineSkill(skills.Frontmatter{Name: "json-skill", Description: "JSON"}, "Body.", nil,
+			[]skills.Script{{Name: "fail", Run: func(context.Context, *skills.Skill, json.RawMessage) (any, error) {
+				return nil, failure
+			}}},
+		)
+		_, tools := captureProviderContext(t, skills.NewContextProvider(skills.ContextProviderOptions{
+			Skills: []*skills.Skill{skill}, IncludeDetailedErrors: detailed,
+		}))
+		run := findTool(t, tools, runSkillScriptToolName)
+		assertToolApprovalRequired(t, run, true)
+		result, err := run.Call(t.Context(), `{"skillName":"json-skill","scriptName":"fail","arguments":{}}`)
+		if detailed {
+			if text, ok := result.(string); !ok || err != nil || !strings.Contains(text, failure.Error()) {
+				t.Fatalf("detailed failure = (%v, %v)", result, err)
+			}
+		} else if !errors.Is(err, failure) {
+			t.Fatalf("script error = %v, want original failure", err)
+		}
+	}
+}
+
+func TestProvider_RunJSONScript_PreservesCancellation(t *testing.T) {
+	skill := mustInlineSkill(skills.Frontmatter{Name: "json-skill", Description: "JSON"}, "Body.", nil,
+		[]skills.Script{{Name: "cancel", Run: func(ctx context.Context, _ *skills.Skill, _ json.RawMessage) (any, error) {
+			return nil, ctx.Err()
+		}}},
+	)
+	_, tools := captureProviderContext(t, skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}}))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := findTool(t, tools, runSkillScriptToolName).Call(ctx, `{"skillName":"json-skill","scriptName":"cancel"}`); !errors.Is(err, context.Canceled) {
+		t.Fatalf("JSON script cancellation = %v", err)
+	}
+}
+
+func TestProvider_RunJSONScript_FileSourceIntegration(t *testing.T) {
+	filesystem := fstest.MapFS{
+		"json-file/SKILL.md": &fstest.MapFile{Data: []byte("---\nname: json-file\ndescription: JSON file skill\n---\nBody.")},
+		"json-file/run.py":   &fstest.MapFile{Data: []byte("print('ok')")},
+	}
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(_ context.Context, owner *skills.Skill, script *skills.Script, arguments json.RawMessage) (any, error) {
+			if owner.Frontmatter.Name != "json-file" || script.Name != "run.py" {
+				t.Errorf("runner metadata = %q, %q", owner.Frontmatter.Name, script.Name)
+			}
+			return string(arguments), nil
+		},
+	}, filesystem)
+	_, tools := captureProviderContext(t, skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}}))
+	result, err := findTool(t, tools, runSkillScriptToolName).Call(t.Context(),
+		`{"skillName":"json-file","scriptName":"run.py","arguments":{"value":9007199254740993}}`)
+	if err != nil || result != `{"value":9007199254740993}` {
+		t.Fatalf("file-backed JSON script = (%v, %v)", result, err)
+	}
+}
+
+func TestProvider_FileSourceOptionsFilterResourceExtensions(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "filter-skill", "Filter test", "Filter body.")
+	directory := filepath.Join(root, "filter-skill")
+	createRelativeFile(t, directory, "data.json", "{}")
+	createRelativeFile(t, directory, "notes.txt", "notes")
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		AllowedResourceExtensions: []string{".json"},
+		ScriptRunner: func(context.Context, *skills.Skill, *skills.Script, json.RawMessage) (any, error) {
+			return nil, nil
+		},
+	}, os.DirFS(root))
+	loaded, err := source.Skills(t.Context(), skills.SourceContext{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || len(loaded[0].Resources) != 1 {
+		t.Fatalf("filtered resources = %#v", loaded)
+	}
+	for _, resource := range loaded[0].Resources {
+		if !strings.HasSuffix(resource.Name, ".json") {
+			t.Errorf("resource %q escaped extension filtering", resource.Name)
+		}
+	}
+}
+
+func TestProvider_ConfiguredPipelineClosesOwnedSource(t *testing.T) {
+	source := new(closeTrackingSkillsSource)
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{
+		Sources: []skills.Source{source}, OwnsSources: true,
+	})
+	if err := provider.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if count := source.closeCalls.Load(); count != 1 {
+		t.Fatalf("pipeline closed source %d times, want 1", count)
+	}
+}
+
+func TestProvider_ReadResourcePropagatesReaderError(t *testing.T) {
+	failure := errors.New("boom-resource")
+	skill := mustInlineSkill(skills.Frontmatter{Name: "res-skill", Description: "Has resources"}, "Body.",
+		[]skills.Resource{{Name: "config", Read: func(context.Context) (any, error) {
+			return nil, failure
+		}}}, nil)
+	_, tools := captureProviderContext(t, skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}}))
+	result, err := findTool(t, tools, readSkillResourceToolName).Call(t.Context(),
+		`{"skillName":"res-skill","resourceName":"config"}`)
+	if !errors.Is(err, failure) || result != nil {
+		t.Fatalf("resource read = (%v, %v), want original failure", result, err)
+	}
+}
+
+func TestProvider_ReadResourcePreservesCancellation(t *testing.T) {
+	skill := mustInlineSkill(skills.Frontmatter{Name: "res-skill", Description: "Has resources"}, "Body.",
+		[]skills.Resource{{Name: "config", Read: func(ctx context.Context) (any, error) {
+			return nil, ctx.Err()
+		}}}, nil)
+	_, tools := captureProviderContext(t, skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}}))
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := findTool(t, tools, readSkillResourceToolName).Call(ctx,
+		`{"skillName":"res-skill","resourceName":"config"}`); !errors.Is(err, context.Canceled) {
+		t.Fatalf("resource read cancellation = %v", err)
+	}
+}
+
+func TestProvider_ReadResourceWithoutReaderReturnsError(t *testing.T) {
+	skill := mustInlineSkill(skills.Frontmatter{Name: "res-skill", Description: "Has resources"}, "Body.",
+		[]skills.Resource{{Name: "config"}}, nil)
+	_, tools := captureProviderContext(t, skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}}))
+	result, err := findTool(t, tools, readSkillResourceToolName).Call(t.Context(),
+		`{"skillName":"res-skill","resourceName":"config"}`)
+	if err == nil || result != nil || !strings.Contains(err.Error(), "no reader") {
+		t.Fatalf("missing resource reader = (%v, %v)", result, err)
+	}
+}
+
+func TestProvider_RunScriptForwardsJSONAndCallContext(t *testing.T) {
+	root := t.TempDir()
+	createSkillDir(t, root, "fwd-skill", "Forwarding test", "Body.")
+	createRelativeFile(t, filepath.Join(root, "fwd-skill"), "scripts/run.py", "print('ok')")
+	type servicesKey struct{}
+	services := &struct{ Name string }{Name: "services"}
+	callContext := context.WithValue(t.Context(), servicesKey{}, services)
+	var capturedArguments json.RawMessage
+	var capturedServices any
+	source := fsskills.NewSourceOptions(fsskills.SourceOptions{
+		ScriptRunner: func(ctx context.Context, _ *skills.Skill, _ *skills.Script, args json.RawMessage) (any, error) {
+			capturedArguments = args
+			capturedServices = ctx.Value(servicesKey{})
+			return "executed", nil
+		},
+	}, os.DirFS(root))
+	_, tools := captureProviderContext(t, skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}}))
+	if _, err := findTool(t, tools, runSkillScriptToolName).Call(callContext,
+		`{"skillName":"fwd-skill","scriptName":"scripts/run.py","arguments":["arg1","arg2"]}`); err != nil {
+		t.Fatal(err)
+	}
+	if string(capturedArguments) != `["arg1","arg2"]` || capturedServices != services {
+		t.Fatalf("forwarded arguments/services = (%s, %v)", capturedArguments, capturedServices)
+	}
+}
+
+func TestProvider_Cache_CloseDisposesInnerSource(t *testing.T) {
+	source := new(closeTrackingSkillsSource)
+	cache := skills.NewCachingSource(source, skills.CachingSourceConfig{})
+	if err := cache.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if count := source.closeCalls.Load(); count != 1 {
+		t.Fatalf("cached source close calls = %d, want 1", count)
+	}
+}
+
+func TestProvider_Cache_CloseIsIdempotentAfterLoad(t *testing.T) {
+	source := new(closeTrackingSkillsSource)
+	cache := skills.NewCachingSource(source, skills.CachingSourceConfig{})
+	if _, err := cache.Skills(t.Context(), skills.SourceContext{}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := cache.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if count := source.closeCalls.Load(); count != 1 {
+		t.Fatalf("cached source close calls = %d, want 1", count)
+	}
+}
+
+func TestProvider_Cache_LoadAfterCloseReturnsClosedError(t *testing.T) {
+	source := new(closeTrackingSkillsSource)
+	cache := skills.NewCachingSource(source, skills.CachingSourceConfig{})
+	if err := cache.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cache.Skills(t.Context(), skills.SourceContext{}); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Fatalf("cached source invocation after close = %v", err)
 	}
 }

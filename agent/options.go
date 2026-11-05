@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/tool"
 )
 
@@ -21,7 +22,7 @@ type Option interface {
 }
 
 type (
-	responseFormatOpt    struct{ ResponseFormat }
+	responseFormatOpt    struct{ format.ResponseFormat }
 	continuationTokenOpt string
 	instructionsOpt      string
 	serviceIDOpt         string
@@ -132,7 +133,7 @@ func Stream(stream bool) Option {
 }
 
 // WithResponseFormat sets the desired response format for the agent run.
-func WithResponseFormat(format ResponseFormat) Option {
+func WithResponseFormat(format format.ResponseFormat) Option {
 	return responseFormatOpt{format}
 }
 

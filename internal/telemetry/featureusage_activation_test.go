@@ -80,7 +80,7 @@ var featureActivationCases = []struct {
 	{"agent-session", []int{0, 13}, nil},
 	{"harness", []int{0, 1}, nil},
 	{"harness-stream", []int{0, 1}, nil},
-	{"harness-defaults", []int{0, 1, 3, 5, 8, 10, 11, 13, 15}, nil},
+	{"harness-defaults", []int{0, 1, 3, 5, 10, 11, 13, 15}, nil},
 	{"harness-mask-disabled", nil, []string{featureMaskDisabledEnvVar + "=true"}},
 	{"history-provide", []int{13}, nil},
 	{"history-store", []int{13}, nil},
@@ -97,6 +97,12 @@ var featureActivationCases = []struct {
 	{"compaction-history", []int{9}, nil},
 	{"compaction-store", []int{9}, nil},
 	{"skills", []int{8, 16}, nil},
+	{"skills-empty", []int{16}, nil},
+	{"skills-no-sources", nil, nil},
+	{"skills-source-error", nil, nil},
+	{"skills-filtered-empty", []int{16}, nil},
+	{"skills-filter-error", []int{16}, nil},
+	{"skills-filtered-cache-hit", []int{8, 16}, nil},
 	{"in-memory-skills", []int{16}, nil},
 	{"file-skills", []int{15}, nil},
 	{"tool-auto-call", nil, nil},
@@ -529,7 +535,7 @@ func runFeatureActivation(t *testing.T, name string) {
 				var want string
 				switch name {
 				case "harness-defaults":
-					want = featureComment(0, 1, 3, 5, 8, 10, 11, 13, 15)
+					want = featureComment(0, 1, 3, 5, 10, 11, 13, 15)
 				case "harness", "harness-stream":
 					want = featureComment(0, 1)
 				}
@@ -648,14 +654,66 @@ func runFeatureActivation(t *testing.T, name string) {
 		}
 		source := skills.NewInMemorySource(skill)
 		if name == "in-memory-skills" {
-			activate = func() error { _, err := source.Skills(ctx); return err }
+			activate = func() error { _, err := source.Skills(ctx, skills.SourceContext{}); return err }
 		} else {
 			p := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}})
 			activate = func() error { _, _, err := p.Invoking(ctx, invoking); return err }
 		}
+	case "skills-empty":
+		p := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{skills.NewInMemorySource()}})
+		activate = func() error { _, _, err := p.Invoking(ctx, invoking); return err }
+	case "skills-no-sources":
+		p := skills.NewContextProvider(skills.ContextProviderOptions{})
+		activate = func() error { _, _, err := p.Invoking(ctx, invoking); return err }
+	case "skills-source-error":
+		failure := errors.New("skills source failed")
+		p := skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{
+			skills.SourceFunc(func(context.Context, skills.SourceContext) ([]*skills.Skill, error) { return nil, failure }),
+		}})
+		activate = func() error {
+			if _, _, err := p.Invoking(ctx, invoking); !errors.Is(err, failure) {
+				t.Fatalf("skills source error = %v, want original failure", err)
+			}
+			return nil
+		}
+	case "skills-filtered-empty", "skills-filter-error", "skills-filtered-cache-hit":
+		allow := false
+		source := skills.NewInMemorySource(&skills.Skill{
+			Frontmatter: skills.Frontmatter{Name: "demo", Description: "A test skill"},
+			GetContent:  func(context.Context) (string, error) { return "Test instructions", nil },
+		})
+		p := skills.NewContextProvider(skills.ContextProviderOptions{
+			Sources: []skills.Source{source},
+			SkillFilter: func(context.Context, *skills.Skill, skills.SourceContext) bool {
+				if name == "skills-filter-error" {
+					panic("skills filter failed")
+				}
+				return allow
+			},
+		})
+		activate = func() error {
+			_, _, err := p.Invoking(ctx, invoking)
+			if name == "skills-filter-error" {
+				if err == nil || !strings.Contains(err.Error(), "skills filter failed") {
+					t.Fatalf("skills filter error = %v, want recovered failure", err)
+				}
+				return nil
+			}
+			if err != nil {
+				return err
+			}
+			if name == "skills-filtered-cache-hit" {
+				if got, want := telemetry.ApplyToUserAgent("", true), featureComment(16); got != want {
+					t.Fatalf("filtered skills marked provider usage: got %q, want %q", got, want)
+				}
+				allow = true
+				_, _, err = p.Invoking(ctx, invoking)
+			}
+			return err
+		}
 	case "file-skills":
 		source := fsskills.NewSource(fstest.MapFS{})
-		activate = func() error { _, err := source.Skills(ctx); return err }
+		activate = func() error { _, err := source.Skills(ctx, skills.SourceContext{}); return err }
 	case "todo":
 		p := todo.New(nil)
 		activate = func() error { _, _, err := p.Invoking(ctx, invoking); return err }

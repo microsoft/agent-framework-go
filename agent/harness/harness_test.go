@@ -379,7 +379,7 @@ func TestHarness_AgentSkillsProvider_UsesCustomSource(t *testing.T) {
 	settings := disabledConfig()
 	settings.DisableSkills = false
 	calls := 0
-	settings.Skills.Sources = []skills.Source{skills.SourceFunc(func(context.Context) ([]*skills.Skill, error) {
+	settings.Skills.Sources = []skills.Source{skills.SourceFunc(func(_ context.Context, sourceContext skills.SourceContext) ([]*skills.Skill, error) {
 		calls++
 		return nil, nil
 	})}

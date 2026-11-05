@@ -10,26 +10,26 @@ import (
 	"slices"
 
 	"github.com/google/jsonschema-go/jsonschema"
-	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/format"
 )
 
 // WrapNonObjectSchema returns a response format with an object-root schema.
 // A non-object JSON schema is copied into a required "data" property. The
 // supplied format and its schema are not modified; [ForType] still describes
 // the unwrapped value for local validation.
-func WrapNonObjectSchema(format agent.ResponseFormat) (agent.ResponseFormat, error) {
-	if format.Kind != "json" {
-		return agent.ResponseFormat{}, fmt.Errorf("response format kind %q, want json", format.Kind)
+func WrapNonObjectSchema(responseFormat format.ResponseFormat) (format.ResponseFormat, error) {
+	if responseFormat.Kind != "json" {
+		return format.ResponseFormat{}, fmt.Errorf("response format kind %q, want json", responseFormat.Kind)
 	}
-	schema, ok := format.Schema.(*jsonschema.Schema)
+	schema, ok := responseFormat.Schema.(*jsonschema.Schema)
 	if !ok {
-		return agent.ResponseFormat{}, fmt.Errorf("response format schema has type %T, want *jsonschema.Schema", format.Schema)
+		return format.ResponseFormat{}, fmt.Errorf("response format schema has type %T, want *jsonschema.Schema", responseFormat.Schema)
 	}
 	if schema == nil {
-		return agent.ResponseFormat{}, fmt.Errorf("response format schema cannot be nil")
+		return format.ResponseFormat{}, fmt.Errorf("response format schema cannot be nil")
 	}
 	if schema.Type == "object" {
-		return format, nil
+		return responseFormat, nil
 	}
 
 	dataSchema := schema.CloneSchemas()
@@ -50,8 +50,8 @@ func WrapNonObjectSchema(format agent.ResponseFormat) (agent.ResponseFormat, err
 	// Root references must still resolve after nesting the original schema.
 	wrappedSchema.Defs, dataSchema.Defs = dataSchema.Defs, nil
 	wrappedSchema.Definitions, dataSchema.Definitions = dataSchema.Definitions, nil
-	format.Schema = wrappedSchema
-	return format, nil
+	responseFormat.Schema = wrappedSchema
+	return responseFormat, nil
 }
 
 // UnmarshalStructuredOutput validates and decodes a response formatted by

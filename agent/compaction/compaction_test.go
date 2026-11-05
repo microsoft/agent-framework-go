@@ -757,6 +757,136 @@ func TestNewContextProvider_PanicsWithBlankStateKey(t *testing.T) {
 	}
 }
 
+func TestNewProvider_DefaultStateIsIsolatedByStrategyType(t *testing.T) {
+	session := agenttest.CreateSession()
+	truncation := compaction.NewContextProvider(compaction.ContextProviderConfig{
+		Strategy: &compaction.TruncationStrategy{
+			Trigger: compaction.GroupsExceed(2), MinimumPreservedGroups: new(2),
+		},
+	})
+	result, _, err := invokeProvider(truncation, t.Context(), turnMessages(3), agent.WithSession(session))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := messageTexts(result), []string{"u3", "a3"}; !slices.Equal(got, want) {
+		t.Fatalf("initial truncation = %v, want %v", got, want)
+	}
+
+	for _, restored := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restored=%t", restored), func(t *testing.T) {
+			if restored {
+				data, err := json.Marshal(session)
+				if err != nil {
+					t.Fatal(err)
+				}
+				session = agenttest.CreateSession()
+				if err := json.Unmarshal(data, session); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// A different strategy must not inherit truncation's exclusions.
+			window := compaction.NewContextProvider(compaction.ContextProviderConfig{
+				Strategy: &compaction.SlidingWindowStrategy{Trigger: compaction.Never()},
+			})
+			result, _, err := invokeProvider(window, t.Context(), turnMessages(3), agent.WithSession(session))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := messageTexts(result), messageTexts(turnMessages(3)); !slices.Equal(got, want) {
+				t.Errorf("different strategy inherited exclusions: got %v, want %v", got, want)
+			}
+
+			// Recreating the original strategy type must recover its saved state,
+			// even when its new configuration would not trigger compaction.
+			recreated := compaction.NewContextProvider(compaction.ContextProviderConfig{
+				Strategy: &compaction.TruncationStrategy{Trigger: compaction.Never()},
+			})
+			result, _, err = invokeProvider(recreated, t.Context(), turnMessages(3), agent.WithSession(session))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := messageTexts(result), []string{"u3", "a3"}; !slices.Equal(got, want) {
+				t.Errorf("recreated strategy lost exclusions: got %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestNewProvider_CustomStrategyStateSurvivesRecreation(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		wrap func(strategyFunc) compaction.Strategy
+	}{
+		{"function value", func(f strategyFunc) compaction.Strategy { return f }},
+		{"function pointer", func(f strategyFunc) compaction.Strategy { return &f }},
+		{"unnamed struct", func(f strategyFunc) compaction.Strategy {
+			return struct{ compaction.Strategy }{f}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := agenttest.CreateSession()
+			truncation := &compaction.TruncationStrategy{
+				Trigger: compaction.GroupsExceed(2), MinimumPreservedGroups: new(2),
+			}
+			provider := compaction.NewContextProvider(compaction.ContextProviderConfig{Strategy: tc.wrap(truncation.Compact)})
+			if _, _, err := invokeProvider(provider, t.Context(), turnMessages(3), agent.WithSession(session)); err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(session)
+			if err != nil {
+				t.Fatal(err)
+			}
+			restored := agenttest.CreateSession()
+			if err := json.Unmarshal(data, restored); err != nil {
+				t.Fatal(err)
+			}
+			provider = compaction.NewContextProvider(compaction.ContextProviderConfig{
+				Strategy: tc.wrap(func(context.Context, *compaction.MessageIndex) (bool, error) { return false, nil }),
+			})
+			result, _, err := invokeProvider(provider, t.Context(), turnMessages(3), agent.WithSession(restored))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, want := messageTexts(result), []string{"u3", "a3"}; !slices.Equal(got, want) {
+				t.Fatalf("recreated custom strategy lost exclusions: got %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func TestNewProvider_ExplicitStateKeyRetainsLegacyState(t *testing.T) {
+	session := agenttest.CreateSession()
+	// SourceID still selects the same storage key as the previous default.
+	legacy := compaction.NewContextProvider(compaction.ContextProviderConfig{
+		SourceID: "CompactionProvider",
+		Strategy: &compaction.TruncationStrategy{
+			Trigger: compaction.GroupsExceed(2), MinimumPreservedGroups: new(2),
+		},
+	})
+	if _, _, err := invokeProvider(legacy, t.Context(), turnMessages(3), agent.WithSession(session)); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := agenttest.CreateSession()
+	if err := json.Unmarshal(data, restored); err != nil {
+		t.Fatal(err)
+	}
+	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
+		StateKey: "CompactionProvider", SourceID: "new-attribution",
+		Strategy: &compaction.TruncationStrategy{Trigger: compaction.Never()},
+	})
+	result, _, err := invokeProvider(provider, t.Context(), turnMessages(3), agent.WithSession(restored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := messageTexts(result), []string{"u3", "a3"}; !slices.Equal(got, want) {
+		t.Fatalf("legacy state was not retained: got %v, want %v", got, want)
+	}
+}
+
 func TestNewProvider_CompactsAndPersistsIndex(t *testing.T) {
 	session := agenttest.CreateSession()
 	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
@@ -867,7 +997,7 @@ func TestNewProvider_SourceStampsGeneratedMessages(t *testing.T) {
 		SourceID: "compaction-test",
 	})
 
-	compactedMessages, _, err := invokeProvider(provider, t.Context(), turnMessages(3))
+	compactedMessages, _, err := invokeProvider(provider, t.Context(), turnMessages(3), agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -935,7 +1065,7 @@ func TestNewProvider_SourceStampingDoesNotMutateGeneratedMessage(t *testing.T) {
 	})
 
 	input := textMessage(message.RoleUser, "input")
-	compactedMessages, _, err := invokeProvider(provider, t.Context(), []*message.Message{input})
+	compactedMessages, _, err := invokeProvider(provider, t.Context(), []*message.Message{input}, agent.WithSession(agenttest.CreateSession()))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -950,20 +1080,103 @@ func TestNewProvider_SourceStampingDoesNotMutateGeneratedMessage(t *testing.T) {
 	}
 }
 
-func TestNewProvider_CompactsWithoutSession(t *testing.T) {
+func TestNewProvider_RequiresSessionForCompaction(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		options       []agent.Option
+		wantCompacted bool
+	}{
+		{name: "omitted session"},
+		{name: "nil session", options: []agent.Option{agent.WithSession(nil)}},
+		{name: "local session", options: []agent.Option{agent.WithSession(agenttest.CreateSession())}, wantCompacted: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			strategy := &compaction.TruncationStrategy{
+				Trigger:                compaction.GroupsExceed(2),
+				MinimumPreservedGroups: new(2),
+			}
+			called := false
+			provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
+				Strategy: strategyFunc(func(ctx context.Context, index *compaction.MessageIndex) (bool, error) {
+					called = true
+					return strategy.Compact(ctx, index)
+				}),
+			})
+			messages := turnMessages(3)
+			options := append(tc.options, agent.WithInstructions("Be helpful"))
+			result, resultOptions, err := invokeProvider(provider, t.Context(), messages, options...)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if called != tc.wantCompacted {
+				t.Errorf("strategy called = %v, want %v", called, tc.wantCompacted)
+			}
+			want := messages
+			if tc.wantCompacted {
+				want = messages[len(messages)-2:]
+			} else if len(result) == 0 || &result[0] != &messages[0] {
+				t.Error("expected the original message slice without a session")
+			}
+			if !slices.Equal(result, want) {
+				t.Errorf("messages = %v, want %v", messageTexts(result), messageTexts(want))
+			}
+			if len(resultOptions) != len(options) || &resultOptions[0] != &options[0] {
+				t.Error("expected the original options")
+			}
+		})
+	}
+}
+
+func TestNewProvider_MiddlewarePassesThroughWithoutSession(t *testing.T) {
 	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
 		Strategy: &compaction.TruncationStrategy{
-			Trigger:                compaction.GroupsExceed(2),
-			MinimumPreservedGroups: new(2),
+			Trigger: compaction.GroupsExceed(2), MinimumPreservedGroups: new(2),
 		},
 	})
-
-	compactedMessages, _, err := invokeProvider(provider, t.Context(), turnMessages(3))
+	messages := turnMessages(3)
+	options := []agent.Option{agent.WithInstructions("Be helpful")}
+	called := false
+	runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder(func(_ context.Context, got []*message.Message, opts ...agent.Option) {
+		called = true
+		if !slices.Equal(got, messages) || len(got) == 0 || &got[0] != &messages[0] {
+			t.Errorf("downstream messages = %v, want the original slice", messageTexts(got))
+		}
+		if len(opts) != len(options) || &opts[0] != &options[0] {
+			t.Error("downstream options changed")
+		}
+	}).AddText("done").Build()}
+	response, err := agent.ResponseStream(agent.ContextProviderMiddleware(provider).Run(runner.Run, t.Context(), messages, options...)).Collect()
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatal(err)
 	}
-	if got, want := messageTexts(compactedMessages), []string{"u3", "a3"}; !slices.Equal(got, want) {
-		t.Fatalf("unexpected compacted messages: got %v want %v", got, want)
+	if !called || response.String() != "done" {
+		t.Fatal("expected the downstream response to pass through")
+	}
+}
+
+func TestNewProvider_AgentRunCompactsWithImplicitSession(t *testing.T) {
+	provider := compaction.NewContextProvider(compaction.ContextProviderConfig{
+		Strategy: &compaction.TruncationStrategy{
+			Trigger: compaction.GroupsExceed(2), MinimumPreservedGroups: new(2),
+		},
+	})
+	called := false
+	runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder(func(_ context.Context, got []*message.Message, opts ...agent.Option) {
+		called = true
+		if session, _ := agent.GetOption(opts, agent.WithSession); session == nil {
+			t.Error("expected Agent.Run to supply an implicit session")
+		}
+		if want := []string{"u3", "a3"}; !slices.Equal(messageTexts(got), want) {
+			t.Errorf("downstream messages = %v, want %v", messageTexts(got), want)
+		}
+	}).AddText("done").Build()}
+	a := agent.New(agent.ProviderConfig{Run: runner.Run}, agent.Config{ContextProviders: []agent.ContextProvider{provider}})
+	response, err := a.Run(t.Context(), turnMessages(3)).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || response.String() != "done" {
+		t.Fatal("expected the downstream response to pass through")
 	}
 }
 

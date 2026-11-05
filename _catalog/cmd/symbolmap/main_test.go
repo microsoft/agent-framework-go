@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,10 +13,12 @@ import (
 	"io"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -152,6 +155,11 @@ func TestRepositoryIndexedViews(t *testing.T) {
 	decodeOutput(t, commandOutput(t, "go", "-go-root", root, "-summary", "-json"), &goReport)
 	if goReport.Module != "github.com/microsoft/agent-framework-go" || goReport.ExportedSymbols == 0 || len(goReport.Packages) == 0 {
 		t.Fatalf("Go inventory is incomplete: %+v", goReport)
+	}
+	for _, pkg := range []string{"format", "format/jsonformat"} {
+		if !slices.Contains(goReport.Packages, pkg) {
+			t.Fatalf("Go inventory does not include %q", pkg)
+		}
 	}
 	var goPage goInventory
 	decodeOutput(t, commandOutput(t, "go", "-go-root", root, "-symbol", "agent.Session"), &goPage)
@@ -541,6 +549,30 @@ func TestMappingPages(t *testing.T) {
 	}
 }
 
+func TestGoInventoryDefaultPackages(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+	for _, withFormat := range []bool{false, true} {
+		t.Run(fmt.Sprintf("format=%v", withFormat), func(t *testing.T) {
+			files := make(map[string]string)
+			packages := []string{"agent", "message", "provider", "tool", "workflow"}
+			for _, pkg := range packages {
+				files[pkg+"/package.go"] = "package " + pkg + "\ntype Value struct{}\n"
+			}
+			if withFormat {
+				files["format/format.go"] = "package format\ntype ResponseFormat struct{}\n"
+				packages = append(packages, "format")
+			}
+			slices.Sort(packages)
+			root := writeGoCheckout(t, "example.org/sdk", files)
+			var got reconciliationGoInventory
+			decodeOutput(t, commandOutput(t, "go", "-go-root", root, "-summary"), &got)
+			if !slices.Equal(got.Packages, packages) {
+				t.Fatalf("indexed packages = %v, want %v", got.Packages, packages)
+			}
+		})
+	}
+}
+
 func TestGoInventoryPages(t *testing.T) {
 	api := goInventory{
 		Module: "example.org/sdk", Packages: []string{"agent", "tool"},
@@ -564,6 +596,408 @@ func TestGoInventoryPages(t *testing.T) {
 	decodeOutput(t, out.String(), &got)
 	if got.Page == nil || got.Page.Total != 2 || got.Page.Returned != 2 || len(got.Symbols) != 2 {
 		t.Fatalf("unbounded Go index page = %+v, symbols = %v", got.Page, got.Symbols)
+	}
+}
+
+func TestAuditCoverage(t *testing.T) {
+	t.Setenv("GOWORK", "off")
+	oldRoot := writeGoCheckout(t, "example.org/sdk", map[string]string{
+		"agent/agent.go": "package agent\ntype Embedded struct{ Value int }\ntype Existing struct{ Embedded }\nfunc Behavior() {}\n",
+	})
+	newRoot := writeGoCheckout(t, "example.org/sdk", map[string]string{
+		"agent/agent.go": `package agent
+type Embedded struct{ Value int }
+type Existing struct{ Embedded }
+type Added struct{ Embedded; Enabled bool }
+func (Added) Run() {}
+func Behavior() {}
+func GoOnly() {}
+`,
+		"tool/added/tool.go": "package added\ntype Tool struct{ Option string }\nfunc Run() {}\n",
+	})
+	commitAuditCheckout(t, oldRoot)
+	commitAuditCheckout(t, newRoot)
+	changeOutput := commandOutput(t, "changes", "-old-root", oldRoot, "-go-root", newRoot, "-go-package", "./...", "-limit=0")
+	var changes goChangesReport
+	decodeOutput(t, changeOutput, &changes)
+	changesFile := writeAuditFile(t, "changes.json", []byte(changeOutput))
+	patch := fmt.Sprintf("commit %s\n\n    Behavioral change\n\ndiff --git a/internal/helper.go b/internal/helper.go\n@@ -1 +1 @@\n-old\n+new\n"+
+		"diff --git \"a/agent/file name.go\" \"b/agent/file name.go\"\n@@ -1 +1 @@\n-old\n+new\n"+
+		"commit %s\n\ndiff --git a/message/deleted.go b/message/deleted.go\ndeleted file mode 100644\n-old\n", changes.New.Commit, changes.Old.Commit)
+	patchFile := writeAuditFile(t, "recent.patch", []byte(patch))
+	var catalog symbolcatalog.Catalog
+	if err := json.Unmarshal([]byte(sampleCatalogJSON), &catalog); err != nil {
+		t.Fatal(err)
+	}
+	catalog.Dotnet = &symbolcatalog.Metadata{
+		SchemaVersion: 1, IdentityFormat: "ecma335-v1", SHA256: strings.Repeat("a", 64),
+		Assemblies: map[string]symbolcatalog.Assembly{
+			"Core": {Version: "1.0.0.0", InformationalVersion: "1.0.0+" + catalog.Baseline.DotnetCommit, SHA256: strings.Repeat("b", 64)},
+		},
+	}
+	catalog.Namespaces["Example.Agents"]["UnreviewedOwner"] = symbolcatalog.Type{
+		Area: "agents", Assembly: "Core",
+		Properties: map[string]symbolcatalog.Mapping{"Name": {Status: "unmapped", GoSymbols: []string{}, Unreviewed: true}},
+	}
+	entry := catalog.Namespaces["Example.Agents"]["Agent"]
+	for i := range 25 {
+		entry.Properties[fmt.Sprintf("Extra%02d", i)] = symbolcatalog.Mapping{Status: "mapped", GoSymbols: []string{"agent.Existing"}}
+	}
+	catalog.Namespaces["Example.Agents"]["Agent"] = entry
+	catalog.Namespaces["Example.Other"] = map[string]symbolcatalog.Type{
+		"Agent": {Area: "agents", Properties: map[string]symbolcatalog.Mapping{"Name": {Status: "mapped", GoSymbols: []string{"agent.Existing"}}}},
+	}
+	catalog.GoOnly = map[string]symbolcatalog.GoOnlyAssessment{"agent.GoOnly": {Note: "Reviewed Go-only operation."}}
+	catalogFile := writeAuditJSON(t, "catalog.json", catalog)
+	planArgs := []string{"audit-plan", "-file", catalogFile, "-go-root", newRoot, "-go-package", "./...", "-changes", changesFile, "-patch", patchFile}
+	planOutput := commandOutput(t, planArgs...)
+	if next := commandOutput(t, planArgs...); next != planOutput {
+		t.Fatal("audit plan is not deterministic")
+	}
+	var plan auditPlan
+	decodeOutput(t, planOutput, &plan)
+	original := readMappings(t, "-file", catalogFile, "-assessed", "-limit=0")
+	var assessments, apiItems, behaviorItems, goOnlyItems int
+	members := make(map[string]auditItem)
+	patchLines := strings.Split(patch, "\n")
+	coveredLines := make(map[int]bool)
+	for _, item := range plan.Items {
+		switch item.Kind {
+		case "api":
+			apiItems++
+			index, err := strconv.Atoi(strings.TrimPrefix(item.ID, "api:"))
+			if err != nil || index < 0 || index >= len(changes.Changes) || item.Subject != changes.Changes[index].Message {
+				t.Fatalf("API identity changed: %+v", item)
+			}
+		case "behavior":
+			behaviorItems++
+			if item.StartLine < 1 || item.EndLine < item.StartLine || item.EndLine > len(patchLines) {
+				t.Fatalf("invalid complete patch range: %+v", item)
+			}
+			for line := item.StartLine; line <= item.EndLine; line++ {
+				if coveredLines[line] {
+					t.Fatalf("overlapping patch ranges at line %d", line)
+				}
+				coveredLines[line] = true
+			}
+		case "assessment":
+			assessments++
+			index, err := strconv.Atoi(strings.TrimPrefix(item.ID, "assessment:"))
+			if err != nil || index < 0 || index >= len(original.Mappings) {
+				t.Fatalf("invalid original assessment index: %+v", item)
+			}
+			mapping := original.Mappings[index]
+			if item.Subject != mapping.Namespace+"."+mapping.Dotnet {
+				t.Fatalf("assessment identity changed: %+v, %+v", item, mapping)
+			}
+		case "member":
+			if len(item.Parents) == 0 {
+				t.Fatalf("member lost its parent API entry: %+v", item)
+			}
+			members[item.Subject] = item
+		case "go-only":
+			goOnlyItems++
+		default:
+			t.Fatalf("unexpected item kind %q", item.Kind)
+		}
+	}
+	if assessments != original.Page.Total || apiItems != len(changes.Changes) || behaviorItems != 3 || goOnlyItems != 1 {
+		t.Fatalf("incomplete scope: assessments=%d/%d APIs=%d/%d behaviors=%d Go-only=%d",
+			assessments, original.Page.Total, apiItems, len(changes.Changes), behaviorItems, goOnlyItems)
+	}
+	for line, text := range patchLines {
+		if (strings.HasPrefix(text, "diff --git ") || strings.HasPrefix(text, "@@ ") ||
+			strings.HasPrefix(text, "+") || strings.HasPrefix(text, "-")) && !coveredLines[line+1] {
+			t.Errorf("patch hunk was omitted at line %d: %s", line+1, text)
+		}
+	}
+	for _, name := range []string{"agent.Added.Embedded", "agent.Added.Enabled", "agent.Added.Value", "agent.Added.Run", "tool/added.Tool", "tool/added.Tool.Option", "tool/added.Run"} {
+		if _, ok := members[name]; !ok {
+			t.Errorf("missing exported member %q", name)
+		}
+	}
+	check := func(t *testing.T, plan auditPlan, receipts []auditResult, want string) {
+		t.Helper()
+		planFile := writeAuditJSON(t, "plan.json", plan)
+		data, err := os.ReadFile(planFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resultsFile := writeAuditReceipts(t, receipts)
+		args := []string{"audit-check", "-plan", planFile, "-plan-sha256", fmt.Sprintf("%x", sha256.Sum256(data)), "-results", resultsFile}
+		if want == "" {
+			var coverage auditCoverage
+			decodeOutput(t, commandOutput(t, args...), &coverage)
+			if coverage.Items["assessment"] != assessments ||
+				coverage.Items["api"] != apiItems || coverage.Items["member"] != len(members) ||
+				coverage.Items["behavior"] != behaviorItems || coverage.Items["go-only"] != 1 {
+				t.Fatalf("incorrect completed coverage: %+v", coverage)
+			}
+			return
+		}
+		var out, diagnostics bytes.Buffer
+		err = run(args, &out, &diagnostics)
+		if err == nil || !strings.Contains(err.Error(), want) || out.Len() != 0 {
+			t.Fatalf("expected %q without a success report; got %v, output=%s", want, err, out.String())
+		}
+	}
+	check(t, plan, auditReceipts(plan), "")
+	for _, test := range []struct {
+		name string
+		want string
+		edit func(*auditPlan, *[]auditResult)
+	}{
+		{"zero progress", "missing items", func(_ *auditPlan, receipts *[]auditResult) { *receipts = nil }},
+		{"missing original leaves", "assessment:0", func(_ *auditPlan, receipts *[]auditResult) {
+			*receipts = slices.DeleteFunc(*receipts, func(receipt auditResult) bool { return strings.HasPrefix(receipt.ID, "assessment:") })
+		}},
+		{"missing member", "member:agent.Added.Run", func(_ *auditPlan, receipts *[]auditResult) {
+			*receipts = slices.DeleteFunc(*receipts, func(receipt auditResult) bool { return receipt.ID == "member:agent.Added.Run" })
+		}},
+		{"missing behavioral item", "behavior:0", func(_ *auditPlan, receipts *[]auditResult) {
+			*receipts = slices.DeleteFunc(*receipts, func(receipt auditResult) bool { return receipt.ID == "behavior:0" })
+		}},
+		{"duplicate item", "duplicate audit item", func(_ *auditPlan, receipts *[]auditResult) {
+			*receipts = append(*receipts, (*receipts)[0])
+		}},
+		{"unassigned new assessment", "unassigned audit item", func(_ *auditPlan, receipts *[]auditResult) {
+			(*receipts)[0].ID = "assessment:new"
+		}},
+		{"wrong identity", "subject does not match", func(_ *auditPlan, receipts *[]auditResult) {
+			(*receipts)[0].Subject = "Another.Namespace.Agent"
+		}},
+		{"unresolved evidence", "unresolved or invalid outcome", func(_ *auditPlan, receipts *[]auditResult) {
+			(*receipts)[0].Outcome = "unresolved"
+		}},
+		{"empty reason", "source-backed reason", func(_ *auditPlan, receipts *[]auditResult) {
+			(*receipts)[0].Reason = " "
+		}},
+		{"missing evidence", "evidence at Go commit", func(_ *auditPlan, receipts *[]auditResult) {
+			(*receipts)[0].Evidence = nil
+		}},
+		{"missing pinned evidence", "applicable pinned .NET revision", func(_ *auditPlan, receipts *[]auditResult) {
+			(*receipts)[0].Evidence = (*receipts)[0].Evidence[:1]
+		}},
+		{"old Go evidence", "evidence at Go commit", func(plan *auditPlan, receipts *[]auditResult) {
+			(*receipts)[0].Evidence[0].Commit = plan.OldHead
+		}},
+		{"unrecognized source", "unrecognized .NET evidence revision", func(_ *auditPlan, receipts *[]auditResult) {
+			(*receipts)[0].Evidence[1].Commit = "main"
+		}},
+		{"wrong applicable pin", "applicable pinned .NET revision", func(plan *auditPlan, _ *[]auditResult) {
+			source := auditRevision{plan.DotnetSources[0].Repository, strings.Repeat("9", 40)}
+			plan.DotnetSources = append(plan.DotnetSources, source)
+			for i := range plan.Items {
+				if plan.Items[i].Kind == "assessment" {
+					plan.Items[i].Dotnet = &source
+					break
+				}
+			}
+		}},
+		{"non-recent addition", "recent implementing commit", func(_ *auditPlan, receipts *[]auditResult) {
+			(*receipts)[0].Outcome = "addition"
+			(*receipts)[0].ImplementingCommit = strings.Repeat("8", 40)
+		}},
+		{"invalid path", "repository-relative path", func(_ *auditPlan, receipts *[]auditResult) {
+			(*receipts)[0].Evidence[0].Path = "../outside.go"
+		}},
+		{"Windows absolute path", "repository-relative path", func(_ *auditPlan, receipts *[]auditResult) {
+			(*receipts)[0].Evidence[0].Path = "C:/outside.go"
+		}},
+		{"missing line", "positive line", func(_ *auditPlan, receipts *[]auditResult) {
+			(*receipts)[0].Evidence[0].Line = 0
+		}},
+		{"unsupported plan", "unsupported audit plan schema", func(plan *auditPlan, _ *[]auditResult) { plan.Version++ }},
+		{"duplicate planned identity", "duplicate planned item", func(plan *auditPlan, _ *[]auditResult) {
+			plan.Items[len(plan.Items)-1].ID = plan.Items[0].ID
+		}},
+		{"unknown audit kind", "unknown audit kind", func(plan *auditPlan, _ *[]auditResult) {
+			plan.Items[0].Kind = "unknown"
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var copied auditPlan
+			decodeOutput(t, planOutput, &copied)
+			receipts := auditReceipts(copied)
+			test.edit(&copied, &receipts)
+			check(t, copied, receipts, test.want)
+		})
+	}
+	t.Run("new assessments do not inflate original coverage", func(t *testing.T) {
+		receipts := auditReceipts(plan)
+		receipts[0].Outcome = "addition"
+		receipts[0].ImplementingCommit = plan.RecentCommits[0]
+		check(t, plan, receipts, "")
+	})
+	t.Run("receipt order does not matter", func(t *testing.T) {
+		receipts := auditReceipts(plan)
+		slices.Reverse(receipts)
+		check(t, plan, receipts, "")
+	})
+	t.Run("integrity and malformed receipts", func(t *testing.T) {
+		planFile := writeAuditFile(t, "plan.json", []byte(planOutput))
+		goodResults := writeAuditReceipts(t, auditReceipts(plan))
+		hash := fmt.Sprintf("%x", sha256.Sum256([]byte(planOutput)))
+		for _, test := range []struct{ plan, hash, results, want string }{
+			{planFile, "bad", goodResults, "SHA-256 digest"},
+			{writeAuditFile(t, "modified.json", []byte(planOutput+" ")), hash, goodResults, "pre-agent SHA-256"},
+			{planFile, hash, writeAuditFile(t, "bad.jsonl", []byte("{")), "decode item receipt"},
+			{planFile, hash, writeAuditFile(t, "extra.jsonl", []byte(`{"batch_id":"api-0000","unexpected":true}`)), "unknown field"},
+			{planFile, hash, filepath.Join(t.TempDir(), "missing.jsonl"), "missing.jsonl"},
+		} {
+			var out, diagnostics bytes.Buffer
+			err := run([]string{"audit-check", "-plan", test.plan, "-plan-sha256", test.hash, "-results", test.results}, &out, &diagnostics)
+			if err == nil || !strings.Contains(err.Error(), test.want) || out.Len() != 0 {
+				t.Fatalf("expected %q without success output; got %v, %s", test.want, err, out.String())
+			}
+		}
+	})
+	t.Run("complete report required", func(t *testing.T) {
+		partial := changes
+		partial.Changes = changes.Changes[:1]
+		args := slices.Clone(planArgs)
+		args[len(args)-3] = writeAuditJSON(t, "partial.json", partial)
+		var out, diagnostics bytes.Buffer
+		if err := run(args, &out, &diagnostics); err == nil || !strings.Contains(err.Error(), "complete, unfiltered") || out.Len() != 0 {
+			t.Fatalf("partial report must fail without a plan: %v, %s", err, out.String())
+		}
+	})
+	t.Run("behavioral review without API changes", func(t *testing.T) {
+		unchanged := commandOutput(t, "changes", "-old-root", newRoot, "-go-root", newRoot, "-go-package", "./...", "-limit=0")
+		args := slices.Clone(planArgs)
+		args[len(args)-3] = writeAuditFile(t, "unchanged.json", []byte(unchanged))
+		var unchangedPlan auditPlan
+		decodeOutput(t, commandOutput(t, args...), &unchangedPlan)
+		var behaviors int
+		for _, item := range unchangedPlan.Items {
+			if item.Kind == "api" || item.Kind == "member" {
+				t.Fatalf("unchanged API has an API/member item: %+v", item)
+			}
+			if item.Kind == "behavior" {
+				behaviors++
+			}
+		}
+		if behaviors != 3 {
+			t.Fatalf("behavioral review disappeared with an empty API report: %d", behaviors)
+		}
+	})
+}
+
+func TestAuditSourceRevisions(t *testing.T) {
+	const oldPin = "1111111111111111111111111111111111111111"
+	const newPin = "3333333333333333333333333333333333333333"
+	const repository = "https://example.org/dotnet"
+	catalog := symbolcatalog.Catalog{
+		Baseline: symbolcatalog.Baseline{DotnetRepository: repository, DotnetCommit: oldPin, GoRepository: "https://example.org/go"},
+		Dotnet: &symbolcatalog.Metadata{
+			Assemblies: map[string]symbolcatalog.Assembly{"Core": {InformationalVersion: "1.0.0+" + newPin}},
+			Packages:   map[string]symbolcatalog.Package{"Core": {Repository: repository, Assemblies: []string{"Core"}}},
+			Selection:  symbolcatalog.Selection{Namespaces: []string{"Example.InScope"}},
+		},
+		Namespaces: map[string]map[string]symbolcatalog.Type{
+			"Example.InScope": {
+				"Current":     {Assembly: "Core", Mapping: &symbolcatalog.Mapping{Status: "mapped"}},
+				"Unavailable": {Assembly: "Core", Unavailable: true, Mapping: &symbolcatalog.Mapping{Status: "unmapped"}},
+			},
+			"Example.Outside": {"Retained": {Assembly: "Core", Mapping: &symbolcatalog.Mapping{Status: "unmapped"}}},
+		},
+	}
+	changes := goChangesReport{goChangesSummary: goChangesSummary{
+		Old: reconciliationGoInventory{Commit: strings.Repeat("4", 40)},
+		New: reconciliationGoInventory{Commit: strings.Repeat("5", 40)},
+	}}
+	plan, err := makeAuditPlan(catalog, changes, goInventory{}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pins := make(map[string]string)
+	for _, item := range plan.Items {
+		pins[item.Subject] = item.Dotnet.Commit
+	}
+	for name, want := range map[string]string{
+		"Example.InScope.Current":     newPin,
+		"Example.InScope.Unavailable": oldPin,
+		"Example.Outside.Retained":    oldPin,
+	} {
+		if pins[name] != want {
+			t.Errorf("%s pin = %s, want %s", name, pins[name], want)
+		}
+	}
+	catalog.Dotnet.Assemblies["Core"] = symbolcatalog.Assembly{InformationalVersion: "1.0.0+unknown"}
+	if _, err := makeAuditPlan(catalog, changes, goInventory{}, ""); err == nil {
+		t.Fatal("unknown assembly provenance must not fall back to the baseline")
+	}
+}
+
+func auditReceipts(plan auditPlan) []auditResult {
+	var receipts []auditResult
+	for _, item := range plan.Items {
+		commit := plan.Head
+		if item.Kind == "behavior" {
+			commit = item.Commit
+		}
+		result := auditResult{
+			ID: item.ID, Subject: item.Subject, Outcome: "no-change", Reason: "The cited contracts agree.",
+			Evidence: []auditEvidence{{auditRevision: auditRevision{plan.GoRepository, commit}, Path: "agent/agent.go", Line: 1}},
+		}
+		if item.Kind == "assessment" || item.Kind == "api" || item.Kind == "member" {
+			source := plan.DotnetSources[0]
+			if item.Dotnet != nil {
+				source = *item.Dotnet
+			}
+			result.Evidence = append(result.Evidence, auditEvidence{auditRevision: source, Path: "dotnet/src/Agent.cs", Line: 1})
+		}
+		receipts = append(receipts, result)
+	}
+	return receipts
+}
+
+func writeAuditFile(t *testing.T, name string, data []byte) string {
+	t.Helper()
+	file := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(file, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return file
+}
+
+func writeAuditJSON(t *testing.T, name string, value any) string {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return writeAuditFile(t, name, data)
+}
+
+func writeAuditReceipts(t *testing.T, receipts []auditResult) string {
+	t.Helper()
+	var data bytes.Buffer
+	encoder := json.NewEncoder(&data)
+	for _, receipt := range receipts {
+		if err := encoder.Encode(receipt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return writeAuditFile(t, "results.jsonl", data.Bytes())
+}
+
+func commitAuditCheckout(t *testing.T, root string) {
+	t.Helper()
+	hooks := t.TempDir()
+	for _, args := range [][]string{{"init", "--quiet"}, {"add", "."}, {"commit", "--quiet", "-m", "Audit fixture"}} {
+		command := exec.Command("git", append([]string{"-c", "core.hooksPath=" + hooks, "-c", "init.templateDir=", "-c", "commit.gpgsign=false"}, args...)...)
+		command.Dir = root
+		command.Env = goIndexEnv(os.Environ(),
+			"GIT_CONFIG_NOSYSTEM=1", "GIT_CONFIG_GLOBAL="+filepath.Join(hooks, "no-config"),
+			"GIT_AUTHOR_NAME=Audit fixture", "GIT_AUTHOR_EMAIL=audit@example.org",
+			"GIT_COMMITTER_NAME=Audit fixture", "GIT_COMMITTER_EMAIL=audit@example.org",
+			"GIT_AUTHOR_DATE=2026-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2026-01-01T00:00:00Z",
+			"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+		)
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, output)
+		}
 	}
 }
 
@@ -1170,13 +1604,13 @@ func TestGoExampleFreeVariables(t *testing.T) {
 		GoVersion: runtime.Version(),
 		packages:  map[string]*types.Package{pkg.Path(): pkg},
 	}
-	if err := checkGoExample("sdk.Call(ctx); client.Call(ctx)", api); err != nil {
+	if err := checkGoExample("sdk.Call(ctx); client.Call(ctx)", api, nil); err != nil {
 		t.Fatalf("check concise example: %v", err)
 	}
-	if err := checkGoExample("sdk.Pair(ctx)", api); err != nil {
+	if err := checkGoExample("sdk.Pair(ctx)", api, nil); err != nil {
 		t.Fatalf("check multi-result call: %v", err)
 	}
-	if err := checkGoExample("sdk.Missing(ctx)", api); err == nil {
+	if err := checkGoExample("sdk.Missing(ctx)", api, nil); err == nil {
 		t.Fatal("missing package member must not be treated as a free variable")
 	}
 }
@@ -1190,7 +1624,8 @@ func TestResolveGoExampleStandardImport(t *testing.T) {
 	dependency.MarkComplete()
 	imports, err := resolveGoExampleImports(
 		map[string]map[string]bool{"json": {"Unmarshal": true}},
-		map[string]*types.Package{standard.Path(): standard, dependency.Path(): dependency},
+		goInventory{packages: map[string]*types.Package{standard.Path(): standard, dependency.Path(): dependency}},
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1208,12 +1643,51 @@ func TestResolveGoExamplePublicImport(t *testing.T) {
 		pkg.MarkComplete()
 		packages[path] = pkg
 	}
-	imports, err := resolveGoExampleImports(map[string]map[string]bool{"checkpoint": {"Manager": true}}, packages)
+	imports, err := resolveGoExampleImports(map[string]map[string]bool{"checkpoint": {"Manager": true}}, goInventory{packages: packages}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if imports["checkpoint"] != "example.org/sdk/checkpoint" {
 		t.Fatalf("checkpoint import = %q, want public package", imports["checkpoint"])
+	}
+}
+
+func TestResolveGoExampleTargetImport(t *testing.T) {
+	const module = "example.org/sdk"
+	packages := make(map[string]*types.Package)
+	for _, path := range []string{"agent/format/jsonformat", "format/jsonformat"} {
+		pkg := types.NewPackage(module+"/"+path, "jsonformat")
+		pkg.Scope().Insert(types.NewFunc(token.NoPos, pkg, "For", types.NewSignatureType(nil, nil, nil, nil, nil, false)))
+		pkg.MarkComplete()
+		packages[pkg.Path()] = pkg
+	}
+	api := goInventory{Module: module, packages: packages}
+	for _, test := range []struct {
+		name    string
+		targets []string
+		want    string
+	}{
+		{"legacy target", []string{"agent.Response.String", "agent/format/jsonformat.For"}, "agent/format/jsonformat"},
+		{"canonical target", []string{"format/jsonformat.For"}, "format/jsonformat"},
+		{"no targets", nil, ""},
+		{"unrelated target", []string{"agent.Response.String"}, ""},
+		{"both targets", []string{"agent/format/jsonformat.For", "format/jsonformat.For"}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			imports, err := resolveGoExampleImports(map[string]map[string]bool{"jsonformat": {"For": true}}, api, test.targets)
+			if test.want == "" {
+				if err == nil || !strings.Contains(err.Error(), "found 2 matching packages") {
+					t.Fatalf("ambiguous import error = %v, want matching-package error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if want := module + "/" + test.want; imports["jsonformat"] != want {
+				t.Fatalf("jsonformat import = %q, want %q", imports["jsonformat"], want)
+			}
+		})
 	}
 }
 
@@ -1345,6 +1819,13 @@ func TestInvalidOptionsAndHelp(t *testing.T) {
 		{"changes", "-old-root", ".", "-inventory", "ignored.json"},
 		{"changes", "-old-root", ".", "-assessed"},
 		{"changes", "-old-root", ".", "-check"},
+		{"audit-plan"},
+		{"audit-plan", "-changes", "report.json"},
+		{"audit-plan", "-changes", "report.json", "-patch", "recent.patch", "-limit", "0"},
+		{"audit-plan", "-changes", "report.json", "-patch", "recent.patch", "unexpected"},
+		{"audit-check"},
+		{"audit-check", "-plan", "plan.json", "-plan-sha256", "bad"},
+		{"audit-check", "-plan", "plan.json", "-plan-sha256", "bad", "-results", "results.jsonl", "unexpected"},
 		{"reconcile", "-state", "ready"},
 		{"go-tests", "-file", "ignored.json"},
 		{"go-tests", "-inventory", "ignored.json"},
@@ -1405,6 +1886,8 @@ func TestInvalidOptionsAndHelp(t *testing.T) {
 		{"reconcile", []string{"-file", "-assessed", "-go-root", "-check", "-state", "-summary", "-limit", "-offset"}, []string{"-inventory"}},
 		{"go-tests", []string{"-go-root", "-summary", "-symbol", "-json", "-limit", "-offset"}, []string{"-file", "-inventory", "-assessed", "-check", "-go-package", "-tags", "-area", "-kind", "-type", "-status"}},
 		{"tests", []string{"-file", "-go-root", "-assembly", "-namespace", "-type", "-symbol", "-state", "-summary", "-check", "-json", "-limit", "-offset"}, []string{"-inventory", "-assessed", "-area", "-kind", "-go-package", "-tags", "-status"}},
+		{"audit-plan", []string{"-file", "-go-root", "-go-package", "-tags", "-changes", "-patch"}, []string{"-limit", "-offset", "-summary", "-assessed"}},
+		{"audit-check", []string{"-plan", "-plan-sha256", "-results"}, []string{"-file", "-go-root", "-limit", "-summary"}},
 	} {
 		t.Run(command.name, func(t *testing.T) {
 			var out, help bytes.Buffer
@@ -1428,7 +1911,7 @@ func TestInvalidOptionsAndHelp(t *testing.T) {
 	if err := run([]string{"-help"}, &out, &help); err != nil || out.Len() != 0 {
 		t.Fatalf("root help must not load inputs: %v, %q", err, out.String())
 	}
-	for _, name := range []string{"symbolmap", "mappings", "gaps", "go-only", "go", "changes", "reconcile", "go-tests", "tests"} {
+	for _, name := range []string{"symbolmap", "mappings", "gaps", "go-only", "go", "changes", "reconcile", "go-tests", "tests", "audit-plan", "audit-check"} {
 		if !strings.Contains(help.String(), name) {
 			t.Errorf("root help is missing %q: %s", name, help.String())
 		}
