@@ -2037,7 +2037,7 @@ func TestToolApproval_SharesMaximumFunctionCallsAcrossHumanApprovalResumption(t 
 	}
 }
 
-func TestLoop_SharesMaximumFunctionCallsAcrossIterations(t *testing.T) {
+func TestLoop_EachIterationReceivesConfiguredPerRequestBudget(t *testing.T) {
 	var executions int
 	fn := functool.MustNew(functool.Config{Name: "step_action"}, func(context.Context, struct{}) (string, error) {
 		executions++
@@ -2045,18 +2045,43 @@ func TestLoop_SharesMaximumFunctionCallsAcrossIterations(t *testing.T) {
 	})
 
 	maxCalls := 1
-	var round1SchemaToolsStripped bool
+	var turn1SchemaToolsStripped bool
+	var turn2SchemaToolsPresent bool
+	var turn3SchemaToolsStripped bool
+
 	runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
-		// Round 0 of loop: model calls step_action
+		// Turn 0 (loop iter 0, autocall iter 0): model calls step_action
 		AddFunctionCall("call-1", fn.Name(), `{}`).
+		// Turn 1 (loop iter 0, autocall iter 1): budget exhausted (1/1), schema tools stripped
 		NewTurn(func(_ context.Context, _ []*message.Message, opts ...agent.Option) {
-			// Round 1 of loop: called again by loop.New within same agent.Run.
-			// Budget of 1 was consumed in round 0, so schema tools must be stripped.
-			round1SchemaToolsStripped = true
+			turn1SchemaToolsStripped = true
 			for optTool := range agent.AllOptions(opts, agent.WithTool) {
 				if _, ok := optTool.(tool.SchemaTool); ok {
-					round1SchemaToolsStripped = false
-					t.Errorf("round 1: expected schema tools to be stripped after reaching budget of 1")
+					turn1SchemaToolsStripped = false
+					t.Errorf("turn 1: expected schema tools to be stripped after reaching budget of 1")
+				}
+			}
+		}).
+		AddText("loop 0 done").
+		// Turn 2 (loop iter 1, autocall iter 0): fresh budget, schema tools MUST be present
+		NewTurn(func(_ context.Context, _ []*message.Message, opts ...agent.Option) {
+			for optTool := range agent.AllOptions(opts, agent.WithTool) {
+				if st, ok := optTool.(tool.SchemaTool); ok && st.Name() == fn.Name() {
+					turn2SchemaToolsPresent = true
+				}
+			}
+			if !turn2SchemaToolsPresent {
+				t.Errorf("turn 2: expected schema tools to be present with fresh budget in loop iteration 1")
+			}
+		}).
+		AddFunctionCall("call-2", fn.Name(), `{}`).
+		// Turn 3 (loop iter 1, autocall iter 1): budget exhausted again (1/1), schema tools stripped
+		NewTurn(func(_ context.Context, _ []*message.Message, opts ...agent.Option) {
+			turn3SchemaToolsStripped = true
+			for optTool := range agent.AllOptions(opts, agent.WithTool) {
+				if _, ok := optTool.(tool.SchemaTool); ok {
+					turn3SchemaToolsStripped = false
+					t.Errorf("turn 3: expected schema tools to be stripped after reaching budget of 1 in loop iteration 1")
 				}
 			}
 		}).
@@ -2070,7 +2095,7 @@ func TestLoop_SharesMaximumFunctionCallsAcrossIterations(t *testing.T) {
 				MaxIterations: new(3),
 				Evaluators: []loop.Evaluator{
 					loop.EvaluatorFunc(func(_ context.Context, lctx *loop.Context) (loop.Evaluation, error) {
-						if lctx.Iteration < 1 {
+						if lctx.Iteration < 2 {
 							return loop.Evaluation{ShouldReinvoke: true}, nil
 						}
 						return loop.Evaluation{ShouldReinvoke: false}, nil
@@ -2090,44 +2115,23 @@ func TestLoop_SharesMaximumFunctionCallsAcrossIterations(t *testing.T) {
 	}, cfg)
 
 	session := &agent.Session{}
-	resp1, err := a.RunText(t.Context(), "start request 1", agent.WithSession(session), agent.WithTool(fn)).Collect()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if executions != 1 {
-		t.Fatalf("expected 1 execution in request 1 across loop rounds, got %d", executions)
-	}
-	if !round1SchemaToolsStripped {
-		t.Fatalf("expected round 1 to strip schema tools")
-	}
-	if resp1.String() != "completed loop" {
-		t.Fatalf("unexpected response 1: %q", resp1.String())
-	}
-
-	// Request 2: new independent run with same session must reset budget
-	runner2 := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
-		AddFunctionCall("call-2", fn.Name(), `{}`).
-		NewTurn().
-		AddText("completed request 2").
-		Build(),
-	}
-	a2 := agent.New(agent.ProviderConfig{
-		ProviderName: "test",
-		Run:          runner2.Run,
-		Middlewares: []agent.Middleware{
-			toolautocall.New(toolautocall.Config{
-				MaximumFunctionCallsPerRequest: &maxCalls,
-			}),
-		},
-	}, cfg)
-	resp2, err := a2.RunText(t.Context(), "start request 2", agent.WithSession(session), agent.WithTool(fn)).Collect()
+	resp, err := a.RunText(t.Context(), "start request", agent.WithSession(session), agent.WithTool(fn)).Collect()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if executions != 2 {
-		t.Fatalf("expected 2 total executions across both independent runs, got %d", executions)
+		t.Fatalf("expected 2 executions (1 per loop iteration), got %d", executions)
 	}
-	if resp2.String() != "completed request 2" {
-		t.Fatalf("unexpected response 2: %q", resp2.String())
+	if !turn1SchemaToolsStripped {
+		t.Fatalf("expected turn 1 to strip schema tools")
+	}
+	if !turn2SchemaToolsPresent {
+		t.Fatalf("expected turn 2 to have schema tools present")
+	}
+	if !turn3SchemaToolsStripped {
+		t.Fatalf("expected turn 3 to strip schema tools")
+	}
+	if !strings.Contains(resp.String(), "completed loop") {
+		t.Fatalf("unexpected final response: %q", resp.String())
 	}
 }

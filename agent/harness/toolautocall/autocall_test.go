@@ -1460,6 +1460,61 @@ func TestFunctionInvoking_MaximumFunctionCallsIndependentRunsWithBackgroundConte
 	}
 }
 
+func TestFunctionInvoking_StaleSessionConsumedIgnoredWithoutApprovalResponse(t *testing.T) {
+	maxCalls := 2
+	actualCallCount := 0
+
+	tools := []tool.Tool{
+		functool.MustNew(functool.Config{Name: "DoWork"},
+			func(ctx context.Context, args struct{}) (string, error) {
+				actualCallCount++
+				return "Work done", nil
+			}),
+	}
+
+	session := &agent.Session{}
+	// Pre-populate session with stale Consumed state, but no approval responses in the incoming messages
+	session.Set("toolautocall.pendingApprovalRequests", struct {
+		Consumed int `json:"consumed"`
+	}{
+		Consumed: 10,
+	})
+
+	cfg := toolautocall.Config{
+		MaximumFunctionCallsPerRequest: &maxCalls,
+	}
+	middleware := toolautocall.New(cfg)
+
+	next := func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		var round int
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			round++
+			if round <= 2 {
+				yield(&agent.ResponseUpdate{
+					Role:     message.RoleAssistant,
+					Contents: []message.Content{&message.FunctionCallContent{CallID: fmt.Sprintf("c%d", round), Name: "DoWork"}},
+				}, nil)
+				return
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "done"}},
+			}, nil)
+		}
+	}
+
+	for update, err := range middleware.Run(next, t.Context(), []*message.Message{message.NewText("hello")}, agent.WithSession(session), agent.WithTool(tools[0])) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = update
+	}
+
+	if actualCallCount != 2 {
+		t.Fatalf("expected 2 calls executed despite stale session consumed count, got %d", actualCallCount)
+	}
+}
+
 func TestFunctionInvoking_MaximumFunctionCallsAllowsCurrentBatchToFinish(t *testing.T) {
 	maxCalls := 2
 	actualCallCount := 0

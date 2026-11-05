@@ -135,7 +135,10 @@ type Config struct {
 	//
 	// When a function call requires human approval, execution is suspended and any prior
 	// invocations within the active turn are carried forward to the resumed approval request.
-	// Independent user turns receive a fresh budget.
+	//
+	// The budget is scoped to a single invocation of this middleware. Independent calls — whether
+	// from separate user turns, loop middleware re-invocations, or any other upstream caller —
+	// each start with a fresh count.
 	//
 	// When nil, no call-count limit is enforced. Zero allows the model to run without
 	// invoking any automatic function calls. Negative values are invalid.
