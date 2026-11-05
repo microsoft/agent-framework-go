@@ -891,6 +891,43 @@ func TestBuilder_OutputTagsAccumulateWithoutDuplicates(t *testing.T) {
 	}
 }
 
+func TestBuilder_WithTaggedOutputFromAccumulatesTags(t *testing.T) {
+	start := newNoOpExecutor("start")
+	leaf := newNoOpExecutor("leaf")
+	other := newNoOpExecutor("other")
+
+	wf, err := workflow.NewBuilder(start).
+		AddEdge(start, leaf).
+		AddEdge(start, other).
+		WithOutputFrom(leaf).
+		WithTaggedOutputFrom("custom", leaf, other).
+		WithTaggedOutputFrom("custom", leaf).
+		WithIntermediateOutputFrom(leaf).
+		Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	got := outputExecutorTags(wf, "leaf")
+	slices.Sort(got)
+	if want := []workflow.OutputTag{"custom", workflow.OutputTagIntermediate}; !slices.Equal(got, want) {
+		t.Fatalf("leaf tags = %v, want %v", got, want)
+	}
+	if got := outputExecutorTags(wf, "other"); !slices.Equal(got, []workflow.OutputTag{"custom"}) {
+		t.Fatalf("other tags = %v, want [custom]", got)
+	}
+}
+
+func TestBuilder_WithTaggedOutputFromRejectsEmptyTag(t *testing.T) {
+	start := newNoOpExecutor("start")
+	leaf := newNoOpExecutor("leaf")
+
+	_, err := workflow.NewBuilder(start).AddEdge(start, leaf).WithTaggedOutputFrom("", leaf).Build()
+	if err == nil {
+		t.Fatal("Build succeeded with an empty output tag")
+	}
+}
+
 func outputExecutorTags(wf *workflow.Workflow, executorID string) []workflow.OutputTag {
 	if wf == nil {
 		return nil
