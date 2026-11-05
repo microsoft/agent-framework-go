@@ -709,11 +709,13 @@ func (proc *runnerContext) endRun(ctx context.Context) error {
 	}
 	var runErr error
 
-	executors, err := proc.executorSnapshot()
-	if err != nil {
-		runErr = errors.Join(runErr, err)
-	}
-	for _, executor := range executors {
+	// Executors that failed to initialize have no instance to close; their
+	// failure is reported while the run executes.
+	for _, entry := range proc.executors.All() {
+		executor, err := entry.wait()
+		if err != nil || executor == nil {
+			continue
+		}
 		if err := executor.Close(ctx); err != nil {
 			runErr = errors.Join(runErr, err)
 		}
