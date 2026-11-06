@@ -1,0 +1,30 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Run manually with initial_sha first.
+
+name: Dependency history audit
+
+on:
+  schedule:
+    - cron: "17 8 * * 1"
+  workflow_dispatch:
+    inputs:
+      initial_sha:
+        description: "Exclusive starting commit for the first audit, as a full SHA"
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    uses: microsoft/go-infra/.github/workflows/dependency-audit-target.yml@1af9ead692d686d0c32356b663d6addad02ccdd2
+    permissions:
+      actions: read
+      contents: read
+      issues: write
+      copilot-requests: write
+    with:
+      initial_sha: ${{ inputs.initial_sha || '' }}
