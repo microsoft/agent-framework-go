@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -25,6 +26,59 @@ import (
 	"github.com/microsoft/agent-framework-go/tool/functool"
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 )
+
+func TestDeclarationOnlyToolsAreAdvertised(t *testing.T) {
+	requests := make(chan []string, 1)
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requestCount.Add(1) != 1 {
+			t.Error("declaration-only call caused another provider request")
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		var body struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		var names []string
+		for _, declaration := range body.Tools {
+			names = append(names, declaration.Name)
+		}
+		requests <- names
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := io.WriteString(w, `{"id":"msg-test","type":"message","role":"assistant","model":"test-model","content":[{"type":"tool_use","id":"frontend-call","name":"frontend","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}`); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	a := anthropicprovider.NewAgent(anthropic.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL)), anthropicprovider.AgentConfig{Model: "test-model"})
+	fn := functool.MustNew(functool.Config{Name: "frontend"}, func(context.Context, struct{}) (string, error) {
+		t.Error("declaration-only tool was invoked")
+		return "", nil
+	})
+	response, err := a.RunText(t.Context(), "hello", agent.WithTool(struct{ tool.SchemaTool }{fn})).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := <-requests; !slices.Equal(names, []string{"frontend"}) {
+		t.Fatalf("wire tools=%v, want frontend", names)
+	}
+	var call *message.FunctionCallContent
+	for content := range response.Contents() {
+		if functionCall, ok := content.(*message.FunctionCallContent); ok {
+			call = functionCall
+		}
+	}
+	if call == nil || call.Name != "frontend" || call.CallID != "frontend-call" || call.InformationalOnly {
+		t.Fatalf("returned call=%+v, want an unexecuted frontend call", call)
+	}
+}
 
 // testOutput is the structured type used across structured output tests.
 type testOutput struct {
@@ -242,6 +296,71 @@ func TestStreamingUsage_DoesNotDoubleCountOutputTokens(t *testing.T) {
 	}
 	if got := usage.Details.AdditionalCounts["cache_creation_input_tokens"]; got != 3 {
 		t.Errorf("cache_creation_input_tokens = %d, want 3", got)
+	}
+}
+
+func TestStreamingUsage_UsesAccumulatedCounters(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		deltas []string
+		want   message.UsageDetails
+	}{
+		{
+			name:   "omitted fields",
+			deltas: []string{`{"output_tokens":5}`},
+			want: message.UsageDetails{
+				InputTokenCount: 20, OutputTokenCount: 5, TotalTokenCount: 25, CachedInputTokenCount: 7, ReasoningTokenCount: 1,
+				AdditionalCounts: map[string]int64{"cache_creation_input_tokens": 3, "web_fetch_requests": 2, "web_search_requests": 3},
+			},
+		},
+		{
+			name:   "updated fields",
+			deltas: []string{`{"input_tokens":20,"cache_creation_input_tokens":4,"cache_read_input_tokens":8,"output_tokens":5,"output_tokens_details":{"thinking_tokens":2},"server_tool_use":{"web_fetch_requests":5,"web_search_requests":6}}`},
+			want: message.UsageDetails{
+				InputTokenCount: 32, OutputTokenCount: 5, TotalTokenCount: 37, CachedInputTokenCount: 8, ReasoningTokenCount: 2,
+				AdditionalCounts: map[string]int64{"cache_creation_input_tokens": 4, "web_fetch_requests": 5, "web_search_requests": 6},
+			},
+		},
+		{
+			name:   "explicit zero",
+			deltas: []string{`{"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_fetch_requests":0,"web_search_requests":0}}`},
+			want:   message.UsageDetails{},
+		},
+		{
+			name: "multiple cumulative deltas",
+			deltas: []string{
+				`{"input_tokens":12,"cache_creation_input_tokens":2,"cache_read_input_tokens":4,"output_tokens":2,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_fetch_requests":5,"web_search_requests":6}}`,
+				`{"output_tokens":5}`,
+			},
+			want: message.UsageDetails{
+				InputTokenCount: 18, OutputTokenCount: 5, TotalTokenCount: 23, CachedInputTokenCount: 4,
+				AdditionalCounts: map[string]int64{"cache_creation_input_tokens": 2, "web_fetch_requests": 5, "web_search_requests": 6},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output strings.Builder
+			output.WriteString("event: message_start\n")
+			output.WriteString(`data: {"type":"message_start","message":{"id":"msg-test","type":"message","role":"assistant","content":[],"model":"test-model","usage":{"input_tokens":10,"output_tokens":1,"cache_creation_input_tokens":3,"cache_read_input_tokens":7,"output_tokens_details":{"thinking_tokens":1},"server_tool_use":{"web_fetch_requests":2,"web_search_requests":3}}}}` + "\n\n")
+			for _, delta := range tc.deltas {
+				fmt.Fprintf(&output, "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":%s}\n\n", delta)
+			}
+			output.WriteString("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n")
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				if _, err := io.WriteString(w, output.String()); err != nil {
+					t.Error(err)
+				}
+			}))
+			defer server.Close()
+			response, err := newTestClient(t, server).RunText(t.Context(), "hello", agent.Stream(true)).Collect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := response.Usage(); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("usage=%+v, want %+v", got, tc.want)
+			}
+		})
 	}
 }
 

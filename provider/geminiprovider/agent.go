@@ -284,7 +284,7 @@ func (a *client) buildParams(messages []*message.Message, opts []agent.Option) (
 				fs.TopK = &topK
 			}
 			cfg.Tools = append(cfg.Tools, &genai.Tool{FileSearch: fs})
-		case tool.FuncTool:
+		case tool.SchemaTool:
 			decl := &genai.FunctionDeclaration{
 				Name:        tl.Name(),
 				Description: tl.Description(),
