@@ -118,6 +118,21 @@ The harness does not override those settings. Approval-required tools can still
 pause a run when `DisableToolApproval` is true; the application must return the
 approval response through the same session. The runnable example shows that flow.
 
+Function-call updates are buffered until the provider response completes so
+server-completed calls can be excluded from local execution and approval handling.
+The default approval bypass preserves serial call order when combining hidden
+safe calls with explicitly approved calls. Rejected calls produce a result telling
+the model that the approver denied the operation and it must not be retried.
+
+Function-invocation middleware can set
+[`FunctionInvocationContext.Terminate`](../agent/middleware.go) to return tool
+results without another provider request, including after approval. Remaining
+serial calls receive not-invoked results; concurrent calls finish normally.
+Invocation errors still follow the configured error handling. Providers that
+manage tool execution themselves return a tool error if termination is requested.
+When continuing service-managed history after termination, include the returned
+tool-result messages in the later run: they have not yet been sent to the service.
+
 ### Partial work and cancellation
 
 Tool invocation does not roll back side effects. When request cancellation stops
