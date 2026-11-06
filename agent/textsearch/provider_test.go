@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
@@ -555,30 +556,67 @@ func TestTextSearchProvider_Cancellation(t *testing.T) {
 				}
 			})
 		}
-		t.Run(fmt.Sprintf("%d/already canceled", behavior), func(t *testing.T) {
-			calls := 0
-			var logs bytes.Buffer
-			provider := textsearch.NewContextProvider(func(ctx context.Context, _ string) ([]textsearch.Result, error) {
-				calls++
-				return nil, ctx.Err()
-			}, textsearch.Config{SearchTime: behavior, Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+		for _, deadline := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%d/already canceled/deadline=%v", behavior, deadline), func(t *testing.T) {
+				calls := 0
+				var searchErr error
+				var logs bytes.Buffer
+				provider := textsearch.NewContextProvider(func(ctx context.Context, _ string) ([]textsearch.Result, error) {
+					calls++
+					searchErr = fmt.Errorf("search: %w", ctx.Err())
+					return nil, searchErr
+				}, textsearch.Config{SearchTime: behavior, Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+				ctx, cancel := context.WithCancel(t.Context())
+				if deadline {
+					cancel()
+					ctx, cancel = context.WithDeadline(t.Context(), time.Time{})
+				} else {
+					cancel()
+				}
+				defer cancel()
+				var err error
+				if behavior == textsearch.BeforeInvoke {
+					_, _, err = invokeProvider(provider, ctx, nil)
+				} else {
+					_, err = searchTool(t, provider).Call(ctx, `{"userQuestion":"Q"}`)
+				}
+				if err != searchErr || !errors.Is(err, ctx.Err()) {
+					t.Fatalf("cancellation = %v, want original error %v", err, searchErr)
+				}
+				if strings.Contains(logs.String(), "text search failed") {
+					t.Fatalf("caller cancellation was logged as a search failure: %s", logs.String())
+				}
+				if calls != 1 {
+					t.Fatalf("error = %v, backend calls = %d", err, calls)
+				}
+			})
+		}
+		t.Run(fmt.Sprintf("%d/canceled during formatting", behavior), func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
-			cancel()
+			defer cancel()
+			formatErr := fmt.Errorf("format: %w", context.Canceled)
+			var logs bytes.Buffer
+			provider := textsearch.NewContextProvider(func(context.Context, string) ([]textsearch.Result, error) {
+				return []textsearch.Result{{Text: "result"}}, nil
+			}, textsearch.Config{
+				SearchTime: behavior,
+				Logger:     slog.New(slog.NewJSONHandler(&logs, nil)),
+				ContextFormatter: func([]textsearch.Result) (string, error) {
+					cancel()
+					return "", formatErr
+				},
+			})
 			var err error
 			if behavior == textsearch.BeforeInvoke {
 				_, _, err = invokeProvider(provider, ctx, nil)
 			} else {
 				_, err = searchTool(t, provider).Call(ctx, `{"userQuestion":"Q"}`)
 			}
-			if behavior == textsearch.BeforeInvoke {
-				if err != nil || !strings.Contains(logs.String(), context.Canceled.Error()) {
-					t.Fatalf("automatic cancellation = %v, logs = %s", err, logs.String())
-				}
-			} else if !errors.Is(err, context.Canceled) {
-				t.Fatalf("tool cancellation = %v", err)
+			if err != formatErr {
+				t.Fatalf("format cancellation = %v, want original %v", err, formatErr)
 			}
-			if calls != 1 {
-				t.Fatalf("error = %v, backend calls = %d", err, calls)
+			if strings.Contains(logs.String(), "text search failed") {
+				t.Fatalf("caller cancellation was logged as a search failure: %s", logs.String())
 			}
 		})
 	}
