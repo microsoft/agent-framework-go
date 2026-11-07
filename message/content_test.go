@@ -1561,3 +1561,24 @@ func TestContentsCoalesce_PreservesSingleCodeInterpreterContentIdentity(t *testi
 		t.Fatalf("nested contents = %q, %q", call.Inputs.Text(), result.Outputs.Text())
 	}
 }
+
+// A typed-nil content pointer satisfies a type assertion with ok == true, so
+// the Text/Usage walks and the generic coalescer must skip it the way the
+// dedicated image/web-search coalescers already do, not dereference it.
+func TestContentsTypedNilEntriesAreSkipped(t *testing.T) {
+	cs := message.Contents{
+		(*message.TextContent)(nil),
+		&message.TextContent{Text: "kept"},
+		(*message.UsageContent)(nil),
+		&message.UsageContent{Details: message.UsageDetails{TotalTokenCount: 3}},
+	}
+	if got := cs.Text(); got != "kept" {
+		t.Errorf("Text() = %q, want %q", got, "kept")
+	}
+	if got := cs.Usage().TotalTokenCount; got != int64(3) {
+		t.Errorf("Usage().TotalTokenCount = %d, want 3", got)
+	}
+	if got := cs.Coalesce().Text(); got != "kept" {
+		t.Errorf("Coalesce().Text() = %q, want %q", got, "kept")
+	}
+}
