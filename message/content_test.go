@@ -1105,6 +1105,31 @@ func TestContentsCoalesce(t *testing.T) {
 			},
 		},
 		{
+			name: "data contents with additional properties",
+			input: []message.Content{
+				&message.DataContent{
+					ContentHeader: message.ContentHeader{
+						AdditionalProperties: map[string]any{"key": "value"},
+					},
+					Data:      base64.StdEncoding.EncodeToString([]byte("hello")),
+					MediaType: "text/plain",
+				},
+				&message.DataContent{
+					Data:      base64.StdEncoding.EncodeToString([]byte(" world")),
+					MediaType: "text/plain",
+				},
+			},
+			expected: []message.Content{
+				&message.DataContent{
+					ContentHeader: message.ContentHeader{
+						AdditionalProperties: map[string]any{"key": "value"},
+					},
+					Data:      base64.StdEncoding.EncodeToString([]byte("hello world")),
+					MediaType: "text/plain",
+				},
+			},
+		},
+		{
 			name: "data contents with different media types not coalesced",
 			input: []message.Content{
 				&message.DataContent{
