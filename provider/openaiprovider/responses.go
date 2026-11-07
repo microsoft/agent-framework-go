@@ -472,9 +472,15 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 			if tl.Authorization != "" {
 				variant.Authorization = openai.String(tl.Authorization)
 			}
-			// Honor the caller's approval mode. When unset, the Responses API
-			// defaults require_approval to "always".
-			if tl.ApprovalMode != "" {
+			// Honor the caller's approval mode: a per-tool filter when either
+			// list is set, else the blanket setting. When unset, the Responses
+			// API defaults require_approval to "always".
+			if len(tl.AlwaysRequireApprovalTools) > 0 || len(tl.NeverRequireApprovalTools) > 0 {
+				filter := &responses.ToolMcpRequireApprovalMcpToolApprovalFilterParam{}
+				filter.Always.ToolNames = tl.AlwaysRequireApprovalTools
+				filter.Never.ToolNames = tl.NeverRequireApprovalTools
+				variant.RequireApproval.OfMcpToolApprovalFilter = filter
+			} else if tl.ApprovalMode != "" {
 				variant.RequireApproval.OfMcpToolApprovalSetting = openai.String(string(tl.ApprovalMode))
 			}
 			params.Tools = append(params.Tools, responses.ToolUnionParam{
