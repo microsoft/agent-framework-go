@@ -88,6 +88,13 @@ type MCPServer struct {
 	// The zero value leaves the provider default (which, for the OpenAI Responses
 	// API, requires approval for every call).
 	ApprovalMode MCPApprovalMode
+	// AlwaysRequireApprovalTools and NeverRequireApprovalTools name tools whose
+	// calls always or never require approval, mirroring .NET's
+	// HostedMcpServerToolApprovalMode.RequireSpecific. When either list is
+	// non-empty, providers send a per-tool approval filter and ApprovalMode is
+	// ignored; tools named in neither list get the provider default.
+	AlwaysRequireApprovalTools []string
+	NeverRequireApprovalTools  []string
 }
 
 // MCPApprovalMode controls whether hosted MCP tool calls require human approval.

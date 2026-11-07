@@ -3492,29 +3492,50 @@ func TestResponsesMCPServerToolAddressRouting(t *testing.T) {
 }
 
 // An MCPServer ApprovalMode is forwarded as the Responses require_approval
-// setting; unset leaves it off (provider default).
+// setting, a per-tool list as the require_approval filter; unset leaves it
+// off (provider default).
 func TestResponsesMCPServerApprovalMode(t *testing.T) {
 	const output = `{"id":"resp","object":"response","created_at":1,"status":"completed","model":"gpt-4o-mini","output":[]}`
 	tests := []struct {
 		name     string
-		mode     hostedtool.MCPApprovalMode
+		tool     hostedtool.MCPServer
 		wantTool string
 	}{
-		{"never", hostedtool.MCPApprovalNever, `{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp","require_approval":"never"}`},
-		{"always", hostedtool.MCPApprovalAlways, `{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp","require_approval":"always"}`},
-		{"unset", "", `{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp"}`},
+		{"never", hostedtool.MCPServer{ApprovalMode: hostedtool.MCPApprovalNever}, `{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp","require_approval":"never"}`},
+		{"always", hostedtool.MCPServer{ApprovalMode: hostedtool.MCPApprovalAlways}, `{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp","require_approval":"always"}`},
+		{"unset", hostedtool.MCPServer{}, `{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp"}`},
+		{
+			"specific tools",
+			hostedtool.MCPServer{
+				AlwaysRequireApprovalTools: []string{"delete_file"},
+				NeverRequireApprovalTools:  []string{"read_file", "list_files"},
+			},
+			`{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp","require_approval":{"always":{"tool_names":["delete_file"]},"never":{"tool_names":["read_file","list_files"]}}}`,
+		},
+		{
+			"always-only filter",
+			hostedtool.MCPServer{AlwaysRequireApprovalTools: []string{"delete_file"}},
+			`{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp","require_approval":{"always":{"tool_names":["delete_file"]}}}`,
+		},
+		{
+			"filter wins over mode",
+			hostedtool.MCPServer{
+				ApprovalMode:              hostedtool.MCPApprovalAlways,
+				NeverRequireApprovalTools: []string{"read_file"},
+			},
+			`{"type":"mcp","server_label":"drive","server_url":"https://example.com/mcp","require_approval":{"never":{"tool_names":["read_file"]}}}`,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			input := `{"model":"gpt-4o-mini","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],"tools":[` + tt.wantTool + `]}`
 			server := newTestResponsesServer(t, input, output)
 			defer server.Close()
+			mcp := tt.tool
+			mcp.ServerName = "drive"
+			mcp.ServerAddress = "https://example.com/mcp"
 			_, err := newTestResponsesClient(server, "gpt-4o-mini").RunText(t.Context(), "hello",
-				agent.WithTool(&hostedtool.MCPServer{
-					ServerName:    "drive",
-					ServerAddress: "https://example.com/mcp",
-					ApprovalMode:  tt.mode,
-				}),
+				agent.WithTool(&mcp),
 			).Collect()
 			if err != nil {
 				t.Fatalf("error = %v", err)
