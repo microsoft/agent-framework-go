@@ -15,6 +15,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent/skills"
@@ -106,10 +107,35 @@ func (s *Source) loadArchives(ctx context.Context, entries []indexEntry, sourceC
 					"skillName", skill.Frontmatter.Name, "directoryName", directory.name)
 				continue
 			}
-			result = append(result, skill)
+			result = append(result, s.guardArchiveResourceReads(skill))
 		}
 	}
 	return result, nil
+}
+
+func (s *Source) guardArchiveResourceReads(skill *skills.Skill) *skills.Skill {
+	owned := *skill
+	owned.Resources = slices.Clone(skill.Resources)
+	for i, resource := range owned.Resources {
+		if resource.Read == nil {
+			continue
+		}
+		read := resource.Read
+		owned.Resources[i].Read = func(ctx context.Context) (any, error) {
+			if err := s.checkOpen(ctx); err != nil {
+				return nil, err
+			}
+			if err := lock(ctx, s.archiveGate); err != nil {
+				return nil, err
+			}
+			defer func() { <-s.archiveGate }()
+			if err := s.checkOpen(ctx); err != nil {
+				return nil, err
+			}
+			return read(ctx)
+		}
+	}
+	return &owned
 }
 
 func (s *Source) openArchiveRoot(create bool) error {

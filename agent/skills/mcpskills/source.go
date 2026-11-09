@@ -18,6 +18,7 @@ import (
 
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
+	"github.com/microsoft/agent-framework-go/internal/storepaths"
 	"github.com/microsoft/agent-framework-go/internal/telemetry"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
@@ -70,7 +71,7 @@ type Config struct {
 // Construct it with [NewSource] and release its filesystem resources with
 // [Source.Close]. It implements [skills.Source].
 //
-// Discovery is not cached. Concurrent archive reconciliation is serialized;
+// Discovery is not cached. Archive reconciliation and resource reads are serialized;
 // compose with [skills.NewCachingSource] or use the skills provider's default
 // caching to share discovery work.
 type Source struct {
@@ -187,8 +188,10 @@ func (s *Source) Skills(ctx context.Context, sourceContext skills.SourceContext)
 				result = append(result, s.remoteSkill(frontmatter, entry.URL))
 			}
 		case "archive":
-			if err := skills.ValidateName(entry.Name); err != nil {
-				s.logger.DebugContext(ctx, "Skipping invalid archive skill name", "skillName", entry.Name, "error", err)
+			directoryName, err := storepaths.Normalize(entry.Name, false)
+			if err != nil || directoryName != entry.Name || strings.Contains(directoryName, "/") ||
+				strings.Trim(strings.TrimSpace(directoryName), ".") == "" {
+				s.logger.DebugContext(ctx, "Skipping invalid archive directory name", "skillName", entry.Name)
 			} else if strings.TrimSpace(entry.URL) == "" {
 				s.logger.DebugContext(ctx, "Skipping archive skill without a URL", "skillName", entry.Name)
 			} else {
@@ -368,8 +371,9 @@ func (s *Source) checkOpen(ctx context.Context) error {
 
 // Close idempotently releases archive filesystem handles and removes the private
 // temporary directory, if any. Caller-configured directories are retained.
-// Close never closes the borrowed MCP session. New discovery and lazy remote
-// reads fail with [fs.ErrClosed]; already fetched resource content remains usable.
+// Close never closes the borrowed MCP session. New discovery, archive resource
+// reads, and lazy remote reads fail with [fs.ErrClosed]. Already fetched MCP
+// resource content remains usable.
 func (s *Source) Close() error {
 	s.closeOnce.Do(func() {
 		s.closed.Store(true)

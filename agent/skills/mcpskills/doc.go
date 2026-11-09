@@ -13,6 +13,9 @@
 // verification and configurable download, file-count, and uncompressed-size
 // limits. Extraction is confined to each skill directory. Extracted scripts are
 // never executable; configure resource extensions to make script files readable.
+// Archive containers use safe directory names, independently of the names of
+// skills within them. Archive resource reads are serialized with refresh and
+// cleanup; waiting reads honor context cancellation.
 // Unsupported entry types, including mcp-resource-template, are skipped.
 //
 // Register a source with [github.com/microsoft/agent-framework-go/agent/skills.ContextProviderOptions.Sources].

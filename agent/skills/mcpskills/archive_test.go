@@ -19,8 +19,10 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/mcpskills"
@@ -150,6 +152,148 @@ func writeStaleArchiveSkill(t *testing.T, root string) string {
 		t.Fatal(err)
 	}
 	return directory
+}
+
+func TestSource_ArchiveContainerNames_AllowSafeDirectoryComponents(t *testing.T) {
+	for _, name := range []string{"bundle.v1", "Bundle.V1", "bundle_v1", "bundle v1", strings.Repeat("b", 65)} {
+		t.Run(name, func(t *testing.T) {
+			server := newTestServer(t)
+			entry := archiveEntry(name)
+			entry["url"] = archiveURI
+			setIndex(t, server, entry)
+			server.blob(archiveURI, makeZIP(t,
+				archiveFile{"skill-a/SKILL.md", skillAMD},
+				archiveFile{"skill-a/reference.md", "Nested resource."},
+			), "application/zip")
+			source := newSource(t, server, mcpskills.Config{ArchiveDirectory: extractionRoot(t)})
+
+			skill := loadOne(t, source)
+			if skill.Frontmatter.Name != "skill-a" {
+				t.Fatalf("nested skill name = %q", skill.Frontmatter.Name)
+			}
+			if got := readStaticResource(t, skill, "reference.md"); got != "Nested resource." {
+				t.Fatalf("nested resource = %#v", got)
+			}
+		})
+	}
+}
+
+func TestSource_ArchiveContainerNames_RejectUnsafeDirectoryComponents(t *testing.T) {
+	for _, name := range []string{"", " ", ".", "..", "...", " . ", "../outside", `..\outside`, "bundle/child", `bundle\child`, "/outside", "bundle\x00v1"} {
+		t.Run(name, func(t *testing.T) {
+			server := newTestServer(t)
+			entry := archiveEntry(name)
+			entry["url"] = archiveURI
+			setIndex(t, server, entry)
+			server.blob(archiveURI, makeZIP(t, archiveFile{"skill-a/SKILL.md", skillAMD}), "application/zip")
+			root := extractionRoot(t)
+			source := newSource(t, server, mcpskills.Config{ArchiveDirectory: root})
+
+			if got := loadSkills(t, source); len(got) != 0 {
+				t.Fatalf("unsafe container name returned %d skills", len(got))
+			}
+			if calls := server.count(archiveURI); calls != 0 {
+				t.Fatalf("unsafe container downloaded %d archives", calls)
+			}
+			assertMissing(t, root)
+		})
+	}
+}
+
+func TestSource_ArchiveResourceRead_WaitsForRefreshAndCanCancel(t *testing.T) {
+	for _, cancelRead := range []bool{false, true} {
+		t.Run(fmt.Sprint("cancel read=", cancelRead), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				server := newTestServer(t)
+				setIndex(t, server, archiveEntry("archived-skill"))
+				server.blob(archiveURI, makeZIP(t,
+					archiveFile{"SKILL.md", archivedMD}, archiveFile{"reference.md", "original"},
+				), "application/zip")
+				source := newSource(t, server, mcpskills.Config{ArchiveDirectory: extractionRoot(t)})
+				skill := loadOne(t, source)
+				if len(skill.Resources) != 1 {
+					t.Fatalf("Resources = %#v, want reference.md", skill.Resources)
+				}
+				resource := skill.Resources[0]
+				server.blob(archiveURI, makeZIP(t,
+					archiveFile{"SKILL.md", archivedMD}, archiveFile{"reference.md", "updated"},
+				), "application/zip")
+				refreshStarted, release := make(chan struct{}), make(chan struct{})
+				releaseRefresh := sync.OnceFunc(func() { close(release) })
+				t.Cleanup(releaseRefresh)
+				server.hook(func(ctx context.Context, uri string) error {
+					if uri == archiveURI {
+						close(refreshStarted)
+						select {
+						case <-release:
+						case <-ctx.Done():
+							return ctx.Err()
+						}
+					}
+					return nil
+				})
+				refreshDone := make(chan error, 1)
+				go func() {
+					_, err := source.Skills(t.Context(), skills.SourceContext{})
+					refreshDone <- err
+				}()
+				<-refreshStarted
+				ctx, cancel := context.WithCancel(t.Context())
+				t.Cleanup(cancel)
+				type readResult struct {
+					value any
+					err   error
+				}
+				readDone := make(chan readResult, 1)
+				go func() {
+					value, err := resource.Read(ctx)
+					readDone <- readResult{value, err}
+				}()
+				synctest.Wait()
+				select {
+				case got := <-readDone:
+					t.Fatalf("resource read completed during refresh: %#v, %v", got.value, got.err)
+				default:
+				}
+				if cancelRead {
+					cancel()
+					got := <-readDone
+					if !errors.Is(got.err, context.Canceled) || got.value != nil {
+						t.Fatalf("canceled waiting read = %#v, %v", got.value, got.err)
+					}
+				}
+				releaseRefresh()
+				if err := <-refreshDone; err != nil {
+					t.Fatal(err)
+				}
+				if !cancelRead {
+					if got := <-readDone; got.err != nil || got.value != "updated" {
+						t.Fatalf("read after refresh = %#v, %v, want updated", got.value, got.err)
+					}
+				}
+			})
+		})
+	}
+}
+
+func TestSource_ArchiveResourceRead_AfterCloseReturnsClosed(t *testing.T) {
+	server := newTestServer(t)
+	setIndex(t, server, archiveEntry("archived-skill"))
+	server.blob(archiveURI, makeZIP(t,
+		archiveFile{"SKILL.md", archivedMD}, archiveFile{"reference.md", "content"},
+	), "application/zip")
+	source := newSource(t, server, mcpskills.Config{ArchiveDirectory: extractionRoot(t)})
+	skill := loadOne(t, source)
+	if len(skill.Resources) != 1 {
+		t.Fatalf("Resources = %#v, want reference.md", skill.Resources)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatal(err)
+	}
+	value, err := skill.Resources[0].Read(t.Context())
+	if !errors.Is(err, fs.ErrClosed) || value != nil {
+		t.Fatalf("Read() after Close() = %#v, %v, want closed", value, err)
+	}
 }
 
 func TestSource_ZIPArchive_DiscoversSkill(t *testing.T) {
