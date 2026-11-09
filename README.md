@@ -56,8 +56,8 @@ For a detailed .NET-to-Go feature comparison, see the [.NET and Go SDK feature c
 - **Observability**: OpenTelemetry integration for distributed tracing, monitoring, and debugging.
   - [Agent and embedding OpenTelemetry](./provider/otelprovider/) | [Workflow OpenTelemetry](./workflow/observability/opentelemetry/)
 - **Declarative Agents**: Not implemented yet in the Go SDK.
-- **Agent Skills**: Build domain-specific knowledge bases from files, inline definitions, and scripts for agents to discover and use.
-  - [Skills examples](./examples/02-agents/skills/) | [Skills package](./agent/skills/)
+- **Agent Skills**: Build domain-specific knowledge bases from files, inline definitions, scripts, and trusted MCP servers for agents to discover and use.
+  - [Skills examples](./examples/02-agents/skills/) | [Skills package](./agent/skills/) | [MCP Skills source](./agent/skills/mcpskills/)
 - **Text Search (RAG)**: Retrieve and cite external knowledge automatically before agent runs or through an on-demand search tool, with optional session-backed recent-message memory.
   - [Text search package](./agent/textsearch/) | [RAG examples](./examples/02-agents/rag/)
 - **Chat History Memory**: Store conversations in a vector store and retrieve scoped memories automatically or through an on-demand tool.

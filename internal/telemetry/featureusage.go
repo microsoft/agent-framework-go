@@ -31,6 +31,7 @@ const (
 	FeatureFileSkillsSource          = 15
 	FeatureInMemorySkillsSource      = 16
 	FeatureMCP                       = 14
+	FeatureMCPSkillsSource           = 19
 	FeatureTodoProvider              = 10
 	FeatureAgentModeProvider         = 11
 	FeatureSequentialOrchestration   = 32

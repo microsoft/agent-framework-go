@@ -46,9 +46,9 @@ var (
 		"allowed-tools": "allowed-tools",
 	}
 	frontmatterRegex          = regexp.MustCompile(`(?ms)\A^---\s*$(.+?)^---\s*$`)
-	yamlKeyValueRegex         = regexp.MustCompile(`(?m)^([\w-]+|["'][\w-]+["'])[ \t]*:[ \t]*(?:["'](.*?)["']|([^\r\n]*?))[ \t]*\r?$`)
+	yamlKeyValueRegex         = regexp.MustCompile(`(?m)^([\w-]+|["'][\w-]+["'])[ \t]*:[ \t]*(?:["']([^\r\n]+?)["']|([^\r\n]*?))[ \t]*\r?$`)
 	yamlMetadataBlockRegex    = regexp.MustCompile(`(?m)^(?:metadata|"metadata"|'metadata')\s*:\s*$\r?\n((?:[ \t]+\S.*\n?|[ \t]*\r?\n)+)`)
-	yamlIndentedKeyValueRegex = regexp.MustCompile(`(?m)^[ \t]+([\w-]+)[ \t]*:[ \t]*(?:["'](.+?)["']|(.+?))[ \t]*\r?$`)
+	yamlIndentedKeyValueRegex = regexp.MustCompile(`(?m)^[ \t]+([\w-]+)[ \t]*:[ \t]*(?:["']([^\r\n]+?)["']|([^\r\n]*?))[ \t]*\r?$`)
 )
 
 // FilterContext provides contextual information about a discovered file to the
@@ -362,20 +362,26 @@ func (s *Source) tryParseFrontmatter(content, skillFilePath string) (skills.Fron
 	}
 
 	if metadataMatch := yamlMetadataBlockRegex.FindStringSubmatch(yamlContent); len(metadataMatch) == 2 {
+		block := metadataMatch[1]
 		metadata := make(map[string]any)
 		seenMetadataKeys := make(map[string]struct{})
-		for _, kv := range yamlIndentedKeyValueRegex.FindAllStringSubmatch(metadataMatch[1], -1) {
-			value := kv[2]
-			if value == "" {
-				value = kv[3]
+		for _, kv := range yamlIndentedKeyValueRegex.FindAllStringSubmatchIndex(block, -1) {
+			key := block[kv[2]:kv[3]]
+			var value string
+			if kv[4] >= 0 {
+				value = block[kv[4]:kv[5]]
+			} else if kv[6] < kv[7] {
+				value = block[kv[6]:kv[7]]
+			} else {
+				value = parseYamlIndentedMetadataValue(block, kv)
 			}
-			lowerKey := strings.ToLower(kv[1])
+			lowerKey := strings.ToLower(key)
 			if _, duplicated := seenMetadataKeys[lowerKey]; duplicated {
-				s.logger.Warn("SKILL.md contains duplicate metadata key; keeping the first value", "skillFilePath", skillFilePath, "key", kv[1])
+				s.logger.Warn("SKILL.md contains duplicate metadata key; keeping the first value", "skillFilePath", skillFilePath, "key", key)
 				continue
 			}
 			seenMetadataKeys[lowerKey] = struct{}{}
-			metadata[kv[1]] = value
+			metadata[key] = value
 		}
 		if len(metadata) > 0 {
 			frontmatter.Metadata = metadata
@@ -451,9 +457,27 @@ func parseYamlIndentedValue(yamlContent string, kv []int) (string, bool) {
 	return normalizeFrontmatterKey(value), true
 }
 
+func parseYamlIndentedMetadataValue(yamlContent string, kv []int) string {
+	lines, _ := collectIndentedBlockLines(yamlContent, kv)
+	for _, line := range lines {
+		value := strings.TrimSpace(line)
+		if value == "" {
+			continue
+		}
+		if len(value) > 2 {
+			return normalizeFrontmatterKey(value)
+		}
+		return value
+	}
+	return ""
+}
+
 // foldYamlBlockScalar folds blockLines according to the YAML block scalar
 // indicator (e.g. "|", "|-", "|+", ">", ">-", ">+") given in indicator.
 func foldYamlBlockScalar(indicator string, blockLines []string) string {
+	for len(blockLines) > 0 && blockLines[0] == "" {
+		blockLines = blockLines[1:]
+	}
 	scalarStyle := indicator[0]
 	keepTrailingNewline := len(indicator) > 1 && indicator[1] == '+'
 	normalizedLines := normalizeIndentedLines(blockLines)
@@ -482,6 +506,7 @@ func collectIndentedBlockLines(yamlContent string, kv []int) ([]string, bool) {
 		remaining = before
 	}
 
+	keyIndent := leadingWhitespaceCount(yamlContent[kv[0]:kv[1]])
 	var blockLines []string
 	for line := range strings.SplitSeq(remaining, "\n") {
 		line = strings.TrimSuffix(line, "\r")
@@ -489,7 +514,7 @@ func collectIndentedBlockLines(yamlContent string, kv []int) ([]string, bool) {
 			blockLines = append(blockLines, "")
 			continue
 		}
-		if line[0] != ' ' && line[0] != '\t' {
+		if leadingWhitespaceCount(line) <= keyIndent {
 			break
 		}
 		blockLines = append(blockLines, line)
