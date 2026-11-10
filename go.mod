@@ -9,6 +9,7 @@ require (
 	github.com/a2aproject/a2a-go/v2 v2.8.0
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260312103001-8e7ab1df34c8
 	github.com/anthropics/anthropic-sdk-go v1.84.0
+	github.com/coder/websocket v1.8.15
 	github.com/github/copilot-sdk/go v1.0.29
 	github.com/gofrs/flock v0.13.1
 	github.com/google/jsonschema-go v0.4.3
@@ -36,7 +37,6 @@ require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/coder/websocket v1.8.15 // indirect
 	github.com/ebitengine/purego v0.11.2 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
