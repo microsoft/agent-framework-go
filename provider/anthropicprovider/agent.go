@@ -137,7 +137,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				Role:              message.RoleAssistant,
 				MessageID:         resp.ID,
 				ResponseID:        resp.ID,
-				ModelID:           string(resp.Model),
+				ModelID:           resp.Model,
 				CreatedAt:         time.Now(),
 				FinishReason:      mapStopReason(resp.StopReason),
 				RawRepresentation: resp,
@@ -167,7 +167,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			case anthropic.MessageStartEvent:
 				modelcall.RecordResponse(ctx, event.Message.Model, event.Message.ID)
 				messageID = cmp.Or(messageID, event.Message.ID)
-				modelID = cmp.Or(modelID, string(event.Message.Model))
+				modelID = cmp.Or(modelID, event.Message.Model)
 			case anthropic.MessageDeltaEvent:
 				// Later chunks may carry an empty stop_reason; don't clobber a
 				// value we already captured.
