@@ -137,6 +137,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				Role:              message.RoleAssistant,
 				MessageID:         resp.ID,
 				ResponseID:        resp.ID,
+				ModelID:           resp.Model,
 				CreatedAt:         time.Now(),
 				FinishReason:      mapStopReason(resp.StopReason),
 				RawRepresentation: resp,
@@ -148,6 +149,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 		defer func() { _ = stream.Close() }()
 
 		var messageID string
+		var modelID string
 		var finishReason string
 		var accumulated anthropic.Message
 		receivedEvent := false
@@ -165,6 +167,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			case anthropic.MessageStartEvent:
 				modelcall.RecordResponse(ctx, event.Message.Model, event.Message.ID)
 				messageID = cmp.Or(messageID, event.Message.ID)
+				modelID = cmp.Or(modelID, event.Message.Model)
 			case anthropic.MessageDeltaEvent:
 				// Later chunks may carry an empty stop_reason; don't clobber a
 				// value we already captured.
@@ -212,6 +215,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 				Role:              message.RoleAssistant,
 				ResponseID:        messageID,
 				MessageID:         messageID,
+				ModelID:           modelID,
 				CreatedAt:         time.Now(),
 				RawRepresentation: event,
 			}, nil) {
@@ -229,6 +233,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			CreatedAt:    time.Now(),
 			Role:         message.RoleAssistant,
 			MessageID:    messageID,
+			ModelID:      modelID,
 			FinishReason: finishReason,
 			Contents: []message.Content{
 				&message.UsageContent{
