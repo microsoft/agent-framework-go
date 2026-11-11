@@ -7,7 +7,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -30,6 +33,93 @@ func TestTaskAwareMcpClientAIFunction_InvokeAsync_TaskBackedToolReturnsResult(t 
 	created, polls, _, _, _ := server.counts()
 	if created != 1 || polls == 0 {
 		t.Fatalf("created tasks = %d, polls = %d, want one task and at least one poll", created, polls)
+	}
+}
+
+func TestTaskAwareToolsStreamableHTTP(t *testing.T) {
+	for name, jsonResponse := range map[string]bool{"json": true, "sse": false} {
+		t.Run(name, func(t *testing.T) {
+			for _, scenario := range []string{"complete", "input", "cancel", "inline"} {
+				t.Run(scenario, func(t *testing.T) {
+					config := taskTestConfig{disableTasks: scenario == "inline"}
+					handler := taskTextTool("completed")
+					if scenario == "input" {
+						config.initialStatus = "input_required"
+						config.inputRequests = []mcp.InputRequest{elicitationRequest("Confirm operation.")}
+					}
+					if scenario == "cancel" {
+						handler = blockingTaskTool(nil)
+					}
+					server := newTaskTestServer(t, config, taskTestTool("task-tool", handler))
+					httpHandler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server {
+						return server.server
+					}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: jsonResponse})
+					httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if strings.HasPrefix(r.Header.Get("Mcp-Method"), "tasks/") && r.Header.Get("Mcp-Name") != "task-1" {
+							http.Error(w, "missing or incorrect task routing header", http.StatusBadRequest)
+							return
+						}
+						httpHandler.ServeHTTP(w, r)
+					}))
+					t.Cleanup(httpServer.Close)
+					session, err := mcptool.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: httpServer.URL})
+					if err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() {
+						if err := session.Close(); err != nil {
+							t.Error(err)
+						}
+					})
+					tools, err := mcptool.ListToolsWithTasks(t.Context(), session, mcptool.TaskOptions{InputHandler: acceptInputHandler})
+					if err != nil {
+						t.Fatal(err)
+					}
+					fn := findFuncTool(t, tools, "task-tool")
+					if scenario == "cancel" {
+						ctx, cancel := context.WithCancel(t.Context())
+						defer cancel()
+						done := make(chan error, 1)
+						go func() {
+							_, err := fn.Call(ctx, `{}`)
+							done <- err
+						}()
+						select {
+						case <-server.firstPollObserved:
+						case err := <-done:
+							t.Fatalf("call ended before polling: %v", err)
+						}
+						cancel()
+						if err := <-done; !errors.Is(err, context.Canceled) {
+							t.Fatalf("Call() error = %v, want context.Canceled", err)
+						}
+						_, _, _, cancels, transitions := server.counts()
+						if cancels != 1 || transitions != 1 {
+							t.Fatalf("cancellation requests = %d, transitions = %d, want 1 each", cancels, transitions)
+						}
+						return
+					}
+					result, err := fn.Call(t.Context(), `{}`)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got := mustTextResult(t, result); got != "completed" {
+						t.Fatalf("result = %q, want completed", got)
+					}
+					created, polls, inputs, _, _ := server.counts()
+					if scenario == "inline" {
+						if created != 0 {
+							t.Fatalf("created tasks = %d, want 0", created)
+						}
+					} else if created != 1 || polls == 0 {
+						t.Fatalf("created tasks = %d, polls = %d, want one task and at least one poll", created, polls)
+					}
+					if scenario == "input" && inputs != 1 {
+						t.Fatalf("input responses = %d, want 1", inputs)
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -329,18 +419,27 @@ func TestTaskAwareMcpClientAIFunction_InvokeAsync_UpdateTaskFailureCancelsRemote
 }
 
 func TestTaskAwareMcpClientAIFunction_InvokeAsync_MalformedCompletedResultDoesNotCancelTerminalTask(t *testing.T) {
-	server := newTaskTestServer(t, taskTestConfig{
-		initialStatus:   "completed",
-		completedResult: json.RawMessage(`"not a call tool result"`),
-	}, taskTestTool("malformed-result-tool", taskTextTool("unused")))
-	fn := getTaskTool(t, server, mcptool.TaskOptions{}, "malformed-result-tool")
-	_, err := fn.Call(t.Context(), `{}`)
-	if err == nil {
-		t.Fatal("Call() error = nil, want malformed completed result error")
-	}
-	_, _, _, requests, transitions := server.counts()
-	if requests != 0 || transitions != 0 {
-		t.Fatalf("task cancellation requests = %d, transitions = %d, want 0", requests, transitions)
+	for _, tt := range []struct {
+		name   string
+		result string
+		err    string
+	}{
+		{"string", `"not a call tool result"`, "decoding completed MCP task"},
+		{"null", `null`, "completed without a result"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := newTaskTestServer(t, taskTestConfig{
+				initialStatus:   "completed",
+				completedResult: json.RawMessage(tt.result),
+			}, taskTestTool("malformed-result-tool", taskTextTool("unused")))
+			fn := getTaskTool(t, server, mcptool.TaskOptions{}, "malformed-result-tool")
+			_, err := fn.Call(t.Context(), `{}`)
+			assertTaskErrorContains(t, err, tt.err)
+			_, _, _, requests, transitions := server.counts()
+			if requests != 0 || transitions != 0 {
+				t.Fatalf("task cancellation requests = %d, transitions = %d, want 0", requests, transitions)
+			}
+		})
 	}
 }
 

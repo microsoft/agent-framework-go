@@ -85,7 +85,7 @@ func Connect(ctx context.Context, transport mcp.Transport) (*mcp.ClientSession, 
 	if err := registerTaskMethods(client); err != nil {
 		return nil, err
 	}
-	return client.Connect(ctx, newTaskTransport(withTaskHTTPRouting(transport)), nil)
+	return client.Connect(ctx, newTaskTransport(transport), nil)
 }
 
 // ListTools enumerates all pages of the remote server's tools and wraps each as a tool.Tool.

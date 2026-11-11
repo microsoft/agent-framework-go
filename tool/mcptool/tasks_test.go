@@ -15,6 +15,7 @@ import (
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/mcptool"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -164,6 +165,14 @@ func newTaskTestServer(t *testing.T, config taskTestConfig, handlers map[string]
 
 func (s *taskTestServer) taskMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
+		switch method {
+		case taskGetMethod, taskUpdateMethod, taskCancelMethod:
+			capabilities, _ := request.GetParams().GetMeta()[mcp.MetaKeyClientCapabilities].(map[string]any)
+			extensions, _ := capabilities["extensions"].(map[string]any)
+			if _, enabled := extensions["io.modelcontextprotocol/tasks"]; !enabled {
+				return nil, &jsonrpc.Error{Code: -32021, Message: "missing tasks extension capability"}
+			}
+		}
 		if method != "tools/call" || s.config.disableTasks {
 			return next(ctx, method, request)
 		}
