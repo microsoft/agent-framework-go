@@ -84,7 +84,18 @@ type Skill struct {
 	// this is the raw SKILL.md file content. For code-defined skills this may be
 	// a synthesized document containing name, description, and body.
 	// Errors, including cancellation, propagate to the load_skill caller.
-	GetContent           func(context.Context) (string, error)
+	GetContent func(context.Context) (string, error)
+	// GetResource optionally resolves resources that are not in Resources.
+	// It receives the exact requested name and returns nil when not found.
+	// Errors propagate to the read_skill_resource caller. Returned descriptors
+	// are read-only and are not added to Resources or cached by the provider.
+	GetResource func(context.Context, string) (*Resource, error)
+	// GetScript optionally resolves scripts that are not in Scripts.
+	// It receives the exact requested name and returns nil when not found.
+	// Lookup errors follow [ContextProviderOptions.IncludeDetailedErrors], like
+	// [Script.Run] errors. Returned descriptors are read-only and are not added
+	// to Scripts or cached by the provider.
+	GetScript            func(context.Context, string) (*Script, error)
 	Resources            []Resource
 	Scripts              []Script
 	AdditionalProperties map[string]any

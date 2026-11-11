@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"iter"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
@@ -51,6 +52,270 @@ func bypassPortRun(t *testing.T, stream bool, replies []*agent.ResponseUpdate, o
 		response.Update(update)
 	}
 	return updates, &response
+}
+
+type bypassedCallFixture struct {
+	function    tool.FuncTool
+	request     *message.ToolApprovalRequestContent
+	options     []agent.Option
+	invocations int
+}
+
+func newBypassedCallFixture(t *testing.T, stream bool) *bypassedCallFixture {
+	t.Helper()
+	f := new(bypassedCallFixture)
+	f.function = functool.MustNew(functool.Config{Name: "Safe"}, func(context.Context, struct{}) (string, error) {
+		f.invocations++
+		return "safe result", nil
+	})
+	required := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "Dangerous"}, func(context.Context, struct{}) (string, error) {
+		t.Error("rejected tool was invoked")
+		return "", nil
+	}))
+	f.options = []agent.Option{agent.WithSession(&agent.Session{}), agent.Stream(stream), agent.WithTool(required)}
+	_, response := bypassPortRun(t, stream, []*agent.ResponseUpdate{{
+		Role: message.RoleAssistant,
+		Contents: message.Contents{
+			&message.FunctionCallContent{CallID: "safe-call", Name: "Safe", Arguments: `{}`},
+			&message.FunctionCallContent{CallID: "dangerous-call", Name: "Dangerous", Arguments: `{}`},
+		},
+	}}, append(slices.Clone(f.options), agent.WithTool(f.function))...)
+	for content := range response.Contents() {
+		if request, ok := content.(*message.ToolApprovalRequestContent); ok {
+			if request.ToolCall.GetCallID() != "dangerous-call" {
+				t.Fatal("safe call was surfaced for approval")
+			}
+			f.request = request
+		}
+	}
+	if f.request == nil || f.invocations != 0 {
+		t.Fatalf("setup: request=%v, invocations=%d", f.request, f.invocations)
+	}
+	return f
+}
+
+func approvalBypassDone(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "done"}}}, nil)
+	}
+}
+
+func TestFunctionInvoking_RevalidatesBypassedCalls(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, additional := range []bool{false, true} {
+			for _, policy := range []string{"unchanged", "approval required", "unavailable", "declaration only"} {
+				t.Run(fmt.Sprintf("stream=%v/additional=%v/%s", stream, additional, policy), func(t *testing.T) {
+					f := newBypassedCallFixture(t, stream)
+					var current tool.Tool = f.function
+					switch policy {
+					case "approval required":
+						current = tool.ApprovalRequiredFunc(f.function)
+					case "unavailable":
+						current = nil
+					case "declaration only":
+						current = struct{ tool.SchemaTool }{f.function}
+					}
+					cfg := toolautocall.Config{}
+					opts := slices.Clone(f.options)
+					if current != nil {
+						if additional {
+							cfg.AdditionalTools = []tool.Tool{current}
+						} else {
+							opts = append(opts, agent.WithTool(current))
+						}
+					}
+					middleware := toolautocall.New(cfg)
+					response, err := agent.ResponseStream(middleware.Run(approvalBypassDone, t.Context(),
+						[]*message.Message{message.New(f.request.CreateResponse(false, ""))}, opts...,
+					)).Collect()
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantCalls := 0
+					if policy == "unchanged" {
+						wantCalls = 1
+					}
+					if f.invocations != wantCalls {
+						t.Fatalf("invocations=%d, want %d", f.invocations, wantCalls)
+					}
+					foundResult := false
+					for content := range response.Contents() {
+						if result, ok := content.(*message.FunctionResultContent); ok && result.CallID == "safe-call" {
+							foundResult = true
+							if wantCalls == 0 {
+								text, ok := result.Result.(string)
+								if !ok || !strings.Contains(text, "rejected") {
+									t.Fatalf("stale automatic approval result=%v, want rejection", result.Result)
+								}
+							}
+						}
+					}
+					if !foundResult {
+						t.Fatal("pending safe call was left unanswered")
+					}
+					if _, err := agent.ResponseStream(middleware.Run(approvalBypassDone, t.Context(), nil, opts...)).Collect(); err != nil {
+						t.Fatal(err)
+					}
+					if f.invocations != wantCalls {
+						t.Fatal("completed run did not consume the stored call")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestFunctionInvoking_RetainsBypassedCallsOnAbnormalCompletion(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, end := range []string{"provider error", "provider error with new approvals", "cancellation", "stop before invocation", "stop after invocation", "stop on nil update"} {
+			if !stream && strings.HasPrefix(end, "stop") {
+				continue
+			}
+			t.Run(fmt.Sprintf("stream=%v/%s", stream, end), func(t *testing.T) {
+				f := newBypassedCallFixture(t, stream)
+				opts := append(slices.Clone(f.options), agent.WithTool(f.function))
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				runErr := errors.New("provider failed")
+				if end == "cancellation" {
+					runErr = context.Canceled
+				}
+				next := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return func(yield func(*agent.ResponseUpdate, error) bool) {
+						switch end {
+						case "provider error with new approvals":
+							if !yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+								&message.FunctionCallContent{CallID: "new-safe-call", Name: "Safe", Arguments: `{}`},
+								&message.FunctionCallContent{CallID: "new-dangerous-call", Name: "Dangerous", Arguments: `{}`},
+							}}, nil) {
+								return
+							}
+						case "cancellation":
+							cancel()
+						case "stop on nil update":
+							yield(nil, nil)
+							return
+						}
+						yield(nil, runErr)
+					}
+				}
+				middleware := toolautocall.New(toolautocall.Config{})
+				sequence := middleware.Run(next, ctx, []*message.Message{message.New(f.request.CreateResponse(false, ""))}, opts...)
+				if strings.HasPrefix(end, "stop") {
+					stopped := false
+					for update, err := range sequence {
+						if err != nil {
+							t.Fatal(err)
+						}
+						stop := end == "stop on nil update" && update == nil
+						if update != nil {
+							for _, content := range update.Contents {
+								if call, ok := content.(*message.FunctionCallContent); ok && call.CallID == "safe-call" && end == "stop before invocation" {
+									stop = true
+								}
+								if result, ok := content.(*message.FunctionResultContent); ok && result.CallID == "safe-call" && end == "stop after invocation" {
+									stop = true
+								}
+							}
+						}
+						if stop {
+							stopped = true
+							break
+						}
+					}
+					if !stopped {
+						t.Fatal("did not reach the requested stream interruption")
+					}
+				} else if _, err := agent.ResponseStream(sequence).Collect(); !errors.Is(err, runErr) {
+					t.Fatalf("error=%v, want %v", err, runErr)
+				}
+				wantCalls := 1
+				if end == "stop before invocation" {
+					wantCalls = 0
+				}
+				if f.invocations != wantCalls {
+					t.Fatalf("invocations before retry=%d, want %d", f.invocations, wantCalls)
+				}
+				response, err := agent.ResponseStream(middleware.Run(approvalBypassDone, t.Context(), nil, opts...)).Collect()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if f.invocations != wantCalls+1 {
+					t.Fatalf("invocations after retry=%d, want %d", f.invocations, wantCalls+1)
+				}
+				foundResult := false
+				for content := range response.Contents() {
+					if result, ok := content.(*message.FunctionResultContent); ok {
+						if result.CallID == "new-safe-call" {
+							t.Fatal("failed run overwrote the original pending call")
+						}
+						foundResult = foundResult || result.CallID == "safe-call"
+					}
+				}
+				if !foundResult {
+					t.Fatal("retry did not answer the original stored call")
+				}
+			})
+		}
+	}
+}
+
+func TestFunctionInvoking_ConsumesBypassedCallsOnTermination(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, afterProvider := range []bool{false, true} {
+			t.Run(fmt.Sprintf("stream=%v/afterProvider=%v", stream, afterProvider), func(t *testing.T) {
+				f := newBypassedCallFixture(t, stream)
+				opts := append(slices.Clone(f.options), agent.WithTool(f.function))
+				providerCalls := 0
+				targetCallID := "safe-call"
+				wantCalls := 1
+				wantProviderCalls := 0
+				if afterProvider {
+					targetCallID = "next-call"
+					wantCalls = 2
+					wantProviderCalls = 1
+				}
+				a := agent.New(agent.ProviderConfig{
+					Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+						return func(yield func(*agent.ResponseUpdate, error) bool) {
+							providerCalls++
+							if afterProvider && providerCalls == 1 {
+								yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+									&message.FunctionCallContent{CallID: "next-call", Name: "Safe", Arguments: `{}`},
+								}}, nil)
+								return
+							}
+							yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+								&message.TextContent{Text: "done"},
+							}}, nil)
+						}
+					},
+					Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{})},
+				}, agent.Config{
+					HistoryProvider: agent.NewHistoryProvider(agent.HistoryProviderConfig{SourceID: "test"}),
+					FunctionMiddlewares: []agent.FunctionInvocationMiddleware{func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+						result, err := next(ctx, invocation)
+						if invocation.CallID == targetCallID {
+							invocation.Terminate = true
+						}
+						return result, err
+					}},
+				})
+				if _, err := a.Run(t.Context(), []*message.Message{message.New(f.request.CreateResponse(false, ""))}, opts...).Collect(); err != nil {
+					t.Fatal(err)
+				}
+				if f.invocations != wantCalls || providerCalls != wantProviderCalls {
+					t.Fatalf("terminated run: invocations=%d provider calls=%d, want %d/%d", f.invocations, providerCalls, wantCalls, wantProviderCalls)
+				}
+				if _, err := a.Run(t.Context(), nil, opts...).Collect(); err != nil {
+					t.Fatal(err)
+				}
+				if f.invocations != wantCalls || providerCalls != wantProviderCalls+1 {
+					t.Fatalf("subsequent run replayed consumed approvals: invocations=%d provider calls=%d", f.invocations, providerCalls)
+				}
+			})
+		}
+	}
 }
 
 func TestApprovalBypassing_GetResponseAsync_NoApprovalContent_PassesThroughUnchanged(t *testing.T) {

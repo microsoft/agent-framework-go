@@ -91,6 +91,7 @@ func (o responsesIncludeReasoningEncryptedContentOpt) MAFValue() any {
 }
 
 // ResponsesNewParams allows passing custom parameters to the underlying OpenAI Responses API calls.
+// Raw instructions precede instructions supplied through [agent.WithInstructions].
 func ResponsesNewParams(params responses.ResponseNewParams) agent.Option {
 	return responsesNewParamsOpt(params)
 }
@@ -289,6 +290,9 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 	params.Model = cmp.Or(params.Model, config.Model)
 	instructions := slices.Collect(agent.AllOptions(opts, agent.WithInstructions))
 	if len(instructions) > 0 {
+		if raw := params.Instructions.Or(""); raw != "" {
+			instructions = append([]string{raw}, instructions...)
+		}
 		params.Instructions = openai.String(strings.Join(instructions, "\n"))
 	}
 	if v, ok := agent.GetOption(opts, agent.AllowBackgroundResponses); ok {
@@ -361,7 +365,7 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 	}
 	for tl := range agent.AllOptions(opts, agent.WithTool) {
 		switch tl := tl.(type) {
-		case tool.FuncTool:
+		case tool.SchemaTool:
 			name, description := tl.Name(), tl.Description()
 			schema := tl.Schema()
 			funcParams, err := schemaToMap(schema)
@@ -568,7 +572,7 @@ func requiredOpenAIFileName(name, mediaType string) string {
 func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInputParam) (responses.ResponseInputParam, error) {
 	var contents responses.ResponseInputMessageContentListParam
 	switch msg.Role {
-	case message.RoleSystem:
+	case message.RoleSystem, "developer":
 		for _, c := range msg.Contents {
 			if tc, ok := c.(*message.TextContent); ok {
 				contents = append(contents, responses.ResponseInputContentUnionParam{

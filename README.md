@@ -56,8 +56,8 @@ For a detailed .NET-to-Go feature comparison, see the [.NET and Go SDK feature c
 - **Observability**: OpenTelemetry integration for distributed tracing, monitoring, and debugging.
   - [Agent and embedding OpenTelemetry](./provider/otelprovider/) | [Workflow OpenTelemetry](./workflow/observability/opentelemetry/)
 - **Declarative Agents**: Not implemented yet in the Go SDK.
-- **Agent Skills**: Build domain-specific knowledge bases from files, inline definitions, and scripts for agents to discover and use.
-  - [Skills examples](./examples/02-agents/skills/) | [Skills package](./agent/skills/)
+- **Agent Skills**: Build domain-specific knowledge bases from files, inline definitions, scripts, and trusted MCP servers for agents to discover and use.
+  - [Skills examples](./examples/02-agents/skills/) | [Skills package](./agent/skills/) | [MCP Skills source](./agent/skills/mcpskills/)
 - **Text Search (RAG)**: Retrieve and cite external knowledge automatically before agent runs or through an on-demand search tool, with optional session-backed recent-message memory.
   - [Text search package](./agent/textsearch/) | [RAG examples](./examples/02-agents/rag/)
 - **Chat History Memory**: Store conversations in a vector store and retrieve scoped memories automatically or through an on-demand tool.
@@ -159,6 +159,7 @@ func main() {
 
 - [Getting Started](./examples/01-get-started): progressive tutorial from hello world to workflows
 - [Agent Concepts](./examples/02-agents): deep-dive samples by topic, including tools, middleware, providers, observability, A2A, AG-UI, MCP, and skills
+- [Foundry Voice Live](./examples/02-agents/providers/foundry/voice_live): a browser microphone/speaker example with full-duplex audio, interruptions, and delegation to a MAF agent.
 - [File memory](./examples/02-agents/agents/step24_filememory): persist per-user memories across separate conversations. Run `go run ./examples/02-agents/agents/step24_filememory` from the repository root with `FOUNDRY_PROJECT_ENDPOINT` and `FOUNDRY_MODEL` set, after authenticating with `az login`. Files remain in `agent-memory/users/UID1` between runs.
 - [Agent harness](./docs/agent-harness.md): use `harness.AgentConfig` for preconfigured memory, skills, Todo, modes, approvals, history, and tracing with the normal provider constructors. Includes a [Foundry example](./examples/02-agents/harness/step04_composite_harness).
 - [Workflows](./examples/03-workflows): multi-agent patterns, routing, checkpointing, observability, and workflow orchestration

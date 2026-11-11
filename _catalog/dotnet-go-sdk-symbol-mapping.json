@@ -3746,7 +3746,7 @@
     "Microsoft.Agents.AI.Mcp.UnitTests": {
       "Microsoft.Agents.AI.Mcp.UnitTests.FeatureUsageActivationTests": {
         "ListAgentToolsWithTasksAsync_ActivatesCoreMcpAsync": null,
-        "McpSkillsSource_ActivatesOnlyWhenLoadedAsync": null
+        "McpSkillsSource_ActivatesOnlyWhenLoadedAsync": "agent/skills/mcpskills.TestSource_FeatureUsage"
       },
       "Microsoft.Agents.AI.Mcp.UnitTests.ListAgentToolsWithTasksTests": {
         "ListAgentToolsWithTasks_InvalidPollingIntervalRange_ThrowsAsync": null,
@@ -3786,59 +3786,59 @@
         "InvokeAsync_UpdateTaskFailure_CancelsRemoteTaskAndPreservesProtocolExceptionAsync": null
       },
       "Microsoft.Agents.AI.Skills.Mcp.UnitTests.AgentMcpSkillsSourceArchiveTests": {
-        "DetectFormat_TarSignals_ReturnUnknown": null,
-        "Extract_ArchiveExceedsDefaultFileCount_Throws": null,
-        "Extract_ArchiveExceedsDefaultUncompressedSize_Throws": null,
-        "Extract_CaseVariantZipSlipEntry_DoesNotEscapeTargetDirectory": null,
-        "Extract_RaisedLimits_AllowsLargerArchive": null,
-        "Extract_UnknownFormat_ThrowsBeforeCreatingTarget": null,
-        "Extract_WithinDefaultLimits_Succeeds": null,
-        "Extract_ZipSlipEntry_DoesNotEscapeTargetDirectory": null,
-        "GetSkillsAsync_AmbiguousArchiveFrontmatter_SkipsSkillAsync": null,
-        "GetSkillsAsync_ArchiveDigest_LoadsValidArchiveAsync": null,
-        "GetSkillsAsync_ArchiveDuplicateMetadata_KeepsFirstValueAndLogsWarningAsync": null,
-        "GetSkillsAsync_ArchiveEmptyOptionalScalar_RemainsNullAsync": null,
-        "GetSkillsAsync_ArchiveExceedsConfiguredArchiveSize_SkillSkippedAsync": null,
-        "GetSkillsAsync_ArchiveExceedsDefaultFileCount_SkillSkippedAsync": null,
-        "GetSkillsAsync_ArchiveExistingMetadataScalarFormats_PreservedAsync": null,
-        "GetSkillsAsync_ArchiveReturnsTextNotBlob_SkillSkippedAsync": null,
-        "GetSkillsAsync_ArchiveUpdatedBetweenCalls_ReturnsUpdatedContentAsync": null,
-        "GetSkillsAsync_ArchiveValueOnIndentedNextLine_PreservedAsync": null,
-        "GetSkillsAsync_ArchiveWithScript_SurfacesScriptAsReadableResourceAsync": null,
-        "GetSkillsAsync_ArchiveWithUnsupportedFormat_SkillSkippedAsync": null,
-        "GetSkillsAsync_ConcurrentCalls_ReconcilesArchiveDirectorySafelyAsync": null,
-        "GetSkillsAsync_DigestMismatchOnRefresh_RemovesPreviousExtractionAsync": null,
-        "GetSkillsAsync_DigestOfDifferentBytes_SkipsArchiveAsync": null,
-        "GetSkillsAsync_EntryMissingName_SkillSkippedAsync": null,
-        "GetSkillsAsync_EntryMissingUrl_SkillSkippedAsync": null,
-        "GetSkillsAsync_EntryWithInvalidNameChars_SkillSkippedAsync": null,
-        "GetSkillsAsync_FirstRun_PrunesLeftoverSkillDirectoryAsync": null,
-        "GetSkillsAsync_MatchingDigest_PreservesArchiveGuardsAsync": null,
-        "GetSkillsAsync_MatchingDigest_SkipsTraversalEntryAsync": null,
-        "GetSkillsAsync_NonStringDigest_RejectsIndexAsync": null,
-        "GetSkillsAsync_PreExtractionCleanupFails_DoesNotDiscoverStaleSkillAsync": null,
-        "GetSkillsAsync_RaisedFileCountOption_LoadsLargerArchiveAsync": null,
-        "GetSkillsAsync_RejectedDigest_KeepsValidSiblingAsync": null,
-        "GetSkillsAsync_RejectedDigest_SkipsBeforeExtractionAndLogsWarningAsync": null,
-        "GetSkillsAsync_SecondDiscovery_ReExtractsContentAsync": null,
-        "GetSkillsAsync_ServerListsNoArchives_PrunesLeftoversAsync": null,
-        "GetSkillsAsync_SkillNoLongerAdvertised_IsPrunedAsync": null,
-        "GetSkillsAsync_TarGzArchive_SkipsSkillAsync": null,
-        "GetSkillsAsync_TwoSourcesWithSeparateDirectories_DoNotCollideAsync": null,
-        "GetSkillsAsync_ZipArchive_DiscoversSkillAsync": null
+        "DetectFormat_TarSignals_ReturnUnknown": "agent/skills/mcpskills.TestArchiveFormat_TarSignalsAreUnsupported",
+        "Extract_ArchiveExceedsDefaultFileCount_Throws": "agent/skills/mcpskills.TestExtractArchive_ExceedsDefaultFileCount_ReturnsError",
+        "Extract_ArchiveExceedsDefaultUncompressedSize_Throws": "agent/skills/mcpskills.TestExtractArchive_ExceedsDefaultUncompressedSize_ReturnsError",
+        "Extract_CaseVariantZipSlipEntry_DoesNotEscapeTargetDirectory": "agent/skills/mcpskills.TestExtractArchive_CaseVariantZIPSlipEntry_DoesNotEscapeTargetDirectory",
+        "Extract_RaisedLimits_AllowsLargerArchive": "agent/skills/mcpskills.TestExtractArchive_RaisedLimits_AllowLargerArchive",
+        "Extract_UnknownFormat_ThrowsBeforeCreatingTarget": "agent/skills/mcpskills.TestExtractArchive_UnsupportedFormat_DoesNotCreateTarget",
+        "Extract_WithinDefaultLimits_Succeeds": "agent/skills/mcpskills.TestExtractArchive_WithinDefaultLimits_Succeeds",
+        "Extract_ZipSlipEntry_DoesNotEscapeTargetDirectory": "agent/skills/mcpskills.TestExtractArchive_ZIPSlipEntry_DoesNotEscapeTargetDirectory",
+        "GetSkillsAsync_AmbiguousArchiveFrontmatter_SkipsSkillAsync": "agent/skills/mcpskills.TestSource_ArchiveAmbiguousFrontmatter_IsSkipped",
+        "GetSkillsAsync_ArchiveDigest_LoadsValidArchiveAsync": "agent/skills/mcpskills.TestSource_ArchiveDigest_AcceptsOmittedNullAndMatching",
+        "GetSkillsAsync_ArchiveDuplicateMetadata_KeepsFirstValueAndLogsWarningAsync": "agent/skills/mcpskills.TestSource_ArchiveFrontmatter_DuplicateMetadataKeepsFirstAndLogs",
+        "GetSkillsAsync_ArchiveEmptyOptionalScalar_RemainsNullAsync": "agent/skills/mcpskills.TestSource_ArchiveFrontmatter_EmptyOptionalsRemainZeroValues",
+        "GetSkillsAsync_ArchiveExceedsConfiguredArchiveSize_SkillSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveExceedsConfiguredSize_IsSkipped",
+        "GetSkillsAsync_ArchiveExceedsDefaultFileCount_SkillSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveExceedsDefaultFileCount_IsSkipped",
+        "GetSkillsAsync_ArchiveExistingMetadataScalarFormats_PreservedAsync": "agent/skills/mcpskills.TestSource_ArchiveFrontmatter_PreservesMetadataScalarFormats",
+        "GetSkillsAsync_ArchiveReturnsTextNotBlob_SkillSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveTextInsteadOfBlob_IsSkipped",
+        "GetSkillsAsync_ArchiveUpdatedBetweenCalls_ReturnsUpdatedContentAsync": "agent/skills/mcpskills.TestSource_ArchiveRefresh_ReplacesContentAndRetainsInstructionSnapshots",
+        "GetSkillsAsync_ArchiveValueOnIndentedNextLine_PreservedAsync": "agent/skills/mcpskills.TestSource_ArchiveFrontmatter_PreservesIndentedValues",
+        "GetSkillsAsync_ArchiveWithScript_SurfacesScriptAsReadableResourceAsync": "agent/skills/mcpskills.TestSource_ArchiveScripts_AreOnlyReadableResources",
+        "GetSkillsAsync_ArchiveWithUnsupportedFormat_SkillSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveUnsupportedFormat_IsSkipped",
+        "GetSkillsAsync_ConcurrentCalls_ReconcilesArchiveDirectorySafelyAsync": "agent/skills/mcpskills.TestSource_ConcurrentArchiveCalls_ReconcileSafely",
+        "GetSkillsAsync_DigestMismatchOnRefresh_RemovesPreviousExtractionAsync": "agent/skills/mcpskills.TestSource_DigestMismatchOnRefresh_RemovesPreviousExtraction",
+        "GetSkillsAsync_DigestOfDifferentBytes_SkipsArchiveAsync": "agent/skills/mcpskills.TestSource_DigestOfDifferentBytes_IsRejected",
+        "GetSkillsAsync_EntryMissingName_SkillSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveMissingName_IsSkipped",
+        "GetSkillsAsync_EntryMissingUrl_SkillSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveMissingURL_IsSkipped",
+        "GetSkillsAsync_EntryWithInvalidNameChars_SkillSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveInvalidName_IsSkipped",
+        "GetSkillsAsync_FirstRun_PrunesLeftoverSkillDirectoryAsync": "agent/skills/mcpskills.TestSource_FirstRun_PrunesLeftoverArchive",
+        "GetSkillsAsync_MatchingDigest_PreservesArchiveGuardsAsync": "agent/skills/mcpskills.TestSource_MatchingDigest_DoesNotBypassArchiveGuards",
+        "GetSkillsAsync_MatchingDigest_SkipsTraversalEntryAsync": "agent/skills/mcpskills.TestSource_MatchingArchiveDigest_SkipsTraversalEntry",
+        "GetSkillsAsync_NonStringDigest_RejectsIndexAsync": "agent/skills/mcpskills.TestSource_NonStringDigest_RejectsEntireIndex",
+        "GetSkillsAsync_PreExtractionCleanupFails_DoesNotDiscoverStaleSkillAsync": "agent/skills/mcpskills.TestSource_PreExtractionCleanupFailure_DoesNotDiscoverStaleSkill",
+        "GetSkillsAsync_RaisedFileCountOption_LoadsLargerArchiveAsync": "agent/skills/mcpskills.TestSource_RaisedFileCount_LoadsLargerArchive",
+        "GetSkillsAsync_RejectedDigest_KeepsValidSiblingAsync": "agent/skills/mcpskills.TestSource_RejectedArchiveDigest_KeepsValidSibling",
+        "GetSkillsAsync_RejectedDigest_SkipsBeforeExtractionAndLogsWarningAsync": "agent/skills/mcpskills.TestSource_RejectedArchiveDigest_SkipsBeforeExtractionAndLogs",
+        "GetSkillsAsync_SecondDiscovery_ReExtractsContentAsync": "agent/skills/mcpskills.TestSource_SecondDiscovery_ReExtractsArchive",
+        "GetSkillsAsync_ServerListsNoArchives_PrunesLeftoversAsync": "agent/skills/mcpskills.TestSource_NoArchiveEntries_PrunesLeftovers",
+        "GetSkillsAsync_SkillNoLongerAdvertised_IsPrunedAsync": "agent/skills/mcpskills.TestSource_NoLongerAdvertisedArchive_IsPrunedOnFirstLoad",
+        "GetSkillsAsync_TarGzArchive_SkipsSkillAsync": "agent/skills/mcpskills.TestSource_TarGzArchive_IsSkipped",
+        "GetSkillsAsync_TwoSourcesWithSeparateDirectories_DoNotCollideAsync": "agent/skills/mcpskills.TestSource_SeparateArchiveDirectories_DoNotCollide",
+        "GetSkillsAsync_ZipArchive_DiscoversSkillAsync": "agent/skills/mcpskills.TestSource_ZIPArchive_ReturnsMetadataAndContent"
       },
       "Microsoft.Agents.AI.Skills.Mcp.UnitTests.AgentMcpSkillsSourceTests": {
-        "GetResourceAsync_PathTraversalName_ReturnsNullAsync": null,
-        "GetResourceAsync_SiblingBinary_ReturnsDataContentAsync": null,
-        "GetResourceAsync_SiblingText_ReturnsContentAsync": null,
-        "GetResourceAsync_UnknownName_ReturnsNullAsync": null,
-        "GetSkillsAsync_ArchiveEntryWithUnreadableResource_IsSkippedAsync": null,
-        "GetSkillsAsync_DoesNotReadSkillMdAsync": null,
-        "GetSkillsAsync_IndexBasedDiscovery_ReturnsSkillAsync": null,
-        "GetSkillsAsync_IndexEntryWithInvalidName_IsSkippedAsync": null,
-        "GetSkillsAsync_IndexEntryWithMissingRequiredFields_IsSkippedAsync": null,
-        "GetSkillsAsync_IndexEntryWithTemplateType_IsSkippedAsync": null,
-        "GetSkillsAsync_NoIndex_ReturnsEmptyAsync": null
+        "GetResourceAsync_PathTraversalName_ReturnsNullAsync": "agent/skills/mcpskills.TestSource_GetResource_PathTraversalName_ReturnsNil",
+        "GetResourceAsync_SiblingBinary_ReturnsDataContentAsync": "agent/skills/mcpskills.TestSource_GetResource_SiblingBinary_ReturnsDataContent",
+        "GetResourceAsync_SiblingText_ReturnsContentAsync": "agent/skills/mcpskills.TestSource_GetResource_SiblingText_ReturnsContent",
+        "GetResourceAsync_UnknownName_ReturnsNullAsync": "agent/skills/mcpskills.TestSource_GetResource_UnknownName_ReturnsNil",
+        "GetSkillsAsync_ArchiveEntryWithUnreadableResource_IsSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveEntryWithUnreadableResource_IsSkipped",
+        "GetSkillsAsync_DoesNotReadSkillMdAsync": "agent/skills/mcpskills.TestSource_DiscoveryDoesNotReadSkillMD",
+        "GetSkillsAsync_IndexBasedDiscovery_ReturnsSkillAsync": "agent/skills/mcpskills.TestSource_IndexBasedDiscovery_ReturnsSkill",
+        "GetSkillsAsync_IndexEntryWithInvalidName_IsSkippedAsync": "agent/skills/mcpskills.TestSource_IndexEntryWithInvalidName_IsSkipped",
+        "GetSkillsAsync_IndexEntryWithMissingRequiredFields_IsSkippedAsync": "agent/skills/mcpskills.TestSource_IndexEntryWithMissingRequiredFields_IsSkipped",
+        "GetSkillsAsync_IndexEntryWithTemplateType_IsSkippedAsync": "agent/skills/mcpskills.TestSource_IndexEntryWithTemplateType_IsSkipped",
+        "GetSkillsAsync_NoIndex_ReturnsEmptyAsync": "agent/skills/mcpskills.TestSource_NoIndex_ReturnsEmpty"
       }
     },
     "Microsoft.Agents.AI.Mem0.IntegrationTests": {
@@ -4731,7 +4731,7 @@
         "GetSkillsAsync_DeepResource_DiscoveredWithHigherDepthAsync": "agent/skills/fsskills.TestFileSource_DeepResource_DiscoveredWithHigherDepth",
         "GetSkillsAsync_DeepResource_NotDiscoveredWithDefaultDepthAsync": "agent/skills/fsskills.TestFileSource_DeepResource_ExcludedWithDefaultDepth",
         "GetSkillsAsync_DescriptionExceedsMaxLength_ExcludesSkillAsync": "agent/skills/fsskills.TestFileSource_DescriptionTooLong_ExcludesSkill",
-        "GetSkillsAsync_DuplicateMetadata_KeepsFirstValueAndLogsWarningAsync": null,
+        "GetSkillsAsync_DuplicateMetadata_KeepsFirstValueAndLogsWarningAsync": "agent/skills/fsskills.TestFileSource_DuplicateMetadataEntries_PreserveFirstValueAndWarn",
         "GetSkillsAsync_DuplicateNames_KeepsFirstOnlyAsync": "agent/skills.TestProvider_DuplicateFileSkillNames_KeepsOne",
         "GetSkillsAsync_DuplicateRecognizedFrontmatterField_ExcludesSkillAsync": "agent/skills/fsskills.TestFileSource_DuplicateRecognizedFields_ExcludeSkill",
         "GetSkillsAsync_EmptyBlockBeforeAnotherField_ExcludesSkillAsync": "agent/skills/fsskills.TestFileSource_EmptyBlockBeforeAnotherField_ExcludesSkill",
@@ -4739,9 +4739,9 @@
         "GetSkillsAsync_EmptyInlineValue_DoesNotConsumeNextFieldAsync": "agent/skills/fsskills.TestFileSource_EmptyInlineValue_DoesNotConsumeNextField",
         "GetSkillsAsync_EmptyOptionalScalarAtEnd_RemainsNullAsync": "agent/skills/fsskills.TestFileSource_EmptyOptionalScalarAtEnd_RemainsUnset",
         "GetSkillsAsync_EmptyPaths_ReturnsEmptyListAsync": "agent/skills/fsskills.TestFileSource_EmptyPaths_ReturnsEmptyList",
-        "GetSkillsAsync_EmptyQuotedOptionalValues_KeepExistingRepresentationAsync": null,
-        "GetSkillsAsync_ExistingMetadataScalarFormats_PreservedAsync": null,
-        "GetSkillsAsync_ExistingScalarFormats_PreservedAsync": null,
+        "GetSkillsAsync_EmptyQuotedOptionalValues_KeepExistingRepresentationAsync": "agent/skills/fsskills.TestFileSource_EmptyQuotedOptionalValues_PreserveRepresentation",
+        "GetSkillsAsync_ExistingMetadataScalarFormats_PreservedAsync": "agent/skills/fsskills.TestFileSource_ExistingMetadataScalarFormats_Preserved",
+        "GetSkillsAsync_ExistingScalarFormats_PreservedAsync": "agent/skills/fsskills.TestFileSource_ExistingScalarFormats_Preserved",
         "GetSkillsAsync_FileWithUtf8Bom_ParsesSuccessfullyAsync": "agent/skills/fsskills.TestFileSource_Utf8Bom_ParsesNameAndDescription",
         "GetSkillsAsync_FilesWithMatchingExtensions_DiscoveredAsResourcesAsync": "agent/skills/fsskills.TestFileSource_MatchingExtensions_DiscoverBothResources",
         "GetSkillsAsync_FilesWithNonMatchingExtensions_NotDiscoveredAsync": "agent/skills/fsskills.TestFileSource_NonMatchingExtensions_AreExcluded",
@@ -9755,7 +9755,7 @@
               "agent/skills.Script.Name"
             ],
             "status": "adapted",
-            "note": "For caller-side retrieval, search Scripts by exact Name in order. The built-in tool instead uses an index created during provider-context loading, with last-duplicate selection; no exported async getter exists."
+            "note": "For caller-side retrieval, search Scripts by exact Name in order. The built-in tool uses the last matching static entry and falls back to GetScript for missing names."
           }
         },
         "constructors": {
@@ -10917,22 +10917,24 @@
             "note": "Content-loading method becomes a context-aware function field returning text/error."
           },
           "GetResourceAsync(string, CancellationToken) -> ValueTask<AgentSkillResource>": {
-            "go": "for _, resource := range skill.Resources { if resource.Name == name { break } }",
+            "go": "if skill.GetResource != nil { resource, err = skill.GetResource(ctx, name) }",
             "go_symbols": [
+              "agent/skills.Skill.GetResource",
               "agent/skills.Skill.Resources",
               "agent/skills.Resource.Name"
             ],
             "status": "adapted",
-            "note": "Search the exported Resources slice by Name; Go exposes stored resources rather than an overridable asynchronous lookup method. Callers handle the missing-entry case."
+            "note": "An optional context-aware GetResource callback provides dynamic lookup. The skills provider searches Resources first and calls the callback on a miss; direct callers must guard a nil callback."
           },
           "GetScriptAsync(string, CancellationToken) -> ValueTask<AgentSkillScript>": {
-            "go": "for _, script := range skill.Scripts { if script.Name == name { break } }",
+            "go": "if skill.GetScript != nil { script, err = skill.GetScript(ctx, name) }",
             "go_symbols": [
+              "agent/skills.Skill.GetScript",
               "agent/skills.Skill.Scripts",
               "agent/skills.Script.Name"
             ],
             "status": "adapted",
-            "note": "Search the exported Scripts slice by Name; there is no public GetScript method or asynchronous lookup hook. Callers handle the missing-entry case."
+            "note": "An optional context-aware GetScript callback provides dynamic lookup. The skills provider searches Scripts first and calls the callback on a miss; direct callers must guard a nil callback."
           }
         }
       },

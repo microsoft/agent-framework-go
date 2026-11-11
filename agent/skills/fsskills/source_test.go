@@ -4,6 +4,7 @@ package fsskills_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -20,6 +21,224 @@ import (
 
 type fsWithoutLinkInspection struct {
 	fs.FS
+}
+
+func TestFileSource_ExistingScalarFormats_Preserved(t *testing.T) {
+	cases := []struct{ value, expected string }{
+		{"Read files", "Read files"},
+		{"'Read files'", "Read files"},
+		{`"Read files"`, "Read files"},
+		{`"  Read files  "`, "  Read files  "},
+		{`"Use #tags: safely"`, "Use #tags: safely"},
+		{`"Use 'quotes' safely"`, "Use 'quotes' safely"},
+		{`'Use "quotes" safely'`, `Use "quotes" safely`},
+		{`"| not a block"`, "| not a block"},
+		{"\n  Read files", "Read files"},
+		{"\n\n  'Read files'", "Read files"},
+		{"\n  >-\n    Read\n    files", "Read files"},
+		{"|\n  Read\n  files", "Read\nfiles"},
+		{"|-\n  Read\n  files", "Read\nfiles"},
+		{"|+\n  Read\n  files", "Read\nfiles\n"},
+		{">\n  Read\n  files", "Read files"},
+		{">-\n  Read\n  files", "Read files"},
+		{">+\n  Read\n  files", "Read files\n"},
+		{"|-\n\n  Read\n  files", "Read\nfiles"},
+		{"|-\n  Read\n\n  files", "Read\n\nfiles"},
+		{"|-\n  Read\n    indented\n  files", "Read\n  indented\nfiles"},
+		{"|-\n  description: text\n  Description: text", "description: text\nDescription: text"},
+		{"|-\n  \"description\": text\n  'allowed-tools': text", "\"description\": text\n'allowed-tools': text"},
+	}
+	for i, test := range cases {
+		for _, newline := range []string{"\n", "\r\n"} {
+			for _, metadataFirst := range []bool{false, true} {
+				for _, quote := range []string{"", "'", `"`} {
+					for _, duplicateMetadata := range []bool{false, true} {
+						t.Run(fmt.Sprintf("%d/%q/metadataFirst=%t/%q/duplicate=%t", i, newline, metadataFirst, quote, duplicateMetadata), func(t *testing.T) {
+							fields := fmt.Sprintf("%[1]sname%[1]s: test-skill\n%[1]sdescription%[1]s: %[2]s\n"+
+								"%[1]slicense%[1]s: 'MIT'\n%[1]scompatibility%[1]s: Any runtime\n%[1]sallowed-tools%[1]s: read\n", quote, test.value)
+							metadata := quote + "metadata" + quote + ":\n  author: test\n"
+							if duplicateMetadata {
+								metadata += "  author: Ignored\n"
+							}
+							body := fields + metadata
+							if metadataFirst {
+								body = metadata + fields
+							}
+							content := strings.ReplaceAll("---\n"+body+"---\nBody.", "\n", newline)
+							loaded := loadFileSkills(t, rawSkillSource("test-skill", content, fsskills.SourceOptions{}))
+							if len(loaded) != 1 {
+								t.Fatalf("Skills() returned %d skills, want 1", len(loaded))
+							}
+							fm := loaded[0].Frontmatter
+							if fm.Description != test.expected || fm.License != "MIT" || fm.Compatibility != "Any runtime" || fm.AllowedTools != "read" {
+								t.Fatalf("Frontmatter = %#v, want description %q and preserved scalar fields", fm, test.expected)
+							}
+							if fm.Metadata == nil || fm.Metadata["author"] != "test" {
+								t.Fatalf("Metadata = %#v, want the first author value", fm.Metadata)
+							}
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestFileSource_ExistingMetadataScalarFormats_Preserved(t *testing.T) {
+	cases := []struct{ value, expected string }{
+		{"First", "First"},
+		{"'First'", "First"},
+		{`"First"`, "First"},
+		{`"  First  "`, "  First  "},
+		{`"Use #tags: safely"`, "Use #tags: safely"},
+		{`"Use 'quotes' safely"`, "Use 'quotes' safely"},
+		{`'Use "quotes" safely'`, `Use "quotes" safely`},
+		{"''", "''"},
+		{`""`, `""`},
+		{`"\n"`, `\n`},
+		{"'It''s fine'", "It''s fine"},
+		{"\n    First", "First"},
+		{"\n    'First'", "First"},
+		{"\n    \"First\"", "First"},
+		{"First\n    Second", "First"},
+		{"\"First\n    Second\"", "\"First"},
+		{"'First\n    Second'", "'First"},
+		{"|\n    First\n    Second", "|"},
+		{"|-\n    First\n    Second", "|-"},
+		{"|+\n    First\n    Second", "|+"},
+		{">\n    First\n    Second", ">"},
+		{">-\n    First\n    Second", ">-"},
+		{">+\n    First\n    Second", ">+"},
+		{"\n    |-\n      First\n      Second", "|-"},
+	}
+	for i, test := range cases {
+		for _, newline := range []string{"\n", "\r\n"} {
+			t.Run(fmt.Sprintf("%d/%q", i, newline), func(t *testing.T) {
+				content := "---\nname: test-skill\ndescription: Read files\nmetadata:\n  author: " + test.value +
+					"\n  version: '1.0'\nlicense: MIT\n---\nBody."
+				var logs bytes.Buffer
+				logger := slog.New(slog.NewJSONHandler(&logs, nil))
+				loaded := loadFileSkills(t, rawSkillSource("test-skill", strings.ReplaceAll(content, "\n", newline), fsskills.SourceOptions{Logger: logger}))
+				if len(loaded) != 1 {
+					t.Fatalf("Skills() returned %d skills, want 1", len(loaded))
+				}
+				fm := loaded[0].Frontmatter
+				if fm.Description != "Read files" || fm.License != "MIT" || len(fm.Metadata) != 2 ||
+					fm.Metadata["author"] != test.expected || fm.Metadata["version"] != "1.0" {
+					t.Fatalf("Frontmatter = %#v, want author %q and preserved sibling fields", fm, test.expected)
+				}
+				body, err := loaded[0].GetContent(t.Context())
+				if err != nil || !strings.Contains(body, "Body.") {
+					t.Fatalf("GetContent() = %q, %v", body, err)
+				}
+				if text := logs.String(); strings.Contains(text, `"level":"WARN"`) || strings.Contains(text, `"level":"ERROR"`) {
+					t.Fatalf("valid metadata produced warning/error diagnostics: %s", text)
+				}
+			})
+		}
+	}
+}
+
+func TestFileSource_DuplicateMetadataEntries_PreserveFirstValueAndWarn(t *testing.T) {
+	cases := []struct{ key, duplicateKey, value, duplicateValue, expected string }{
+		{"author", "author", "First", "Second", "First"},
+		{"Author", "Author", "'First'", `"Second"`, "First"},
+		{"author", "author", `"First"`, "'Second'", "First"},
+		{"author", "author", "Same", "Same", "Same"},
+		{"author", "author", "''", "Second", "''"},
+		{"author", "author", `""`, "Second", `""`},
+		{"author", "author", `"  First  "`, "Second", "  First  "},
+		{"author", "author", "0", "Second", "0"},
+		{"description", "description", "First", "Second", "First"},
+		{"metadata", "metadata", "First", "Second", "First"},
+		{"vendor-key", "vendor-key", "First", "Second", "First"},
+		{"vendor_key", "vendor_key", "First", "Second", "First"},
+		{"author", "Author", "First", "Second", "First"},
+		{"Author", "author", "First", "Second", "First"},
+		{"author", "AUTHOR", "First", "Second", "First"},
+		{"description", "Description", "First", "Second", "First"},
+		{"metadata", "Metadata", "First", "Second", "First"},
+		{"vendor-key", "Vendor-Key", "First", "Second", "First"},
+		{"author", "author", "\n    'First'", "Second", "First"},
+		{"author", "Author", "First", "\n    \"Second\"", "First"},
+		{"author", "author", `"author: First"`, "Second", "author: First"},
+		{"author", "author", "First\n  # author: Not a field", "Second", "First"},
+		{"author", "author", "|-\n    First\n    paragraph", "Second", "|-"},
+		{"author", "Author", "First", ">-\n    Second\n    paragraph", "First"},
+		{"author", "author", ">\n    First\n    paragraph", "|\n    Second\n    paragraph", ">"},
+	}
+	for i, test := range cases {
+		for _, newline := range []string{"\n", "\r\n"} {
+			t.Run(fmt.Sprintf("%d/%q", i, newline), func(t *testing.T) {
+				content := "---\nname: test-skill\ndescription: Read files\nmetadata:\n" +
+					"  " + test.key + ": " + test.value + "\n  other: Preserved\n  " + test.duplicateKey + ": " + test.duplicateValue +
+					"\n  " + test.duplicateKey + ": Third\n  tail: Retained\nlicense: MIT\n---\nBody."
+				var logs bytes.Buffer
+				logger := slog.New(slog.NewJSONHandler(&logs, nil))
+				loaded := loadFileSkills(t, rawSkillSource("test-skill", strings.ReplaceAll(content, "\n", newline), fsskills.SourceOptions{Logger: logger}))
+				if len(loaded) != 1 {
+					t.Fatalf("Skills() returned %d skills, want 1", len(loaded))
+				}
+				fm := loaded[0].Frontmatter
+				if fm.Description != "Read files" || fm.License != "MIT" || len(fm.Metadata) != 3 ||
+					fm.Metadata[test.key] != test.expected || fm.Metadata["other"] != "Preserved" || fm.Metadata["tail"] != "Retained" {
+					t.Fatalf("Frontmatter = %#v, want first metadata value %q and preserved siblings", fm, test.expected)
+				}
+				matchingKeys := 0
+				for key, value := range fm.Metadata {
+					if strings.EqualFold(key, test.duplicateKey) {
+						matchingKeys++
+						if key != test.key || value != test.expected {
+							t.Fatalf("case-insensitive metadata entry = %q:%#v, want %q:%q", key, value, test.key, test.expected)
+						}
+					}
+				}
+				if matchingKeys != 1 {
+					t.Fatalf("case-insensitive metadata key count = %d, want 1", matchingKeys)
+				}
+				body, err := loaded[0].GetContent(t.Context())
+				if err != nil || !strings.Contains(body, "Body.") {
+					t.Fatalf("GetContent() = %q, %v", body, err)
+				}
+				warnings := 0
+				for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+					var record struct {
+						Level string `json:"level"`
+						Msg   string `json:"msg"`
+						Key   string `json:"key"`
+					}
+					if err := json.Unmarshal([]byte(line), &record); err != nil {
+						t.Fatal(err)
+					}
+					if record.Level == "WARN" && record.Key == test.duplicateKey &&
+						strings.Contains(record.Msg, "SKILL.md") && strings.Contains(record.Msg, "duplicate metadata key") &&
+						strings.Contains(record.Msg, "keeping the first value") {
+						warnings++
+					}
+				}
+				if warnings != 2 {
+					t.Fatalf("duplicate warning count = %d, want 2; logs: %s", warnings, logs.String())
+				}
+			})
+		}
+	}
+}
+
+func TestFileSource_EmptyQuotedOptionalValues_PreserveRepresentation(t *testing.T) {
+	for _, value := range []string{"''", `""`} {
+		t.Run(value, func(t *testing.T) {
+			content := "---\nname: test-skill\ndescription: Read files\nlicense: " + value +
+				"\ncompatibility: " + value + "\nallowed-tools: " + value + "\n---\nBody."
+			loaded := loadFileSkills(t, rawSkillSource("test-skill", content, fsskills.SourceOptions{}))
+			if len(loaded) != 1 {
+				t.Fatalf("Skills() returned %d skills, want 1", len(loaded))
+			}
+			fm := loaded[0].Frontmatter
+			if fm.License != value || fm.Compatibility != value || fm.AllowedTools != value {
+				t.Fatalf("Frontmatter = %#v, want empty-quote tokens %q preserved", fm, value)
+			}
+		})
+	}
 }
 
 func TestFileSource_EmptyPaths_ReturnsEmptyList(t *testing.T) {
@@ -872,6 +1091,35 @@ func TestFileSource_DuplicateMetadata_KeepsFirstValue(t *testing.T) {
 	}
 	if fm.Metadata["version"] != "1.0" {
 		t.Fatalf("expected version metadata to be preserved, got %#v", fm.Metadata["version"])
+	}
+}
+
+func TestFileSource_IndentedMetadataValue_KeepsFirstValue(t *testing.T) {
+	for _, secondKey := range []string{"author", "Author"} {
+		for _, newline := range []string{"\n", "\r\n"} {
+			t.Run(secondKey+fmt.Sprintf("/%q", newline), func(t *testing.T) {
+				root := t.TempDir()
+				createSkillDirRaw(t, root, "indented-metadata", strings.Join([]string{
+					"---",
+					"name: indented-metadata",
+					"description: Read files",
+					"metadata:",
+					"  author:",
+					"    'First'",
+					"  " + secondKey + ": Second",
+					"  version: '1.0'",
+					"---",
+					"Body.",
+				}, newline))
+				loaded, err := fsskills.NewSource(os.DirFS(root)).Skills(t.Context(), skills.SourceContext{})
+				if err != nil || len(loaded) != 1 {
+					t.Fatalf("Skills() = %#v, %v", loaded, err)
+				}
+				if metadata := loaded[0].Frontmatter.Metadata; len(metadata) != 2 || metadata["author"] != "First" || metadata["version"] != "1.0" {
+					t.Fatalf("Metadata = %#v, want the first indented value and intact sibling", metadata)
+				}
+			})
+		}
 	}
 }
 
