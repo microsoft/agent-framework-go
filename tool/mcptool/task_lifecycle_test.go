@@ -34,7 +34,7 @@ func TestTaskAwareMcpClientAIFunction_InvokeAsync_TaskBackedToolReturnsResult(t 
 }
 
 func TestTaskAwareMcpClientAIFunction_InvokeAsync_InvalidInitialPollIntervalCancelsRemoteTask(t *testing.T) {
-	goRuntimeMaximum := int64((1<<63-1)/int64(time.Millisecond)) + 1
+	goRuntimeMaximum := (1<<63-1)/int64(time.Millisecond) + 1
 	for _, interval := range []int64{0, -1, goRuntimeMaximum} {
 		t.Run(fmt.Sprint(interval), func(t *testing.T) {
 			server := newTaskTestServer(t, taskTestConfig{

@@ -368,23 +368,6 @@ func (s *taskTestServer) cancelTask(_ context.Context, _ *mcp.ServerSession, par
 	return &taskTestAck{ResultType: "complete"}, nil
 }
 
-func (s *taskTestServer) failLatestTask() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for i := s.createdTaskCount; i > 0; i-- {
-		task := s.tasks[fmt.Sprintf("task-%d", i)]
-		if task != nil {
-			task.status = "failed"
-			task.error, _ = json.Marshal(map[string]any{"code": -32603, "message": "simulated failure"})
-			if task.cancel != nil {
-				task.cancel()
-				task.cancel = nil
-			}
-			return
-		}
-	}
-}
-
 func (s *taskTestServer) cancelLatestTask() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
