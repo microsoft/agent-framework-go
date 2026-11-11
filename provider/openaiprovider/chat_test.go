@@ -29,6 +29,165 @@ import (
 	"github.com/openai/openai-go/v3/option"
 )
 
+func TestDeclarationOnlyToolsAreAdvertised(t *testing.T) {
+	for _, responsesAPI := range []bool{false, true} {
+		t.Run(fmt.Sprintf("responses=%v", responsesAPI), func(t *testing.T) {
+			type wireTool struct {
+				Name     string `json:"name"`
+				Function struct {
+					Name string `json:"name"`
+				} `json:"function"`
+			}
+			requests := make(chan []wireTool, 1)
+			var requestCount atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if requestCount.Add(1) != 1 {
+					t.Error("declaration-only call caused another provider request")
+					http.Error(w, "unexpected request", http.StatusBadRequest)
+					return
+				}
+				var body struct {
+					Tools []wireTool `json:"tools"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+					http.Error(w, "invalid request", http.StatusBadRequest)
+					return
+				}
+				requests <- body.Tools
+				w.Header().Set("Content-Type", "application/json")
+				response := `{"id":"chat-test","object":"chat.completion","model":"test-model","choices":[{"index":0,"message":{"role":"assistant","tool_calls":[{"id":"frontend-call","type":"function","function":{"name":"frontend","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`
+				if responsesAPI {
+					response = `{"id":"resp-test","object":"response","status":"completed","model":"test-model","output":[{"type":"function_call","id":"fc-test","call_id":"frontend-call","name":"frontend","arguments":"{}"}]}`
+				}
+				if _, err := io.WriteString(w, response); err != nil {
+					t.Error(err)
+				}
+			}))
+			defer server.Close()
+			newAgent := openaiprovider.NewChatCompletionsAgent
+			if responsesAPI {
+				newAgent = openaiprovider.NewResponsesAgent
+			}
+			a := newAgent(openai.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL)), openaiprovider.AgentConfig{Model: "test-model"})
+			fn := functool.MustNew(functool.Config{Name: "frontend"}, func(context.Context, struct{}) (string, error) {
+				t.Error("declaration-only tool was invoked")
+				return "", nil
+			})
+			response, err := a.RunText(t.Context(), "hello", agent.WithTool(struct{ tool.SchemaTool }{fn})).Collect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			tools := <-requests
+			if len(tools) != 1 {
+				t.Fatalf("wire tools=%v, want one declaration", tools)
+			}
+			name := tools[0].Function.Name
+			if responsesAPI {
+				name = tools[0].Name
+			}
+			if name != "frontend" {
+				t.Fatalf("wire tool name=%q, want frontend", name)
+			}
+			var call *message.FunctionCallContent
+			for content := range response.Contents() {
+				if functionCall, ok := content.(*message.FunctionCallContent); ok {
+					call = functionCall
+				}
+			}
+			if call == nil || call.Name != "frontend" || call.CallID != "frontend-call" || call.InformationalOnly {
+				t.Fatalf("returned call=%+v, want an unexecuted frontend call", call)
+			}
+		})
+	}
+}
+
+func TestDeveloperMessagesArePreserved(t *testing.T) {
+	for _, responsesAPI := range []bool{false, true} {
+		for _, partCount := range []int{1, 2} {
+			t.Run(fmt.Sprintf("responses=%v/parts=%d", responsesAPI, partCount), func(t *testing.T) {
+				type wireMessage struct {
+					Role    string          `json:"role"`
+					Name    string          `json:"name"`
+					Content json.RawMessage `json:"content"`
+				}
+				requests := make(chan []wireMessage, 1)
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					var body struct {
+						Messages []wireMessage `json:"messages"`
+						Input    []wireMessage `json:"input"`
+					}
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+						http.Error(w, "invalid request", http.StatusBadRequest)
+						return
+					}
+					messages := body.Messages
+					response := `{"id":"chat-test","object":"chat.completion","model":"test-model","choices":[{"index":0,"message":{"role":"assistant","content":"done"},"finish_reason":"stop"}]}`
+					if responsesAPI {
+						messages = body.Input
+						response = `{"id":"resp-test","object":"response","status":"completed","model":"test-model","output":[]}`
+					}
+					requests <- messages
+					w.Header().Set("Content-Type", "application/json")
+					if _, err := io.WriteString(w, response); err != nil {
+						t.Error(err)
+					}
+				}))
+				defer server.Close()
+				newAgent := openaiprovider.NewChatCompletionsAgent
+				if responsesAPI {
+					newAgent = openaiprovider.NewResponsesAgent
+				}
+				a := newAgent(openai.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL)), openaiprovider.AgentConfig{Model: "test-model"})
+				input := &message.Message{Role: message.Role("developer"), AuthorName: "developer_name"}
+				for i := range partCount {
+					input.Contents = append(input.Contents, &message.TextContent{Text: fmt.Sprintf("instruction %d", i)})
+				}
+				if _, err := a.Run(t.Context(), []*message.Message{input}).Collect(); err != nil {
+					t.Fatal(err)
+				}
+				messages := <-requests
+				if len(messages) != 1 || messages[0].Role != "developer" {
+					t.Fatalf("wire messages=%+v, want one developer message", messages)
+				}
+				if !responsesAPI && messages[0].Name != input.AuthorName {
+					t.Fatalf("developer name=%q, want %q", messages[0].Name, input.AuthorName)
+				}
+				if !responsesAPI && partCount == 1 {
+					var text string
+					if err := json.Unmarshal(messages[0].Content, &text); err != nil {
+						t.Fatal(err)
+					}
+					if text != "instruction 0" {
+						t.Fatalf("developer content=%q", text)
+					}
+					return
+				}
+				var parts []struct {
+					Type string `json:"type"`
+					Text string `json:"text"`
+				}
+				if err := json.Unmarshal(messages[0].Content, &parts); err != nil {
+					t.Fatal(err)
+				}
+				if len(parts) != partCount {
+					t.Fatalf("developer parts=%v, want %d", parts, partCount)
+				}
+				partType := "text"
+				if responsesAPI {
+					partType = "input_text"
+				}
+				for i, part := range parts {
+					if part.Type != partType || part.Text != fmt.Sprintf("instruction %d", i) {
+						t.Fatalf("developer part=%+v", part)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestChatToolCallsWithServiceIDDoNotClaimStoredHistory(t *testing.T) {
 	requests := make(chan []byte, 2)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

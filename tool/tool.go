@@ -68,6 +68,8 @@ type Tool interface {
 }
 
 // SchemaTool describes a tool that exposes input and output schemas.
+// A schema tool without a [FuncTool] implementation declares a tool for
+// caller-side execution; automatic tool invocation returns its calls to the caller.
 type SchemaTool interface {
 	Tool
 

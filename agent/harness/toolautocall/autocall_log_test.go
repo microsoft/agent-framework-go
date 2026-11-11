@@ -68,6 +68,36 @@ func TestAutocall_LogsSuccessfulFunctionCall(t *testing.T) {
 	}
 }
 
+func TestAutocall_LogsFunctionRequestedTermination(t *testing.T) {
+	for _, toolErr := range []error{nil, errors.New("tool failed")} {
+		t.Run(fmt.Sprint(toolErr), func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			fn := functool.MustNew(functool.Config{Name: "TestFunc"}, func(context.Context, struct{}) (string, error) {
+				return "result", toolErr
+			})
+			runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
+				AddFunctionCall("call", "TestFunc", `{}`).Build()}
+			a := agent.New(agent.ProviderConfig{
+				Run: runner.Run, Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{Logger: logger})},
+			}, agent.Config{
+				Tools: []tool.Tool{fn},
+				FunctionMiddlewares: []agent.FunctionInvocationMiddleware{func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+					invocation.Terminate = true
+					return next(ctx, invocation)
+				}},
+			})
+			if _, err := a.RunText(t.Context(), "run").Collect(); err != nil {
+				t.Fatal(err)
+			}
+			output := buf.String()
+			if strings.Count(output, "function requested termination") != 1 || !strings.Contains(output, "funcName=TestFunc") {
+				t.Fatalf("termination log missing: %s", output)
+			}
+		})
+	}
+}
+
 // TestAutocall_LogsSensitiveData tests that sensitive data is logged when enabled
 func TestAutocall_LogsSensitiveData(t *testing.T) {
 	// Create a logger that writes to a buffer
