@@ -9,8 +9,15 @@ import (
 	"strings"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/message"
 )
+
+// judgeVerdictFormat asks the judge's provider for a native structured
+// JudgeVerdict, matching .NET's GetResponseAsync<JudgeVerdict> and Python's
+// response_format=JudgeVerdict. Judges that do not honor it fall back to the
+// text markers, which parseJudgeVerdict already tolerates.
+var judgeVerdictFormat = jsonformat.MustFor[JudgeVerdict]()
 
 const (
 	// AIJudgeDoneMarker is the text-fallback marker the judge is asked to emit
@@ -90,6 +97,12 @@ type AIJudgeEvaluator struct {
 
 // NewAIJudgeEvaluator creates an evaluator that queries the judge agent after
 // each iteration. It panics if judge is nil.
+//
+// The judge is meant to be queried directly, like .NET's raw-IChatClient
+// AIJudgeLoopEvaluator: pass a bare agent with no tools, context providers,
+// middlewares, or shared session. Anything configured on the judge agent runs
+// on every evaluation — a judge with tools could execute them, and a judge
+// sharing a session carries state across loop iterations.
 func NewAIJudgeEvaluator(judge *agent.Agent, config AIJudgeConfig) *AIJudgeEvaluator {
 	if judge == nil {
 		panic("loop: judge agent cannot be nil")
@@ -128,7 +141,10 @@ func (e *AIJudgeEvaluator) Evaluate(ctx context.Context, loop *Context) (Evaluat
 	}
 	contents = append(contents, &message.TextContent{Text: "\n\n## Agent's latest response:\n" + loop.LastResponse.String()})
 
-	resp, err := e.judge.Run(ctx, []*message.Message{{Role: message.RoleUser, Contents: contents}}, agent.WithInstructions(e.instructions)).Collect()
+	resp, err := e.judge.Run(ctx, []*message.Message{{Role: message.RoleUser, Contents: contents}},
+		agent.WithInstructions(e.instructions),
+		agent.WithResponseFormat(judgeVerdictFormat),
+	).Collect()
 	if err != nil {
 		return Stop(), err
 	}

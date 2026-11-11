@@ -16,6 +16,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/harness/loop"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
+	"github.com/microsoft/agent-framework-go/format"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -1610,6 +1611,7 @@ type captureAgent struct {
 	callCount       int
 	messagesPerCall [][]*message.Message
 	sessionsPerCall []*agent.Session
+	formatsPerCall  []format.ResponseFormat
 }
 
 func newCaptureAgent(run func(call int, messages []*message.Message) []*agent.ResponseUpdate) *captureAgent {
@@ -1624,6 +1626,8 @@ func (c *captureAgent) provider() agent.ProviderConfig {
 				c.messagesPerCall = append(c.messagesPerCall, cloneMessages(messages))
 				session, _ := agent.GetOption(opts, agent.WithSession)
 				c.sessionsPerCall = append(c.sessionsPerCall, session)
+				respFormat, _ := agent.GetOption(opts, agent.WithResponseFormat)
+				c.formatsPerCall = append(c.formatsPerCall, respFormat)
 				for _, update := range c.run(c.callCount, messages) {
 					if !yield(update, nil) {
 						return
@@ -1697,6 +1701,23 @@ func TestAIJudgeEvaluator_StructuredVerdict(t *testing.T) {
 	}
 	if !strings.Contains(cont.Feedback, "missing the summary") || strings.Contains(cont.Feedback, "{gap_analysis}") {
 		t.Fatalf("feedback = %q, want the gap analysis substituted", cont.Feedback)
+	}
+}
+
+// The judge run must request native structured output (matching .NET's
+// GetResponseAsync<JudgeVerdict> and Python's response_format), with the text
+// markers only as a fallback for judges that do not honor it.
+func TestAIJudgeEvaluator_RequestsStructuredOutput(t *testing.T) {
+	capture := newCaptureAgent(func(int, []*message.Message) []*agent.ResponseUpdate {
+		return textUpdates(`{"answered":true}`)
+	})
+	judge := agent.New(capture.provider(), agent.Config{})
+	if _, err := loop.NewAIJudgeEvaluator(judge, loop.AIJudgeConfig{}).
+		Evaluate(context.Background(), contextWithResponse("done")); err != nil {
+		t.Fatal(err)
+	}
+	if len(capture.formatsPerCall) != 1 || capture.formatsPerCall[0].Schema == nil {
+		t.Fatalf("judge run response format = %#v, want a structured JudgeVerdict format", capture.formatsPerCall)
 	}
 }
 
