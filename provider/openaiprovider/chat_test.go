@@ -996,9 +996,9 @@ func TestChatBasicRequestResponse_NonStreaming(t *testing.T) {
 	}
 }
 
-// system_fingerprint (response) and per-choice logprobs must be surfaced on the
-// update's AdditionalProperties, matching the Python client which carries both
-// as chat response metadata.
+// system_fingerprint (response) and per-choice logprobs must be surfaced on
+// Response.AdditionalProperties, matching the Python client which carries both
+// as response-level chat metadata (never on an individual message).
 func TestChatResponseMetadataSurfaced_NonStreaming(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1010,7 +1010,7 @@ func TestChatResponseMetadataSurfaced_NonStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	props := lastMessageAdditionalProperties(t, resp)
+	props := responseAdditionalProperties(t, resp)
 	if props["SystemFingerprint"] != "fp_test" {
 		t.Errorf("SystemFingerprint = %v, want %q", props["SystemFingerprint"], "fp_test")
 	}
@@ -1031,13 +1031,13 @@ func TestChatResponseMetadataSurfaced_Streaming(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	props := lastMessageAdditionalProperties(t, resp)
+	props := responseAdditionalProperties(t, resp)
 	if props["SystemFingerprint"] != "fp_test" {
 		t.Errorf("SystemFingerprint = %v, want %q", props["SystemFingerprint"], "fp_test")
 	}
 }
 
-// Streaming logprobs arrive incrementally per chunk; the collected message must
+// Streaming logprobs arrive incrementally per chunk; the collected response must
 // carry the accumulated per-choice list, not just the final chunk's tokens.
 func TestChatStreamingLogprobsAccumulated(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -1052,7 +1052,7 @@ func TestChatStreamingLogprobsAccumulated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("error = %v", err)
 	}
-	props := lastMessageAdditionalProperties(t, resp)
+	props := responseAdditionalProperties(t, resp)
 	lp, ok := props["Logprobs"].(openai.ChatCompletionChunkChoiceLogprobs)
 	if !ok {
 		t.Fatalf("Logprobs = %T, want ChatCompletionChunkChoiceLogprobs", props["Logprobs"])
@@ -1062,17 +1062,26 @@ func TestChatStreamingLogprobsAccumulated(t *testing.T) {
 	}
 }
 
-// lastMessageAdditionalProperties returns the AdditionalProperties of the last
-// message carrying any, so metadata assertions do not depend on message count.
-func lastMessageAdditionalProperties(t *testing.T, resp *agent.Response) map[string]any {
+// isResponseMetadataUpdate reports whether an update is the metadata-only split
+// update carrying response-level SystemFingerprint/Logprobs (no MessageID, no
+// contents). Per-chunk assertions skip it; the dedicated metadata tests cover it.
+func isResponseMetadataUpdate(update *agent.ResponseUpdate) bool {
+	return update.MessageID == "" && len(update.Contents) == 0 && update.AdditionalProperties != nil
+}
+
+// responseAdditionalProperties asserts the metadata landed on the response, not
+// on any message, and returns it.
+func responseAdditionalProperties(t *testing.T, resp *agent.Response) map[string]any {
 	t.Helper()
-	for i := len(resp.Messages) - 1; i >= 0; i-- {
-		if len(resp.Messages[i].AdditionalProperties) > 0 {
-			return resp.Messages[i].AdditionalProperties
+	for _, msg := range resp.Messages {
+		if len(msg.AdditionalProperties) > 0 {
+			t.Fatalf("metadata leaked onto message %q: %#v", msg.ID, msg.AdditionalProperties)
 		}
 	}
-	t.Fatalf("no message carried AdditionalProperties: %#v", resp.Messages)
-	return nil
+	if len(resp.AdditionalProperties) == 0 {
+		t.Fatalf("response carried no AdditionalProperties: %#v", resp)
+	}
+	return resp.AdditionalProperties
 }
 
 // cache_write_tokens (prompt-cache writes / cache creation) must be surfaced via AdditionalCounts,
@@ -1381,6 +1390,9 @@ data: [DONE]
 	}), agent.Stream(true)) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
+		}
+		if isResponseMetadataUpdate(update) {
+			continue
 		}
 		if raw, ok := update.RawRepresentation.(openai.ChatCompletionChunk); !ok || raw.ID != msgID {
 			t.Fatalf("RawRepresentation = %#v, want native ChatCompletionChunk for %q", update.RawRepresentation, msgID)
@@ -2049,6 +2061,9 @@ data: [DONE]
 		if err != nil {
 			t.Fatalf("error = %v", err)
 		}
+		if isResponseMetadataUpdate(update) {
+			continue
+		}
 		updates = append(updates, update)
 	}
 	if err := agenttest.ResponseUpdatesEqual(updates, want); err != nil {
@@ -2483,6 +2498,9 @@ data: [DONE]
 	) {
 		if err != nil {
 			t.Fatalf("error = %v", err)
+		}
+		if isResponseMetadataUpdate(update) {
+			continue
 		}
 		updates = append(updates, update)
 	}

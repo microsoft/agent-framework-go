@@ -173,28 +173,41 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				additionalProperties = map[string]any{"Logprobs": choice.Logprobs}
 			}
 		}
-		if resp.SystemFingerprint != "" {
+		//nolint:staticcheck // SystemFingerprint is deprecated in the SDK but still served; surfaced deliberately for Python-provider parity.
+		if fingerprint := resp.SystemFingerprint; fingerprint != "" {
 			if additionalProperties == nil {
 				additionalProperties = make(map[string]any)
 			}
-			additionalProperties["SystemFingerprint"] = resp.SystemFingerprint
+			additionalProperties["SystemFingerprint"] = fingerprint
 		}
 		if resp.JSON.Usage.Valid() {
 			contents = addUsage(contents, resp.Usage)
 		}
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
 			update := &agent.ResponseUpdate{
-				Contents:             contents,
-				Role:                 message.RoleAssistant,
-				ResponseID:           resp.ID,
-				MessageID:            resp.ID,
-				FinishReason:         finishReason,
-				CreatedAt:            time.Unix(resp.Created, 0),
-				AdditionalProperties: additionalProperties,
-				RawRepresentation:    resp,
+				Contents:          contents,
+				Role:              message.RoleAssistant,
+				ResponseID:        resp.ID,
+				MessageID:         resp.ID,
+				FinishReason:      finishReason,
+				CreatedAt:         time.Unix(resp.Created, 0),
+				RawRepresentation: resp,
 			}
 			if !yield(update, nil) {
 				return
+			}
+			// SystemFingerprint/Logprobs are response-level metadata (matching
+			// the Python provider's ChatResponse.additional_properties), so emit
+			// them on a follow-up update without a MessageID; a MessageID-bearing
+			// update would scope them to the message instead.
+			if additionalProperties != nil {
+				if !yield(&agent.ResponseUpdate{
+					ResponseID:           resp.ID,
+					CreatedAt:            time.Unix(resp.Created, 0),
+					AdditionalProperties: additionalProperties,
+				}, nil) {
+					return
+				}
 			}
 		}
 	}
@@ -210,9 +223,11 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		defer func() { _ = stream.Close() }()
 		var acc openai.ChatCompletionAccumulator
 		// Logprobs stream incrementally (one chunk carries only its own tokens),
-		// so accumulate them across chunks; each update carries the running total
-		// and the final message keeps the complete per-choice list.
+		// so accumulate them across chunks and emit the complete list once on a
+		// terminal metadata-only update, scoped to the response rather than any
+		// single message.
 		var accLogprobs openai.ChatCompletionChunkChoiceLogprobs
+		var systemFingerprint string
 		var created int64
 		for stream.Next() {
 			chunk := stream.Current()
@@ -236,7 +251,6 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				contents = addUsage(contents, chunk.Usage)
 			}
 			var finishReason string
-			var additionalProperties map[string]any
 			if len(chunk.Choices) > 0 {
 				finishReason = normalizeChatFinishReason(chunk.Choices[0].FinishReason)
 				if logprobs := chunk.Choices[0].Logprobs; len(logprobs.Content) > 0 || len(logprobs.Refusal) > 0 {
@@ -244,24 +258,18 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 					accLogprobs.Refusal = append(accLogprobs.Refusal, logprobs.Refusal...)
 				}
 			}
-			if len(accLogprobs.Content) > 0 || len(accLogprobs.Refusal) > 0 {
-				additionalProperties = map[string]any{"Logprobs": accLogprobs}
-			}
-			if chunk.SystemFingerprint != "" {
-				if additionalProperties == nil {
-					additionalProperties = make(map[string]any)
-				}
-				additionalProperties["SystemFingerprint"] = chunk.SystemFingerprint
+			//nolint:staticcheck // SystemFingerprint is deprecated in the SDK but still served; surfaced deliberately for Python-provider parity.
+			if fingerprint := chunk.SystemFingerprint; fingerprint != "" {
+				systemFingerprint = fingerprint
 			}
 			resp := &agent.ResponseUpdate{
-				Contents:             contents,
-				Role:                 role,
-				ResponseID:           chunk.ID,
-				MessageID:            chunk.ID,
-				FinishReason:         finishReason,
-				CreatedAt:            time.Unix(chunk.Created, 0),
-				AdditionalProperties: additionalProperties,
-				RawRepresentation:    chunk,
+				Contents:          contents,
+				Role:              role,
+				ResponseID:        chunk.ID,
+				MessageID:         chunk.ID,
+				FinishReason:      finishReason,
+				CreatedAt:         time.Unix(chunk.Created, 0),
+				RawRepresentation: chunk,
 			}
 			if !yield(resp, nil) {
 				return
@@ -270,6 +278,28 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		if err := stream.Err(); err != nil {
 			yield(nil, err)
 			return
+		}
+		// Emit the accumulated response-level metadata once, on an update with
+		// no MessageID, so it lands on Response.AdditionalProperties like the
+		// Python provider's response_metadata (and responses.go's split).
+		var additionalProperties map[string]any
+		if len(accLogprobs.Content) > 0 || len(accLogprobs.Refusal) > 0 {
+			additionalProperties = map[string]any{"Logprobs": accLogprobs}
+		}
+		if systemFingerprint != "" {
+			if additionalProperties == nil {
+				additionalProperties = make(map[string]any)
+			}
+			additionalProperties["SystemFingerprint"] = systemFingerprint
+		}
+		if additionalProperties != nil {
+			if !yield(&agent.ResponseUpdate{
+				ResponseID:           acc.ID,
+				CreatedAt:            time.Unix(created, 0),
+				AdditionalProperties: additionalProperties,
+			}, nil) {
+				return
+			}
 		}
 		if len(acc.Choices) == 0 {
 			return
