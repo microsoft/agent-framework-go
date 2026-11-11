@@ -4,6 +4,7 @@ package mcptool
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -62,6 +63,64 @@ func TestTaskOptions_ExplicitValuesArePreserved(t *testing.T) {
 			}
 			if !reflect.DeepEqual(options, want) {
 				t.Fatalf("options = %+v, want %+v", options, want)
+			}
+		})
+	}
+}
+
+func TestTaskRequestsPreserveOtherClientCapabilities(t *testing.T) {
+	const params = `{
+		"_meta": {
+			"io.modelcontextprotocol/protocolVersion": "2026-07-28",
+			"io.modelcontextprotocol/clientCapabilities": {
+				"roots": {"listChanged": true},
+				"experimental": {"custom": true},
+				"extensions": {"custom-extension": {"enabled": true}},
+				"elicitation": {"url": {}}
+			},
+			"io.modelcontextprotocol/agent-framework-task-call": {
+				"elicitation": {"form": {}},
+				"sampling": {"tools": {}}
+			}
+		},
+		"name": "tool",
+		"taskId": "task"
+	}`
+	var want map[string]any
+	if err := json.Unmarshal([]byte(`{
+		"roots": {"listChanged": true},
+		"experimental": {"custom": true},
+		"extensions": {"custom-extension": {"enabled": true}, "io.modelcontextprotocol/tasks": {}},
+		"elicitation": {"form": {}},
+		"sampling": {"tools": {}}
+	}`), &want); err != nil {
+		t.Fatal(err)
+	}
+	for _, method := range []string{taskCreateMethod, taskGetMethod, taskUpdateMethod, taskCancelMethod} {
+		t.Run(method, func(t *testing.T) {
+			request := &jsonrpc.Request{Method: method, Params: json.RawMessage(params)}
+			prepared, _, err := prepareTaskRequest(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, ok := prepared.(*jsonrpc.Request)
+			if !ok {
+				t.Fatalf("prepared request is %T, want *jsonrpc.Request", prepared)
+			}
+			var decoded struct {
+				Meta mcp.Meta `json:"_meta"`
+			}
+			if err := json.Unmarshal(result.Params, &decoded); err != nil {
+				t.Fatal(err)
+			}
+			if got := decoded.Meta[mcp.MetaKeyClientCapabilities]; !reflect.DeepEqual(got, want) {
+				t.Fatalf("capabilities = %v, want %v", got, want)
+			}
+			if _, ok := decoded.Meta[taskCallMarkerKey]; ok {
+				t.Fatal("private task marker was sent to the server")
+			}
+			if string(request.Params) != params {
+				t.Fatal("original request was modified")
 			}
 		})
 	}

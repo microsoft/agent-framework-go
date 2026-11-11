@@ -3,6 +3,7 @@
 package mcptool_test
 
 import (
+	"context"
 	"reflect"
 	"testing"
 	"time"
@@ -88,6 +89,93 @@ func TestListToolsWithTasks_NegativePollingIntervalsThrow(t *testing.T) {
 	t.Run("maximum", func(t *testing.T) {
 		assertInvalidTaskOptions(t, mcptool.TaskOptions{MaximumPollingInterval: -time.Second}, "MaximumPollingInterval")
 	})
+}
+
+func TestListToolsWithTasks_InputCapabilitiesRequireHandler(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		options mcptool.TaskOptions
+	}{
+		{"handler only", mcptool.TaskOptions{InputHandler: acceptInputHandler}},
+		{"elicitation only", mcptool.TaskOptions{ElicitationCapabilities: &mcp.ElicitationCapabilities{}}},
+		{"sampling only", mcptool.TaskOptions{SamplingCapabilities: &mcp.SamplingCapabilities{}}}, //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+		{"both capabilities without handler", mcptool.TaskOptions{
+			ElicitationCapabilities: &mcp.ElicitationCapabilities{},
+			SamplingCapabilities:    &mcp.SamplingCapabilities{}, //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			assertInvalidTaskOptions(t, tt.options, "InputHandler")
+		})
+	}
+}
+
+func TestListToolsWithTasks_SnapshotsInputCapabilitiesBeforeListing(t *testing.T) {
+	server := newTaskTestServer(t, taskTestConfig{
+		initialStatus: "input_required",
+		inputRequests: []mcp.InputRequest{elicitationRequest("Confirm operation.")},
+		inputCapabilities: map[string]any{
+			"elicitation": map[string]any{"form": map[string]any{}},
+			"sampling":    map[string]any{"context": map[string]any{}, "tools": map[string]any{}},
+		},
+	}, taskTestTool("task-tool", taskTextTool("unused")))
+	started, resume := make(chan struct{}), make(chan struct{})
+	server.server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
+			if method == "tools/list" {
+				close(started)
+				select {
+				case <-resume:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			}
+			return next(ctx, method, request)
+		}
+	})
+	elicitation := &mcp.ElicitationCapabilities{}
+	sampling := &mcp.SamplingCapabilities{ //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+		Context: &mcp.SamplingContextCapabilities{}, //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+		Tools:   &mcp.SamplingToolsCapabilities{},   //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	type listing struct {
+		tools []tool.Tool
+		err   error
+	}
+	listed := make(chan listing, 1)
+	go func() {
+		tools, err := mcptool.ListToolsWithTasks(ctx, server.client, mcptool.TaskOptions{
+			InputHandler:            acceptInputHandler,
+			ElicitationCapabilities: elicitation,
+			SamplingCapabilities:    sampling,
+		})
+		listed <- listing{tools, err}
+	}()
+	select {
+	case <-started:
+	case result := <-listed:
+		t.Fatalf("listing ended before the server received tools/list: %v", result.err)
+	}
+	if elicitation.Form != nil {
+		t.Error("listing mutated the caller's elicitation capabilities")
+	}
+	elicitation.URL = &mcp.URLElicitationCapabilities{}
+	sampling.Context = nil
+	sampling.Tools = nil
+	close(resume)
+	list := <-listed
+	if list.err != nil {
+		t.Fatal(list.err)
+	}
+	result, err := findFuncTool(t, list.tools, "task-tool").Call(t.Context(), `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustTextResult(t, result); got != "completed" {
+		t.Fatalf("result = %q, want completed", got)
+	}
 }
 
 func assertInvalidTaskOptions(t *testing.T, options mcptool.TaskOptions, want string) {

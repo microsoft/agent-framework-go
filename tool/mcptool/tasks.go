@@ -35,10 +35,14 @@ const (
 
 const maxTaskDelay = time.Duration((1<<63 - 1) / int64(time.Millisecond) * int64(time.Millisecond))
 
+// TaskInputHandler resolves an input request from a running MCP task. It must
+// support the capabilities declared in [TaskOptions] and be safe for concurrent
+// calls when tools are invoked concurrently.
 type TaskInputHandler func(context.Context, mcp.InputRequest) (mcp.InputResponse, error)
 
 // TaskOptions configures the task lifecycle for tools returned by
 // [ListToolsWithTasks]. The zero value uses the default lifecycle settings.
+// Options and capability declarations are copied when tools are listed.
 type TaskOptions struct {
 	// DisableCancelRemoteTaskOnLocalCancellation leaves the remote task running
 	// when the local invocation is canceled. When false, the tool makes a
@@ -65,7 +69,20 @@ type TaskOptions struct {
 	// Zero uses the largest whole-millisecond [time.Duration].
 	MaximumPollingInterval time.Duration
 
+	// InputHandler resolves task input requests. It must be configured together
+	// with ElicitationCapabilities, SamplingCapabilities, or both.
 	InputHandler TaskInputHandler
+
+	// ElicitationCapabilities declares the elicitation modes supported by
+	// InputHandler. Nil declares no support; an empty value declares form
+	// elicitation. The declaration is sent only on task-aware requests.
+	ElicitationCapabilities *mcp.ElicitationCapabilities
+
+	// SamplingCapabilities declares the sampling features supported by
+	// InputHandler. Nil declares no support; an empty value declares basic
+	// sampling without context or tools. The declaration is sent only on
+	// task-aware requests.
+	SamplingCapabilities *mcp.SamplingCapabilities //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
 }
 
 func (o *TaskOptions) validate() error {
@@ -108,9 +125,37 @@ func (o *TaskOptions) validate() error {
 	if minimumMS > maximumMS {
 		return fmt.Errorf("polling interval range must contain at least one whole millisecond value")
 	}
+	hasInputCapabilities := o.ElicitationCapabilities != nil || o.SamplingCapabilities != nil
+	if hasInputCapabilities && o.InputHandler == nil {
+		return fmt.Errorf("input capabilities require an InputHandler")
+	}
+	if !hasInputCapabilities && o.InputHandler != nil {
+		return fmt.Errorf("InputHandler requires ElicitationCapabilities or SamplingCapabilities")
+	}
+	if o.ElicitationCapabilities != nil {
+		o.ElicitationCapabilities = new(*o.ElicitationCapabilities)
+		if o.ElicitationCapabilities.Form == nil && o.ElicitationCapabilities.URL == nil {
+			o.ElicitationCapabilities.Form = &mcp.FormElicitationCapabilities{}
+		}
+	}
+	if o.SamplingCapabilities != nil {
+		o.SamplingCapabilities = new(*o.SamplingCapabilities)
+	}
 	o.MinimumPollingInterval = time.Duration(minimumMS) * time.Millisecond
 	o.MaximumPollingInterval = time.Duration(maximumMS) * time.Millisecond
 	return nil
+}
+
+func (o *TaskOptions) requestMeta() mcp.Meta {
+	capabilities := make(map[string]any)
+	if o.ElicitationCapabilities != nil {
+		capabilities["elicitation"] = o.ElicitationCapabilities
+	}
+	if o.SamplingCapabilities != nil {
+		capabilities["sampling"] = o.SamplingCapabilities
+	}
+	// Merge after the SDK supplies its own per-request capabilities.
+	return mcp.Meta{taskCallMarkerKey: capabilities}
 }
 
 func durationCeilMilliseconds(d time.Duration) int64 {
@@ -229,14 +274,9 @@ func prepareTaskRequest(message jsonrpc.Message) (jsonrpc.Message, bool, error) 
 	if err != nil {
 		return nil, false, fmt.Errorf("decoding task-aware %s metadata: %w", request.Method, err)
 	}
-	if request.Method == taskCreateMethod {
-		var taskCall bool
-		if err := json.Unmarshal(meta[taskCallMarkerKey], &taskCall); err != nil && len(meta[taskCallMarkerKey]) != 0 {
-			return nil, false, fmt.Errorf("decoding task-aware tools/call marker: %w", err)
-		}
-		if !taskCall {
-			return message, false, nil
-		}
+	inputCapabilities, marked := meta[taskCallMarkerKey]
+	if request.Method == taskCreateMethod && !marked {
+		return message, false, nil
 	}
 
 	delete(meta, taskCallMarkerKey)
@@ -249,6 +289,18 @@ func prepareTaskRequest(message jsonrpc.Message) (jsonrpc.Message, bool, error) 
 		capabilities, err := decodeJSONObject(meta[mcp.MetaKeyClientCapabilities])
 		if err != nil {
 			return nil, false, fmt.Errorf("decoding task-aware client capabilities: %w", err)
+		}
+		if marked {
+			inputs, err := decodeJSONObject(inputCapabilities)
+			if err != nil {
+				return nil, false, fmt.Errorf("decoding task-aware input capabilities: %w", err)
+			}
+			for _, name := range []string{"elicitation", "sampling"} {
+				delete(capabilities, name)
+				if value, ok := inputs[name]; ok {
+					capabilities[name] = value
+				}
+			}
 		}
 		extensions, err := decodeJSONObject(capabilities["extensions"])
 		if err != nil {
@@ -393,7 +445,7 @@ func pollTaskToCompletion(ctx context.Context, session *mcp.ClientSession, task 
 		}
 		cancelCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), options.RemoteCancellationTimeout)
 		defer cancel()
-		if cancelErr := cancelTask(cancelCtx, session, task.TaskID); cancelErr != nil {
+		if cancelErr := cancelTask(cancelCtx, session, task.TaskID, options.requestMeta()); cancelErr != nil {
 			slog.WarnContext(ctx, "best-effort MCP task cancellation failed", "task_id", task.TaskID, "error", cancelErr)
 		}
 	}()
@@ -425,7 +477,7 @@ func pollTaskToCompletion(ctx context.Context, session *mcp.ClientSession, task 
 		}
 		firstPoll = false
 
-		taskResult, getErr := getTask(ctx, session, task.TaskID)
+		taskResult, getErr := getTask(ctx, session, task.TaskID, options.requestMeta())
 		if getErr != nil {
 			return nil, fmt.Errorf("MCP tasks/get failed: %w", getErr)
 		}
@@ -472,7 +524,7 @@ func pollTaskToCompletion(ctx context.Context, session *mcp.ClientSession, task 
 			for id := range newRequests {
 				observedInputRequests[id] = struct{}{}
 			}
-			if updateErr := updateTask(ctx, session, task.TaskID, inputResponses); updateErr != nil {
+			if updateErr := updateTask(ctx, session, task.TaskID, inputResponses, options.requestMeta()); updateErr != nil {
 				return nil, fmt.Errorf("MCP tasks/update failed: %w", updateErr)
 			}
 			consecutiveStuckPolls = 0
@@ -532,9 +584,12 @@ func taskErrorMessage(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func getTask(ctx context.Context, session *mcp.ClientSession, taskID string) (*taskRequestResult, error) {
+func getTask(ctx context.Context, session *mcp.ClientSession, taskID string, meta mcp.Meta) (*taskRequestResult, error) {
 	result, err := mcp.CallCustomMethod[*taskRequestParams, *taskRequestResult](
-		ctx, session, taskGetMethod, &taskRequestParams{TaskID: taskID},
+		ctx, session, taskGetMethod, &taskRequestParams{
+			ParamsBase: mcp.ParamsBase{Meta: meta},
+			TaskID:     taskID,
+		},
 	)
 	if err != nil {
 		return nil, err
@@ -542,16 +597,23 @@ func getTask(ctx context.Context, session *mcp.ClientSession, taskID string) (*t
 	return result, nil
 }
 
-func updateTask(ctx context.Context, session *mcp.ClientSession, taskID string, responses mcp.InputResponseMap) error {
+func updateTask(ctx context.Context, session *mcp.ClientSession, taskID string, responses mcp.InputResponseMap, meta mcp.Meta) error {
 	_, err := mcp.CallCustomMethod[*taskRequestParams, *taskAck](
-		ctx, session, taskUpdateMethod, &taskRequestParams{TaskID: taskID, InputResponses: responses},
+		ctx, session, taskUpdateMethod, &taskRequestParams{
+			ParamsBase:     mcp.ParamsBase{Meta: meta},
+			TaskID:         taskID,
+			InputResponses: responses,
+		},
 	)
 	return err
 }
 
-func cancelTask(ctx context.Context, session *mcp.ClientSession, taskID string) error {
+func cancelTask(ctx context.Context, session *mcp.ClientSession, taskID string, meta mcp.Meta) error {
 	_, err := mcp.CallCustomMethod[*taskRequestParams, *taskAck](
-		ctx, session, taskCancelMethod, &taskRequestParams{TaskID: taskID},
+		ctx, session, taskCancelMethod, &taskRequestParams{
+			ParamsBase: mcp.ParamsBase{Meta: meta},
+			TaskID:     taskID,
+		},
 	)
 	return err
 }

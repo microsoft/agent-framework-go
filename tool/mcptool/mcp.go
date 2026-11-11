@@ -102,6 +102,9 @@ func ListTools(ctx context.Context, session *mcp.ClientSession) ([]tool.Tool, er
 // not create tasks can still return results inline. The session must be
 // created with [Connect] so the task RPC methods are registered. Zero-valued
 // options use the defaults documented on [TaskOptions].
+// The options and their capability declarations are copied before listing;
+// subsequent changes do not affect the returned tools. Task input handling
+// requires both a handler and explicit input capabilities in options.
 //
 // See https://modelcontextprotocol.io/extensions/tasks/overview.
 func ListToolsWithTasks(ctx context.Context, session *mcp.ClientSession, options TaskOptions) ([]tool.Tool, error) {
@@ -644,7 +647,7 @@ func (w *mcpWrapper) Call(ctx context.Context, args string) (any, error) {
 		Arguments: json.RawMessage(args),
 	}
 	if w.taskOptions != nil {
-		params.Meta = mcp.Meta{taskCallMarkerKey: true}
+		params.Meta = w.taskOptions.requestMeta()
 	}
 	result, err := w.session.CallTool(ctx, params)
 	if err != nil {

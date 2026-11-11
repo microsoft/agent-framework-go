@@ -41,7 +41,10 @@ func TestTaskAwareToolsStreamableHTTP(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			for _, scenario := range []string{"complete", "input", "cancel", "inline"} {
 				t.Run(scenario, func(t *testing.T) {
-					config := taskTestConfig{disableTasks: scenario == "inline"}
+					config := taskTestConfig{
+						disableTasks:      scenario == "inline",
+						inputCapabilities: map[string]any{"elicitation": map[string]any{"form": map[string]any{}}},
+					}
 					handler := taskTextTool("completed")
 					if scenario == "input" {
 						config.initialStatus = "input_required"
@@ -71,7 +74,10 @@ func TestTaskAwareToolsStreamableHTTP(t *testing.T) {
 							t.Error(err)
 						}
 					})
-					tools, err := mcptool.ListToolsWithTasks(t.Context(), session, mcptool.TaskOptions{InputHandler: acceptInputHandler})
+					tools, err := mcptool.ListToolsWithTasks(t.Context(), session, mcptool.TaskOptions{
+						InputHandler:            acceptInputHandler,
+						ElicitationCapabilities: &mcp.ElicitationCapabilities{},
+					})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -120,6 +126,186 @@ func TestTaskAwareToolsStreamableHTTP(t *testing.T) {
 				})
 			}
 		})
+	}
+}
+
+func TestTaskAwareInputCapabilities(t *testing.T) {
+	form := elicitationRequest("Confirm operation.")
+	url := &mcp.ElicitParams{
+		Mode:          "url",
+		Message:       "Confirm operation.",
+		URL:           "https://example.com/confirm",
+		ElicitationID: "confirmation",
+	}
+	sampling := &mcp.CreateMessageWithToolsParams{ //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+		MaxTokens: 32,
+		Messages: []*mcp.SamplingMessageV2{{ //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+			Role:    "user",
+			Content: []mcp.Content{&mcp.TextContent{Text: "Summarize this operation."}},
+		}},
+	}
+	for _, tt := range []struct {
+		name     string
+		options  mcptool.TaskOptions
+		requests []mcp.InputRequest
+		want     string
+	}{
+		{
+			name: "no input support",
+			want: `{}`,
+		},
+		{
+			name:     "default form",
+			options:  mcptool.TaskOptions{ElicitationCapabilities: &mcp.ElicitationCapabilities{}},
+			requests: []mcp.InputRequest{form},
+			want:     `{"elicitation":{"form":{}}}`,
+		},
+		{
+			name: "explicit form",
+			options: mcptool.TaskOptions{ElicitationCapabilities: &mcp.ElicitationCapabilities{
+				Form: &mcp.FormElicitationCapabilities{},
+			}},
+			requests: []mcp.InputRequest{form},
+			want:     `{"elicitation":{"form":{}}}`,
+		},
+		{
+			name: "url only",
+			options: mcptool.TaskOptions{ElicitationCapabilities: &mcp.ElicitationCapabilities{
+				URL: &mcp.URLElicitationCapabilities{},
+			}},
+			requests: []mcp.InputRequest{url},
+			want:     `{"elicitation":{"url":{}}}`,
+		},
+		{
+			name: "both elicitation modes",
+			options: mcptool.TaskOptions{ElicitationCapabilities: &mcp.ElicitationCapabilities{
+				Form: &mcp.FormElicitationCapabilities{},
+				URL:  &mcp.URLElicitationCapabilities{},
+			}},
+			requests: []mcp.InputRequest{form, url},
+			want:     `{"elicitation":{"form":{},"url":{}}}`,
+		},
+		{
+			name:     "basic sampling",
+			options:  mcptool.TaskOptions{SamplingCapabilities: &mcp.SamplingCapabilities{}}, //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+			requests: []mcp.InputRequest{sampling},
+			want:     `{"sampling":{}}`,
+		},
+		{
+			name: "sampling with context and tools",
+			options: mcptool.TaskOptions{SamplingCapabilities: &mcp.SamplingCapabilities{ //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+				Context: &mcp.SamplingContextCapabilities{}, //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+				Tools:   &mcp.SamplingToolsCapabilities{},   //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+			}},
+			requests: []mcp.InputRequest{sampling},
+			want:     `{"sampling":{"context":{},"tools":{}}}`,
+		},
+		{
+			name: "elicitation and sampling",
+			options: mcptool.TaskOptions{
+				ElicitationCapabilities: &mcp.ElicitationCapabilities{},
+				SamplingCapabilities:    &mcp.SamplingCapabilities{}, //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+			},
+			requests: []mcp.InputRequest{form, sampling},
+			want:     `{"elicitation":{"form":{}},"sampling":{}}`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var capabilities map[string]any
+			if err := json.Unmarshal([]byte(tt.want), &capabilities); err != nil {
+				t.Fatal(err)
+			}
+			config := taskTestConfig{
+				initialStatus:     "completed",
+				inputCapabilities: capabilities,
+				inputRequests:     tt.requests,
+			}
+			handled := 0
+			if len(tt.requests) != 0 {
+				config.initialStatus = "input_required"
+				tt.options.InputHandler = func(ctx context.Context, request mcp.InputRequest) (mcp.InputResponse, error) {
+					handled++
+					return acceptInputHandler(ctx, request)
+				}
+			}
+			server := newTaskTestServer(t, config, taskTestTool("task-tool", taskTextTool("inline")))
+			fn := getTaskTool(t, server, tt.options, "task-tool")
+			result, err := fn.Call(t.Context(), `{}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := mustTextResult(t, result); got != "completed" {
+				t.Fatalf("result = %q, want completed", got)
+			}
+			created, polls, inputs, cancels, _ := server.counts()
+			if created != 1 || polls == 0 || inputs != len(tt.requests) || handled != len(tt.requests) || cancels != 0 {
+				t.Fatalf("created = %d, polls = %d, inputs = %d, handled = %d, cancels = %d", created, polls, inputs, handled, cancels)
+			}
+			ordinary, err := mcptool.ListTools(t.Context(), server.client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err = findFuncTool(t, ordinary, "task-tool").Call(t.Context(), `{}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := mustTextResult(t, result); got != "inline" {
+				t.Fatalf("ordinary result = %q, want inline", got)
+			}
+		})
+	}
+}
+
+func TestTaskAwareInputCapabilitiesAreIsolated(t *testing.T) {
+	server := newTaskTestServer(t, taskTestConfig{initialStatus: "completed"},
+		taskTestTool("task-tool", taskTextTool("completed")))
+	observed := make(chan map[string]any, 5)
+	server.server.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
+			if method == "tools/call" {
+				capabilities, _ := request.GetParams().GetMeta()[mcp.MetaKeyClientCapabilities].(map[string]any)
+				observed <- taskInputCapabilities(capabilities)
+			}
+			return next(ctx, method, request)
+		}
+	})
+	elicitation := getTaskTool(t, server, mcptool.TaskOptions{
+		InputHandler:            acceptInputHandler,
+		ElicitationCapabilities: &mcp.ElicitationCapabilities{},
+	}, "task-tool")
+	sampling := getTaskTool(t, server, mcptool.TaskOptions{
+		InputHandler:         acceptInputHandler,
+		SamplingCapabilities: &mcp.SamplingCapabilities{}, //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+	}, "task-tool")
+	noInputs := getTaskTool(t, server, mcptool.TaskOptions{}, "task-tool")
+	ordinary, err := mcptool.ListTools(t.Context(), server.client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		fn   tool.FuncTool
+		want string
+	}{
+		{elicitation, `{"elicitation":{"form":{}}}`},
+		{sampling, `{"sampling":{}}`},
+		{noInputs, `{}`},
+		{findFuncTool(t, ordinary, "task-tool"), `{}`},
+		{elicitation, `{"elicitation":{"form":{}}}`},
+	} {
+		result, err := tt.fn.Call(t.Context(), `{}`)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := mustTextResult(t, result); got != "completed" {
+			t.Fatalf("result = %q, want completed", got)
+		}
+		var want map[string]any
+		if err := json.Unmarshal([]byte(tt.want), &want); err != nil {
+			t.Fatal(err)
+		}
+		if got := <-observed; !reflect.DeepEqual(got, want) {
+			t.Fatalf("input capabilities = %v, want %v", got, want)
+		}
 	}
 }
 
@@ -249,6 +435,7 @@ func TestTaskAwareMcpClientAIFunction_InvokeAsync_InputRequiredDispatchesClientH
 	}, taskTestTool("input-tool", taskTextTool("unused")))
 	options := mcptool.TaskOptions{}
 	options.InputHandler = acceptInputHandler
+	options.ElicitationCapabilities = &mcp.ElicitationCapabilities{}
 	fn := getTaskTool(t, server, options, "input-tool")
 	result, err := fn.Call(t.Context(), `{}`)
 	if err != nil {
@@ -374,6 +561,7 @@ func TestTaskAwareMcpClientAIFunction_InvokeAsync_InputHandlerFailureCancelsRemo
 	}, taskTestTool("failing-input-tool", taskTextTool("unused")))
 	options := mcptool.TaskOptions{}
 	options.InputHandler = failInputHandler
+	options.ElicitationCapabilities = &mcp.ElicitationCapabilities{}
 	fn := getTaskTool(t, server, options, "failing-input-tool")
 	_, err := fn.Call(t.Context(), `{}`)
 	if !errors.Is(err, errTaskInputHandler) {
@@ -408,6 +596,7 @@ func TestTaskAwareMcpClientAIFunction_InvokeAsync_UpdateTaskFailureCancelsRemote
 	}, taskTestTool("update-failure-tool", taskTextTool("unused")))
 	options := mcptool.TaskOptions{}
 	options.InputHandler = acceptInputHandler
+	options.ElicitationCapabilities = &mcp.ElicitationCapabilities{}
 	fn := getTaskTool(t, server, options, "update-failure-tool")
 	_, err := fn.Call(t.Context(), `{}`)
 	assertTaskErrorContains(t, err, "update task failed")
@@ -452,6 +641,7 @@ func TestTaskAwareMcpClientAIFunction_InvokeAsync_StuckInputRequiredCancelsRemot
 	options := mcptool.TaskOptions{}
 	options.MaxConsecutiveStuckPolls = 2
 	options.InputHandler = acceptInputHandler
+	options.ElicitationCapabilities = &mcp.ElicitationCapabilities{}
 	fn := getTaskTool(t, server, options, "stuck-input-tool")
 	_, err := fn.Call(t.Context(), `{}`)
 	assertTaskErrorContains(t, err, "2 consecutive polls")
@@ -473,6 +663,7 @@ func TestTaskAwareMcpClientAIFunction_InvokeAsync_InputRequestsAtLimitCompletes(
 	var handled atomic.Int32
 	options := mcptool.TaskOptions{}
 	options.MaxTotalInputRequests = 2
+	options.ElicitationCapabilities = &mcp.ElicitationCapabilities{}
 	options.InputHandler = func(ctx context.Context, request mcp.InputRequest) (mcp.InputResponse, error) {
 		handled.Add(1)
 		return acceptInputHandler(ctx, request)
@@ -506,6 +697,7 @@ func TestTaskAwareMcpClientAIFunction_InvokeAsync_InputRequestLimitExceededCance
 	var handled atomic.Int32
 	options := mcptool.TaskOptions{}
 	options.MaxTotalInputRequests = 2
+	options.ElicitationCapabilities = &mcp.ElicitationCapabilities{}
 	options.InputHandler = func(ctx context.Context, request mcp.InputRequest) (mcp.InputResponse, error) {
 		handled.Add(1)
 		return acceptInputHandler(ctx, request)

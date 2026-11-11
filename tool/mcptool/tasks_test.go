@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -64,6 +65,7 @@ type taskTestConfig struct {
 	updateErr             error
 	initialStatus         string
 	inputRequests         []mcp.InputRequest
+	inputCapabilities     map[string]any // Nil disables input capability checks.
 	ignoreInputResponses  bool
 	completedResult       json.RawMessage
 	failedResult          json.RawMessage
@@ -166,11 +168,24 @@ func newTaskTestServer(t *testing.T, config taskTestConfig, handlers map[string]
 func (s *taskTestServer) taskMiddleware(next mcp.MethodHandler) mcp.MethodHandler {
 	return func(ctx context.Context, method string, request mcp.Request) (mcp.Result, error) {
 		switch method {
-		case taskGetMethod, taskUpdateMethod, taskCancelMethod:
+		case "tools/list", "tools/call", taskGetMethod, taskUpdateMethod, taskCancelMethod:
 			capabilities, _ := request.GetParams().GetMeta()[mcp.MetaKeyClientCapabilities].(map[string]any)
 			extensions, _ := capabilities["extensions"].(map[string]any)
-			if _, enabled := extensions["io.modelcontextprotocol/tasks"]; !enabled {
+			_, enabled := extensions["io.modelcontextprotocol/tasks"]
+			if strings.HasPrefix(method, "tasks/") && !enabled {
 				return nil, &jsonrpc.Error{Code: -32021, Message: "missing tasks extension capability"}
+			}
+			if s.config.inputCapabilities != nil {
+				want := s.config.inputCapabilities
+				if !enabled {
+					want = map[string]any{}
+				}
+				if got := taskInputCapabilities(capabilities); !reflect.DeepEqual(got, want) {
+					return nil, &jsonrpc.Error{
+						Code:    -32021,
+						Message: fmt.Sprintf("%s input capabilities = %v, want %v", method, got, want),
+					}
+				}
 			}
 		}
 		if method != "tools/call" || s.config.disableTasks {
@@ -205,6 +220,16 @@ func (s *taskTestServer) taskMiddleware(next mcp.MethodHandler) mcp.MethodHandle
 			PollIntervalMS: s.initialPollInterval(),
 		}, nil
 	}
+}
+
+func taskInputCapabilities(capabilities map[string]any) map[string]any {
+	inputs := make(map[string]any)
+	for _, name := range []string{"elicitation", "sampling"} {
+		if value, ok := capabilities[name]; ok {
+			inputs[name] = value
+		}
+	}
+	return inputs
 }
 
 func (s *taskTestServer) createTask(cancel context.CancelFunc) *taskTestState {
@@ -462,10 +487,22 @@ func elicitationRequest(message string) mcp.InputRequest {
 }
 
 func acceptInputHandler(_ context.Context, request mcp.InputRequest) (mcp.InputResponse, error) {
-	if _, ok := request.(*mcp.ElicitParams); !ok {
-		return nil, fmt.Errorf("input request is %T, want *mcp.ElicitParams", request)
+	switch input := request.(type) {
+	case *mcp.ElicitParams:
+		result := &mcp.ElicitResult{Action: "accept"}
+		if input.Mode != "url" {
+			result.Content = map[string]any{"confirmed": "yes"}
+		}
+		return result, nil
+	case *mcp.CreateMessageWithToolsParams: //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+		return &mcp.CreateMessageWithToolsResult{ //nolint:staticcheck // MCP sampling remains supported during the SEP-2577 deprecation window.
+			Role:    "assistant",
+			Model:   "test-model",
+			Content: []mcp.Content{&mcp.TextContent{Text: "sampled"}},
+		}, nil
+	default:
+		return nil, fmt.Errorf("unsupported task input request %T", request)
 	}
-	return &mcp.ElicitResult{Action: "accept", Content: map[string]any{"confirmed": "yes"}}, nil
 }
 
 var errTaskInputHandler = errors.New("input handler failed")
