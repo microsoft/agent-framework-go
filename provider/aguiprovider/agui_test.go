@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	aguiSSEClient "github.com/ag-ui-protocol/ag-ui/sdks/community/go/pkg/client/sse"
@@ -18,8 +20,64 @@ import (
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/aguiprovider"
+	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
 )
+
+func TestDeclarationOnlyToolsAreAdvertised(t *testing.T) {
+	requests := make(chan []string, 1)
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requestCount.Add(1) != 1 {
+			t.Error("declaration-only call caused another provider request")
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		var body struct {
+			Tools []struct {
+				Name string `json:"name"`
+			} `json:"tools"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		var names []string
+		for _, declaration := range body.Tools {
+			names = append(names, declaration.Name)
+		}
+		requests <- names
+		w.Header().Set("Content-Type", "text/event-stream")
+		writeSSE(t, w, aguiEvents.NewRunStartedEvent("thread-1", "run-1"))
+		writeSSE(t, w, aguiEvents.NewToolCallStartEvent("frontend-call", "frontend"))
+		writeSSE(t, w, aguiEvents.NewToolCallArgsEvent("frontend-call", `{}`))
+		writeSSE(t, w, aguiEvents.NewToolCallEndEvent("frontend-call"))
+		writeSSE(t, w, aguiEvents.NewRunFinishedEvent("thread-1", "run-1"))
+	}))
+	defer server.Close()
+	a := aguiprovider.NewAgent(newTestClient(server.URL), aguiprovider.AgentConfig{})
+	fn := functool.MustNew(functool.Config{Name: "frontend"}, func(context.Context, struct{}) (string, error) {
+		t.Error("declaration-only tool was invoked")
+		return "", nil
+	})
+	response, err := a.RunText(t.Context(), "hello", agent.WithTool(struct{ tool.SchemaTool }{fn})).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := <-requests; !slices.Equal(names, []string{"frontend"}) {
+		t.Fatalf("wire tools=%v, want frontend", names)
+	}
+	var call *message.FunctionCallContent
+	for content := range response.Contents() {
+		if functionCall, ok := content.(*message.FunctionCallContent); ok {
+			call = functionCall
+		}
+	}
+	if call == nil || call.Name != "frontend" || call.CallID != "frontend-call" || call.InformationalOnly {
+		t.Fatalf("returned call=%+v, want an unexecuted frontend call", call)
+	}
+}
 
 func TestNewAgent_PanicsWithNilClient(t *testing.T) {
 	defer func() {

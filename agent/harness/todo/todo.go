@@ -242,6 +242,7 @@ func (p *Provider) createTools(session *agent.Session) []tool.FuncTool {
 		functool.Config{
 			Name:        "todos_add",
 			Description: "Add one or more todo items. Each item has a title and an optional description. Returns the list of created todo items.",
+			ArgName:     "todos",
 		},
 		func(ctx context.Context, input []itemInput) ([]Item, error) {
 			mu := p.getSessionLock(session)
@@ -270,6 +271,7 @@ func (p *Provider) createTools(session *agent.Session) []tool.FuncTool {
 		functool.Config{
 			Name:        "todos_complete",
 			Description: "Mark one or more todo items as complete. Each entry has an ID and a reason describing how/why the item was completed. Returns the number of items that were found and marked complete.",
+			ArgName:     "items",
 		},
 		func(ctx context.Context, items []completeInput) (int, error) {
 			mu := p.getSessionLock(session)
@@ -298,6 +300,7 @@ func (p *Provider) createTools(session *agent.Session) []tool.FuncTool {
 		functool.Config{
 			Name:        "todos_remove",
 			Description: "Remove one or more todo items by their IDs. Returns the number of items that were found and removed.",
+			ArgName:     "ids",
 		},
 		func(ctx context.Context, ids []int) (int, error) {
 			mu := p.getSessionLock(session)

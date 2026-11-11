@@ -1046,7 +1046,7 @@ func TestDefaultToolsAndFileSkills(t *testing.T) {
 				}
 			}).
 				AddFunctionCall("write", filememory.WriteToolName, `{"fileName":"project.md","content":"Use Go.","description":"Project preferences"}`).
-				AddFunctionCall("todo", "todos_add", `{"Arg0":[{"title":"Review the endpoint design"}]}`).
+				AddFunctionCall("todo", "todos_add", `{"todos":[{"title":"Review the endpoint design"}]}`).
 				NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {
 					assertToolHistory(t, messages, "write", "todo")
 					for _, msg := range messages {

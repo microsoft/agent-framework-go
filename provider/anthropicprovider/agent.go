@@ -149,7 +149,6 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 
 		var messageID string
 		var finishReason string
-		var usage message.UsageDetails
 		var accumulated anthropic.Message
 		receivedEvent := false
 
@@ -166,23 +165,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			case anthropic.MessageStartEvent:
 				modelcall.RecordResponse(ctx, event.Message.Model, event.Message.ID)
 				messageID = cmp.Or(messageID, event.Message.ID)
-				usage.Add(toUsageDetails(event.Message.Usage))
 			case anthropic.MessageDeltaEvent:
-				// Anthropic reports the final cumulative output token count on
-				// message_delta, superseding the placeholder output count from
-				// message_start. Overwrite the output-derived counts from the
-				// delta instead of summing them; adding would double-count the
-				// message_start placeholder (and any earlier delta).
-				delta := toUsageDetailsDelta(event.Usage)
-				usage.OutputTokenCount = delta.OutputTokenCount
-				usage.ReasoningTokenCount = delta.ReasoningTokenCount
-				usage.TotalTokenCount = usage.InputTokenCount + usage.OutputTokenCount
-				if delta.AdditionalCounts != nil {
-					if usage.AdditionalCounts == nil {
-						usage.AdditionalCounts = make(map[string]int64)
-					}
-					maps.Copy(usage.AdditionalCounts, delta.AdditionalCounts)
-				}
 				// Later chunks may carry an empty stop_reason; don't clobber a
 				// value we already captured.
 				if fr := mapStopReason(event.Delta.StopReason); fr != "" {
@@ -249,7 +232,7 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 			FinishReason: finishReason,
 			Contents: []message.Content{
 				&message.UsageContent{
-					Details: usage,
+					Details: toUsageDetails(accumulated.Usage),
 				},
 			},
 		}, nil) {
@@ -259,8 +242,9 @@ func (a *client) run(ctx context.Context, messages []*message.Message, options .
 }
 
 // mapStopReason maps an Anthropic stop_reason to the canonical FinishReason
-// values shared across providers (mirroring the OpenAI/Copilot providers). It
-// returns "" for empty or unrecognized reasons so callers can fall through.
+// values shared across providers (mirroring the OpenAI/Copilot providers). An
+// empty reason returns ""; an unrecognized non-empty reason is passed through
+// unchanged so newer Anthropic values still reach the caller.
 func mapStopReason(reason anthropic.StopReason) string {
 	switch reason {
 	case anthropic.StopReasonEndTurn, anthropic.StopReasonStopSequence, anthropic.StopReasonPauseTurn:
@@ -272,7 +256,11 @@ func mapStopReason(reason anthropic.StopReason) string {
 	case anthropic.StopReasonRefusal:
 		return "content_filter"
 	default:
-		return ""
+		// Pass through stop reasons we don't explicitly map (e.g. a newer
+		// value like model_context_window_exceeded) so they still reach the
+		// caller instead of being reported as no finish reason, matching the
+		// Python client. An empty reason maps to "".
+		return string(reason)
 	}
 }
 
@@ -304,17 +292,6 @@ func toUsageDetails(usage anthropic.Usage) message.UsageDetails {
 		details.AdditionalCounts["web_search_requests"] = usage.ServerToolUse.WebSearchRequests
 	}
 	return details
-}
-
-func toUsageDetailsDelta(usage anthropic.MessageDeltaUsage) message.UsageDetails {
-	return toUsageDetails(anthropic.Usage{
-		InputTokens:              usage.InputTokens,
-		OutputTokens:             usage.OutputTokens,
-		CacheCreationInputTokens: usage.CacheCreationInputTokens,
-		CacheReadInputTokens:     usage.CacheReadInputTokens,
-		OutputTokensDetails:      usage.OutputTokensDetails,
-		ServerToolUse:            usage.ServerToolUse,
-	})
 }
 
 func (a *client) buildBlock(index int, v any, contents message.Contents, functions map[int]*message.FunctionCallContent) message.Contents {
@@ -670,7 +647,7 @@ func (a *client) buildMessageParams(messages []*message.Message, opts []agent.Op
 			})
 			continue
 		}
-		if ft, ok := tl.(tool.FuncTool); ok {
+		if ft, ok := tl.(tool.SchemaTool); ok {
 			name, description := ft.Name(), ft.Description()
 			var properties any
 			var required []string
