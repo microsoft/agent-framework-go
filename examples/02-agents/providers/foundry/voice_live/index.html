@@ -1,0 +1,184 @@
+<!doctype html>
+<!-- Copyright (c) Microsoft. All rights reserved. -->
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MAF + Foundry Voice Live</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 42rem; margin: 3rem auto; padding: 0 1rem; }
+  button { font: inherit; padding: .5rem 1rem; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+<h1>MAF + Foundry Voice Live</h1>
+<p>Connect, allow microphone access, and ask "Where is order DEMO-1001?"
+  You can interrupt the assistant by speaking. Headphones are recommended.</p>
+<button id="start">Connect</button>
+<button id="stop" disabled>Disconnect</button>
+<audio id="audio" autoplay></audio>
+<p id="status" role="status">Disconnected</p>
+<pre id="log" role="log"></pre>
+<script type="module">
+const start = document.querySelector("#start");
+const stop = document.querySelector("#stop");
+const audio = document.querySelector("#audio");
+const status = document.querySelector("#status");
+const log = document.querySelector("#log");
+
+start.onclick = async () => {
+  const controller = new AbortController();
+  const pc = new RTCPeerConnection();
+  let microphone, control;
+  start.disabled = true;
+  stop.disabled = false;
+  status.textContent = "Connecting...";
+  log.textContent = "";
+
+  function disconnect() {
+    controller.abort();
+    pc.close();
+    control?.close(1000);
+    microphone?.getTracks().forEach(track => track.stop());
+    audio.srcObject = null;
+    start.disabled = false;
+    stop.disabled = true;
+  }
+  function fail(error) {
+    if (controller.signal.aborted) return;
+    disconnect();
+    status.textContent = error.message;
+  }
+  stop.onclick = () => {
+    disconnect();
+    status.textContent = "Disconnected";
+  };
+  pc.onconnectionstatechange = () => {
+    if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+      fail(new Error("WebRTC connection closed or failed"));
+    }
+  };
+  pc.ontrack = event => {
+    if (controller.signal.aborted) return;
+    audio.srcObject = event.streams[0];
+    audio.play().catch(fail);
+  };
+  async function post(path, body, contentType) {
+    const response = await fetch(path, {
+      method: "POST", body, headers: {"Content-Type": contentType},
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    if (!response.ok) throw new Error(text);
+    return text;
+  }
+
+  const events = pc.createDataChannel("voice-live-events");
+  const send = event => control.send(JSON.stringify(event));
+  let responding = false, interrupted = false;
+  let awaitingCommit = false, runningTools = false, replyNeeded = false;
+  function respond() {
+    if (!controller.signal.aborted && replyNeeded && !responding && !awaitingCommit && !runningTools) {
+      responding = true;
+      interrupted = false;
+      replyNeeded = false;
+      send({type: "response.create"});
+    }
+  }
+  events.onopen = () => {
+    if (!controller.signal.aborted) status.textContent = "Listening. Speak to begin.";
+  };
+  events.onclose = () => fail(new Error("Voice Live connection closed"));
+  events.onerror = event => fail(event.error ?? new Error("Voice Live data channel failed"));
+  events.onmessage = async message => {
+    if (controller.signal.aborted) return;
+    try {
+      const event = JSON.parse(message.data);
+      switch (event.type) {
+        case "rtc.call.sdp.created":
+          await pc.setRemoteDescription({type: "answer", sdp: event.sdp_answer});
+          break;
+        case "error":
+        case "rtc.call.error":
+          if (event.error.code === "response_cancel_not_active" &&
+              event.error.event_id?.startsWith("interrupt-")) {
+            console.debug(event.error.message);
+            break;
+          }
+          throw new Error(event.error.message);
+        case "warning":
+          log.textContent += `Voice Live: ${event.warning.message}\n`;
+          break;
+        case "input_audio_buffer.speech_started":
+          awaitingCommit = true;
+          if (responding) interrupted = true;
+          break;
+        case "conversation.item.created":
+          // Wait until the user's audio is in the conversation.
+          if (event.item.type === "message" && event.item.role === "user") {
+            awaitingCommit = false;
+            replyNeeded = true;
+          }
+          break;
+        case "response.created":
+          // Speech can start before an in-flight response.create reaches Voice Live.
+          if (interrupted || awaitingCommit) {
+            send({type: "response.cancel", response_id: event.response.id,
+                  event_id: `interrupt-${event.response.id}`});
+            send({type: "output_audio_buffer.clear"});
+          }
+          break;
+        case "response.done":
+          responding = false;
+          if (event.response.status === "cancelled") break;
+          if (event.response.status !== "completed") {
+            throw new Error(event.response.status_details?.error?.message ??
+                            `Voice Live response ${event.response.status}`);
+          }
+          const calls = event.response.output.filter(item => item.type === "function_call");
+          runningTools = calls.length > 0;
+          for (const call of calls) {
+            log.textContent += "Calling MAF...\n";
+            const output = await post("/tool", call.arguments, "application/json");
+            if (controller.signal.aborted) return;
+            log.textContent += `MAF: ${JSON.parse(output)}\n`;
+            send({type: "conversation.item.create",
+                  item: {type: "function_call_output", call_id: call.call_id, output}});
+          }
+          runningTools = false;
+          if (calls.length) replyNeeded = true;
+          break;
+      }
+      respond();
+    } catch (error) {
+      fail(error);
+    }
+  };
+
+  try {
+    microphone = await navigator.mediaDevices.getUserMedia({audio: true});
+    if (controller.signal.aborted) {
+      microphone.getTracks().forEach(track => track.stop());
+      return;
+    }
+    pc.addTrack(microphone.getAudioTracks()[0], microphone);
+    await pc.setLocalDescription(await pc.createOffer());
+    controller.signal.throwIfAborted();
+    await new Promise((resolve, reject) => {
+      const check = () => { if (pc.iceGatheringState === "complete") resolve(); };
+      pc.addEventListener("icegatheringstatechange", check, {signal: controller.signal});
+      controller.signal.addEventListener("abort", () => reject(controller.signal.reason), {once: true});
+      check();
+    });
+    controller.signal.throwIfAborted();
+    control = new WebSocket(location.origin.replace(/^http/, "ws") + "/session");
+    control.onopen = () => {
+      if (!controller.signal.aborted) control.send(pc.localDescription.sdp);
+    };
+    control.onmessage = events.onmessage;
+    control.onclose = () => fail(new Error("Voice Live control connection closed"));
+    control.onerror = () => fail(new Error("Voice Live control connection failed"));
+  } catch (error) {
+    fail(error);
+  }
+};
+</script>
+</html>
