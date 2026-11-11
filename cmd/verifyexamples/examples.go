@@ -540,6 +540,12 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_providers_foundry_voice_live",
+		ProjectPath:                  "examples/02-agents/providers/foundry/voice_live",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT", "FOUNDRY_MODEL"},
+		SkipReason:                   "Starts an interactive browser voice server that does not exit.",
+	},
+	{
 		Name:                         "02_agents_providers_openai_step01_running",
 		ProjectPath:                  "examples/02-agents/providers/openai/step01_running",
 		RequiredEnvironmentVariables: []string{"OPENAI_API_KEY"},

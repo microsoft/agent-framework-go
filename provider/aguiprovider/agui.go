@@ -229,14 +229,14 @@ func getOrCreateThreadID(session *agent.Session) (string, error) {
 func toAGUITools(tools iter.Seq[tool.Tool]) []aguiTypes.Tool {
 	out := []aguiTypes.Tool{}
 	for t := range tools {
-		funcTool, ok := t.(tool.FuncTool)
+		schemaTool, ok := t.(tool.SchemaTool)
 		if !ok {
 			continue
 		}
 		out = append(out, aguiTypes.Tool{
-			Name:        funcTool.Name(),
-			Description: funcTool.Description(),
-			Parameters:  funcTool.Schema(),
+			Name:        schemaTool.Name(),
+			Description: schemaTool.Description(),
+			Parameters:  schemaTool.Schema(),
 		})
 	}
 	return out

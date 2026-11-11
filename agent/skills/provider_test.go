@@ -24,6 +24,7 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/microsoft/agent-framework-go/agent"
 	"github.com/microsoft/agent-framework-go/agent/harness/toolapproval"
+	"github.com/microsoft/agent-framework-go/agent/harness/toolautocall"
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
@@ -172,6 +173,459 @@ func providerFromFileSource(source *fsskills.Source, opts *skills.ContextProvide
 	resolved := *opts
 	resolved.Sources = []skills.Source{source}
 	return skills.NewContextProvider(resolved)
+}
+
+func TestProvider_DynamicResources(t *testing.T) {
+	resolveFailure := errors.New("resource lookup failed")
+	readFailure := errors.New("resource read failed")
+	for _, test := range []struct {
+		name        string
+		static      bool
+		resource    *skills.Resource
+		resolveErr  error
+		want        string
+		wantErr     error
+		wantLookups int
+	}{
+		{name: "dynamic", resource: &skills.Resource{Name: "reference", Read: func(context.Context) (any, error) { return "dynamic", nil }}, want: "dynamic", wantLookups: 1},
+		{name: "static takes precedence", static: true, resolveErr: resolveFailure, want: "static"},
+		{name: "missing", want: "Error: Resource 'reference' not found in skill 'dynamic-skill'.", wantLookups: 1},
+		{name: "lookup failure", resolveErr: resolveFailure, wantErr: resolveFailure, wantLookups: 1},
+		{name: "read failure", resource: &skills.Resource{Name: "reference", Read: func(context.Context) (any, error) { return nil, readFailure }}, wantErr: readFailure, wantLookups: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lookups := 0
+			skill := &skills.Skill{
+				Frontmatter: skills.Frontmatter{Name: "dynamic-skill", Description: "Dynamic resources"},
+				GetResource: func(ctx context.Context, name string) (*skills.Resource, error) {
+					lookups++
+					if name != "reference" {
+						t.Fatalf("GetResource() name = %q", name)
+					}
+					return test.resource, test.resolveErr
+				},
+			}
+			if test.static {
+				skill.Resources = []skills.Resource{{Name: "reference", Read: func(context.Context) (any, error) { return "static", nil }}}
+			}
+			provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+			_, tools := captureProviderContext(t, provider)
+			read := findTool(t, tools, "read_skill_resource")
+			assertToolApprovalRequired(t, read, true)
+			for range 2 {
+				got, err := read.Call(t.Context(), `{"skillName":"dynamic-skill","resourceName":"reference"}`)
+				if !errors.Is(err, test.wantErr) {
+					t.Fatalf("Call() error = %v, want %v", err, test.wantErr)
+				}
+				if test.wantErr == nil && got != test.want {
+					t.Fatalf("Call() = %#v, want %q", got, test.want)
+				}
+			}
+			if lookups != 2*test.wantLookups {
+				t.Fatalf("GetResource() called %d times, want %d", lookups, 2*test.wantLookups)
+			}
+			if len(skill.Resources) != 0 && !test.static {
+				t.Fatal("dynamic lookup mutated the source skill's resource slice")
+			}
+		})
+	}
+}
+
+func TestProvider_DynamicResources_InvalidNamesDoNotResolve(t *testing.T) {
+	skill := &skills.Skill{
+		Frontmatter: skills.Frontmatter{Name: "dynamic-skill", Description: "Dynamic resources"},
+		GetResource: func(context.Context, string) (*skills.Resource, error) {
+			t.Fatal("invalid lookup reached GetResource")
+			return nil, nil
+		},
+	}
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+	_, tools := captureProviderContext(t, provider)
+	read := findTool(t, tools, "read_skill_resource")
+	for _, args := range []string{
+		`{"skillName":"","resourceName":"reference"}`,
+		`{"skillName":"missing","resourceName":"reference"}`,
+		`{"skillName":"dynamic-skill","resourceName":" "}`,
+	} {
+		got, err := read.Call(t.Context(), args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		text, ok := got.(string)
+		if !ok || !strings.HasPrefix(text, "Error: ") {
+			t.Fatalf("Call(%s) = %#v, want lookup error", args, got)
+		}
+	}
+}
+
+func TestProvider_DynamicScripts(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		static      bool
+		missing     bool
+		want        string
+		wantLookups int
+	}{
+		{name: "dynamic", want: "dynamic", wantLookups: 1},
+		{name: "static takes precedence", static: true, want: "static"},
+		{name: "missing", missing: true, want: "Error: Script 'run' not found in skill 'dynamic-skill'.", wantLookups: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			lookups := 0
+			script := &skills.Script{
+				Name: "run",
+				Run:  func(context.Context, *skills.Skill, json.RawMessage) (any, error) { return "dynamic", nil },
+			}
+			skill := &skills.Skill{
+				Frontmatter: skills.Frontmatter{Name: "dynamic-skill", Description: "Dynamic scripts"},
+				GetScript: func(_ context.Context, name string) (*skills.Script, error) {
+					lookups++
+					if name != "run" {
+						t.Fatalf("GetScript() name = %q", name)
+					}
+					if test.static {
+						t.Fatal("static script reached the lazy resolver")
+					}
+					if test.missing {
+						return nil, nil
+					}
+					return script, nil
+				},
+			}
+			if test.static {
+				skill.Scripts = []skills.Script{
+					{Name: "run", Run: func(context.Context, *skills.Skill, json.RawMessage) (any, error) { return "first", nil }},
+					{Name: "run", Run: func(context.Context, *skills.Skill, json.RawMessage) (any, error) { return "static", nil }},
+				}
+			}
+			provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+			_, tools := captureProviderContext(t, provider)
+			run := findTool(t, tools, runSkillScriptToolName)
+			assertToolApprovalRequired(t, run, true)
+			for range 2 {
+				got, err := run.Call(t.Context(), `{"skillName":"dynamic-skill","scriptName":"run"}`)
+				if err != nil || got != test.want {
+					t.Fatalf("Call() = %#v, %v, want %q", got, err, test.want)
+				}
+			}
+			if lookups != 2*test.wantLookups {
+				t.Fatalf("GetScript() called %d times, want %d", lookups, 2*test.wantLookups)
+			}
+			if !test.static && skill.Scripts != nil {
+				t.Fatalf("dynamic lookup mutated Scripts: %#v", skill.Scripts)
+			}
+			if script.Name != "run" || script.Run == nil {
+				t.Fatal("execution mutated the source-owned descriptor")
+			}
+		})
+	}
+}
+
+func TestProvider_DynamicScripts_ErrorPolicy(t *testing.T) {
+	lookupFailure := errors.New("script lookup failed")
+	runFailure := errors.New("script execution failed")
+	missingRunner := errors.New("script runner is nil")
+	for _, detailed := range []bool{false, true} {
+		for _, test := range []struct {
+			name       string
+			lookupErr  error
+			descriptor bool
+			nilRunner  bool
+			wantErr    error
+		}{
+			{name: "lookup", lookupErr: lookupFailure, wantErr: lookupFailure},
+			{name: "lookup cancellation", lookupErr: context.Canceled, wantErr: context.Canceled},
+			{name: "lookup with descriptor", lookupErr: lookupFailure, descriptor: true, wantErr: lookupFailure},
+			{name: "execution", descriptor: true, wantErr: runFailure},
+			{name: "nil runner", descriptor: true, nilRunner: true, wantErr: missingRunner},
+		} {
+			t.Run(fmt.Sprintf("%s/detailed=%t", test.name, detailed), func(t *testing.T) {
+				executions := 0
+				script := &skills.Script{
+					Name: "run",
+					Run: func(context.Context, *skills.Skill, json.RawMessage) (any, error) {
+						executions++
+						return nil, runFailure
+					},
+				}
+				if test.nilRunner {
+					script.Run = nil
+				}
+				skill := &skills.Skill{
+					Frontmatter: skills.Frontmatter{Name: "dynamic-skill", Description: "Dynamic scripts"},
+					GetScript: func(context.Context, string) (*skills.Script, error) {
+						if test.descriptor {
+							return script, test.lookupErr
+						}
+						return nil, test.lookupErr
+					},
+				}
+				provider := skills.NewContextProvider(skills.ContextProviderOptions{
+					Skills: []*skills.Skill{skill}, IncludeDetailedErrors: detailed,
+				})
+				_, tools := captureProviderContext(t, provider)
+				got, err := findTool(t, tools, runSkillScriptToolName).Call(t.Context(),
+					`{"skillName":"dynamic-skill","scriptName":"run"}`)
+				if detailed {
+					want := "Error: Failed to execute script 'run' from skill 'dynamic-skill'. Exception: " + test.wantErr.Error()
+					if err != nil || got != want {
+						t.Fatalf("Call() = %#v, %v, want %q", got, err, want)
+					}
+				} else if test.nilRunner {
+					if err == nil || err.Error() != test.wantErr.Error() || got != nil {
+						t.Fatalf("Call() = %#v, %v, want nil-runner failure", got, err)
+					}
+				} else if !errors.Is(err, test.wantErr) || got != nil {
+					t.Fatalf("Call() = %#v, %v, want original error %v", got, err, test.wantErr)
+				}
+				if test.lookupErr != nil && executions != 0 {
+					t.Fatal("a failed lookup executed its returned descriptor")
+				}
+			})
+		}
+	}
+}
+
+func TestProvider_DynamicScripts_InvalidNamesDoNotResolve(t *testing.T) {
+	skill := &skills.Skill{
+		Frontmatter: skills.Frontmatter{Name: "dynamic-skill", Description: "Dynamic scripts"},
+		GetScript: func(context.Context, string) (*skills.Script, error) {
+			t.Fatal("invalid lookup reached GetScript")
+			return nil, nil
+		},
+	}
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+	_, tools := captureProviderContext(t, provider)
+	run := findTool(t, tools, runSkillScriptToolName)
+	for _, args := range []string{
+		`{"skillName":"","scriptName":"run"}`,
+		`{"skillName":"missing","scriptName":"run"}`,
+		`{"skillName":"dynamic-skill","scriptName":" "}`,
+	} {
+		got, err := run.Call(t.Context(), args)
+		text, ok := got.(string)
+		if err != nil || !ok || !strings.HasPrefix(text, "Error: ") {
+			t.Fatalf("Call(%s) = %#v, %v, want lookup error", args, got, err)
+		}
+	}
+}
+
+func TestProvider_DynamicScripts_ForwardsContextAndJSON(t *testing.T) {
+	type callKey struct{}
+	for _, test := range []struct {
+		name      string
+		arguments string
+		want      string
+	}{
+		{name: "omitted"},
+		{name: "null", arguments: `,"arguments":null`, want: "null"},
+		{name: "object", arguments: `,"arguments":{"large":9007199254740993}`, want: `{"large":9007199254740993}`},
+		{name: "array", arguments: `,"arguments":["hello",5]`, want: `["hello",5]`},
+		{name: "string", arguments: `,"arguments":"hello"`, want: `"hello"`},
+		{name: "number", arguments: `,"arguments":42`, want: "42"},
+		{name: "boolean", arguments: `,"arguments":true`, want: "true"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var skill *skills.Skill
+			skill = &skills.Skill{
+				Frontmatter: skills.Frontmatter{Name: "dynamic-skill", Description: "Dynamic scripts"},
+				GetScript: func(ctx context.Context, name string) (*skills.Script, error) {
+					if ctx.Value(callKey{}) != test.name || name != "run" {
+						t.Fatal("lookup did not receive the current call context and exact name")
+					}
+					return &skills.Script{
+						Name: name,
+						Run: func(ctx context.Context, owner *skills.Skill, args json.RawMessage) (any, error) {
+							if ctx.Value(callKey{}) != test.name || owner != skill {
+								t.Fatal("execution did not receive the current call context and owning skill")
+							}
+							return string(args), nil
+						},
+					}, nil
+				},
+			}
+			provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+			_, tools := captureProviderContext(t, provider)
+			ctx := context.WithValue(t.Context(), callKey{}, test.name)
+			got, err := findTool(t, tools, runSkillScriptToolName).Call(ctx,
+				`{"skillName":"dynamic-skill","scriptName":"run"`+test.arguments+`}`)
+			if err != nil || got != test.want {
+				t.Fatalf("Call() = %#v, %v, want %q", got, err, test.want)
+			}
+		})
+	}
+}
+
+func TestProvider_DynamicScripts_PreservesLookupCancellation(t *testing.T) {
+	for _, inFlight := range []bool{false, true} {
+		t.Run(fmt.Sprint("in flight=", inFlight), func(t *testing.T) {
+			started := make(chan struct{})
+			skill := &skills.Skill{
+				Frontmatter: skills.Frontmatter{Name: "dynamic-skill", Description: "Dynamic scripts"},
+				GetScript: func(ctx context.Context, _ string) (*skills.Script, error) {
+					close(started)
+					if inFlight {
+						<-ctx.Done()
+					}
+					return nil, ctx.Err()
+				},
+			}
+			provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+			_, tools := captureProviderContext(t, provider)
+			run := findTool(t, tools, runSkillScriptToolName)
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			if !inFlight {
+				cancel()
+			}
+			done := make(chan error, 1)
+			go func() {
+				got, err := run.Call(ctx, `{"skillName":"dynamic-skill","scriptName":"run"}`)
+				if got != nil {
+					err = fmt.Errorf("Call() returned %#v instead of a cancellation", got)
+				}
+				done <- err
+			}()
+			if inFlight {
+				<-started
+				cancel()
+			}
+			if err := <-done; !errors.Is(err, context.Canceled) {
+				t.Fatalf("Call() error = %v, want original cancellation", err)
+			}
+		})
+	}
+}
+
+func TestProvider_DynamicScripts_ConcurrentCallsResolveIndependently(t *testing.T) {
+	type callKey struct{}
+	var lookups atomic.Int32
+	skill := &skills.Skill{
+		Frontmatter: skills.Frontmatter{Name: "dynamic-skill", Description: "Dynamic scripts"},
+		GetScript: func(ctx context.Context, name string) (*skills.Script, error) {
+			lookups.Add(1)
+			id := ctx.Value(callKey{})
+			return &skills.Script{
+				Name: name,
+				Run: func(ctx context.Context, _ *skills.Skill, _ json.RawMessage) (any, error) {
+					if ctx.Value(callKey{}) != id {
+						return nil, errors.New("script received another call's context")
+					}
+					return id, nil
+				},
+			}, nil
+		},
+	}
+	provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+	_, tools := captureProviderContext(t, provider)
+	run := findTool(t, tools, runSkillScriptToolName)
+	done := make(chan error, 20)
+	for i := range 20 {
+		go func() {
+			ctx := context.WithValue(t.Context(), callKey{}, i)
+			got, err := run.Call(ctx, `{"skillName":"dynamic-skill","scriptName":"run"}`)
+			if err == nil && got != i {
+				err = fmt.Errorf("Call() = %v, want %d", got, i)
+			}
+			done <- err
+		}()
+	}
+	for range 20 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := lookups.Load(); got != 20 {
+		t.Fatalf("lookup count = %d, want one per call", got)
+	}
+	if skill.Scripts != nil {
+		t.Fatal("concurrent lookup mutated the source-owned script collection")
+	}
+}
+
+func TestProvider_DynamicScripts_ApprovalPrecedesResolution(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		for _, approved := range []bool{false, true} {
+			t.Run(fmt.Sprintf("stream=%t/approved=%t", stream, approved), func(t *testing.T) {
+				lookups, executions := 0, 0
+				skill := &skills.Skill{
+					Frontmatter: skills.Frontmatter{Name: "dynamic-skill", Description: "Dynamic scripts"},
+					GetScript: func(context.Context, string) (*skills.Script, error) {
+						lookups++
+						return &skills.Script{
+							Name: "run",
+							Run: func(context.Context, *skills.Skill, json.RawMessage) (any, error) {
+								executions++
+								return "executed", nil
+							},
+						}, nil
+					},
+				}
+				provider := skills.NewContextProvider(skills.ContextProviderOptions{Skills: []*skills.Skill{skill}})
+				_, tools := captureProviderContext(t, provider)
+				options := []agent.Option{
+					agent.WithSession(agenttest.CreateSession()),
+					agent.WithTool(findTool(t, tools, runSkillScriptToolName)),
+					agent.Stream(stream),
+				}
+				next := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return func(yield func(*agent.ResponseUpdate, error) bool) {
+						yield(&agent.ResponseUpdate{
+							Role: message.RoleAssistant,
+							Contents: message.Contents{&message.FunctionCallContent{
+								CallID: "dynamic-call", Name: runSkillScriptToolName,
+								Arguments: `{"skillName":"dynamic-skill","scriptName":"run"}`,
+							}},
+						}, nil)
+					}
+				}
+				middleware := toolautocall.New(toolautocall.Config{})
+				response, err := agent.ResponseStream(middleware.Run(next, t.Context(), []*message.Message{message.NewText("run")}, options...)).Collect()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var request *message.ToolApprovalRequestContent
+				for value := range response.Contents() {
+					if approval, ok := value.(*message.ToolApprovalRequestContent); ok {
+						request = approval
+					}
+				}
+				if request == nil || lookups != 0 || executions != 0 {
+					t.Fatalf("pending call: request=%v, lookups=%d, executions=%d", request, lookups, executions)
+				}
+				done := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return func(yield func(*agent.ResponseUpdate, error) bool) {
+						yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.NewText("done").Contents}, nil)
+					}
+				}
+				response, err = agent.ResponseStream(middleware.Run(done, t.Context(),
+					[]*message.Message{message.New(request.CreateResponse(approved, ""))}, options...,
+				)).Collect()
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantCalls := 0
+				if approved {
+					wantCalls = 1
+				}
+				if lookups != wantCalls || executions != wantCalls {
+					t.Fatalf("approval=%t: lookups=%d, executions=%d, want %d", approved, lookups, executions, wantCalls)
+				}
+				foundResult := false
+				for value := range response.Contents() {
+					if result, ok := value.(*message.FunctionResultContent); ok && result.CallID == "dynamic-call" {
+						foundResult = true
+						if approved && result.Result != "executed" {
+							t.Fatalf("approved result = %#v", result.Result)
+						}
+					}
+				}
+				if !foundResult {
+					t.Fatal("resumed approval did not emit a paired script result")
+				}
+			})
+		}
+	}
 }
 
 func TestProvider_FromFileSourceWithOptions_DiscoversSkills(t *testing.T) {
