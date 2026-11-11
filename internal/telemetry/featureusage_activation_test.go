@@ -194,6 +194,10 @@ func TestShellFeatureUsageRun(t *testing.T) {
 	assertFeatureUsagePort(t, "shell", 69)
 }
 
+func TestMCPTaskFeatureUsageActivation(t *testing.T) {
+	assertFeatureUsagePort(t, "mcp-task", 14)
+}
+
 func TestCoreAgentFeatureUsageNonStreaming(t *testing.T) {
 	assertFeatureUsagePort(t, "agent", 0)
 }
@@ -806,7 +810,7 @@ func runFeatureActivation(t *testing.T, name string) {
 			return agentworkflow.NewRoundRobinGroupChatManager(agents, agentworkflow.RoundRobinGroupChatOptions{})
 		}, activationAgent())
 		activate = func() error { _, err := builder.Build(); return err }
-	case "mcp":
+	case "mcp", "mcp-task":
 		server := mcp.NewServer(&mcp.Implementation{Name: "feature-test", Version: "1"}, nil)
 		mcptool.AddTool(server, functool.MustNew(functool.Config{Name: "echo"}, func(context.Context, struct{}) (string, error) {
 			return "ok", nil
@@ -831,7 +835,12 @@ func runFeatureActivation(t *testing.T, name string) {
 					t.Error(err)
 				}
 			}()
-			tools, err := mcptool.ListTools(ctx, session)
+			var tools []tool.Tool
+			if name == "mcp-task" {
+				tools, err = mcptool.ListToolsWithTasks(ctx, session, mcptool.TaskOptions{})
+			} else {
+				tools, err = mcptool.ListTools(ctx, session)
+			}
 			if err != nil {
 				return err
 			}
@@ -842,7 +851,9 @@ func runFeatureActivation(t *testing.T, name string) {
 			if !ok {
 				t.Fatalf("discovered tool is %T", tools[0])
 			}
-			_, err = fn.Call(ctx, "{}")
+			if name != "mcp-task" {
+				_, err = fn.Call(ctx, "{}")
+			}
 			return err
 		}
 	case "shell":

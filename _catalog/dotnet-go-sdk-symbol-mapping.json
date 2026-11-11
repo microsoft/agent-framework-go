@@ -13,7 +13,7 @@
   "dotnet": {
     "schema_version": 1,
     "identity_format": "ecma335-v1",
-    "sha256": "5f130dd58d97c339b8b5fa48d11c5c7249f239148f509f1a7521b507553bb065",
+    "sha256": "4c3dadc4f02bf7c2905dcfbf27395d94721548b0920807bbbf555129d29f5ab5",
     "selection": {
       "namespaces": [],
       "include_protected": false
@@ -109,6 +109,13 @@
         "informational_version": "1.22.0-preview+0c9944cc9f577d51277ac7c55dbc388b60a577af",
         "target_framework": ".NETCoreApp,Version=v10.0",
         "sha256": "6455f21f80b974b9380cde82c18167121befa53a2c9741786c1fa1b4717c33b4",
+        "reference_assembly": false
+      },
+      "Microsoft.Agents.AI.Mcp": {
+        "version": "1.26.0.0",
+        "informational_version": "1.26.0-alpha+abaf33a3c8eb98ac1bccc6f2ea317218143d0d06",
+        "target_framework": ".NETCoreApp,Version=v10.0",
+        "sha256": "983cc0967d0ef063721616979ea257c1617b8adac9d08c33ffe43c6b4a3ef925",
         "reference_assembly": false
       },
       "Microsoft.Agents.AI.Workflows": {
@@ -353,6 +360,18 @@
   "go_only": {
     "provider/a2aprovider.WithConfiguration": {
       "note": "Go exposes the incoming A2A send configuration as an agent option for hosted-agent runs. The pinned .NET handler forwards request configuration internally through run options rather than a public declaration."
+    },
+    "tool/mcptool.TaskInputHandler": {
+      "note": "Go exposes a callback type for resolving task input requests. The .NET task wrapper instead dispatches through the MCP client's registered handlers using ResolveInputRequestsAsync."
+    },
+    "tool/mcptool.TaskOptions.ElicitationCapabilities": {
+      "note": "Go declares the task input handler's elicitation modes per tool listing and snapshots them for task-aware requests. The .NET task wrapper uses elicitation capabilities configured on the MCP client."
+    },
+    "tool/mcptool.TaskOptions.InputHandler": {
+      "note": "Go configures task input dispatch per tool listing, paired with explicit capability declarations. The .NET task wrapper reuses the MCP client's registered handlers."
+    },
+    "tool/mcptool.TaskOptions.SamplingCapabilities": {
+      "note": "Go declares the task input handler's sampling features per tool listing and snapshots them for task-aware requests. The .NET task wrapper uses sampling capabilities configured on the MCP client."
     }
   },
   "tests": {
@@ -3745,45 +3764,45 @@
     },
     "Microsoft.Agents.AI.Mcp.UnitTests": {
       "Microsoft.Agents.AI.Mcp.UnitTests.FeatureUsageActivationTests": {
-        "ListAgentToolsWithTasksAsync_ActivatesCoreMcpAsync": null,
+        "ListAgentToolsWithTasksAsync_ActivatesCoreMcpAsync": "internal/telemetry.TestMCPTaskFeatureUsageActivation",
         "McpSkillsSource_ActivatesOnlyWhenLoadedAsync": "agent/skills/mcpskills.TestSource_FeatureUsage"
       },
       "Microsoft.Agents.AI.Mcp.UnitTests.ListAgentToolsWithTasksTests": {
-        "ListAgentToolsWithTasks_InvalidPollingIntervalRange_ThrowsAsync": null,
+        "ListAgentToolsWithTasks_InvalidPollingIntervalRange_ThrowsAsync": "tool/mcptool.TestListToolsWithTasks_InvalidPollingIntervalRangeThrows",
         "ListAgentToolsWithTasks_NonPositiveCancellationTimeout_ThrowsAsync": null,
         "ListAgentToolsWithTasks_NonPositiveInputRequestLimit_ThrowsAsync": null,
         "ListAgentToolsWithTasks_NonPositiveStuckPollLimit_ThrowsAsync": null,
-        "ListAgentToolsWithTasks_PollingMaximumAboveRuntimeLimit_ThrowsAsync": null,
-        "ListAgentToolsWithTasks_PollingRangeWithoutWholeMillisecond_ThrowsAsync": null,
-        "ListAgentToolsWithTasks_SubMillisecondCancellationTimeout_ThrowsAsync": null,
-        "ListAgentToolsWithTasks_ThrowsOnNullClientAsync": null,
-        "ListAgentToolsWithTasks_WrapsAllToolsAsync": null
+        "ListAgentToolsWithTasks_PollingMaximumAboveRuntimeLimit_ThrowsAsync": "tool/mcptool.TestListToolsWithTasks_PollingMaximumAboveRuntimeLimitThrows",
+        "ListAgentToolsWithTasks_PollingRangeWithoutWholeMillisecond_ThrowsAsync": "tool/mcptool.TestListToolsWithTasks_PollingRangeWithoutWholeMillisecondThrows",
+        "ListAgentToolsWithTasks_SubMillisecondCancellationTimeout_ThrowsAsync": "tool/mcptool.TestListToolsWithTasks_SubMillisecondCancellationTimeoutThrows",
+        "ListAgentToolsWithTasks_ThrowsOnNullClientAsync": "tool/mcptool.TestListToolsWithTasks_ThrowsOnNullClient",
+        "ListAgentToolsWithTasks_WrapsAllToolsAsync": "tool/mcptool.TestListToolsWithTasks_WrapsAllTools"
       },
       "Microsoft.Agents.AI.Mcp.UnitTests.McpTaskOptionsTests": {
-        "Defaults_AreSane": null
+        "Defaults_AreSane": "tool/mcptool.TestTaskOptions_DefaultsAreSane"
       },
       "Microsoft.Agents.AI.Mcp.UnitTests.TaskAwareMcpClientAIFunctionTests": {
-        "InvokeAsync_ConfiguredPollingRange_AcceptsShortServerIntervalAsync": null,
-        "InvokeAsync_FailedTask_ThrowsMcpExceptionAsync": null,
-        "InvokeAsync_ForwardsNullPrimitiveAndComplexArgumentsAsync": null,
-        "InvokeAsync_GetTaskFailure_CancelsRemoteTaskAndPreservesProtocolExceptionAsync": null,
-        "InvokeAsync_InputHandlerFailure_CancelsRemoteTaskAsync": null,
-        "InvokeAsync_InputRequestLimitExceeded_CancelsBeforeDispatchAsync": null,
-        "InvokeAsync_InputRequestsAtLimit_CompletesAsync": null,
-        "InvokeAsync_InputRequired_DispatchesClientHandlerAsync": null,
-        "InvokeAsync_InvalidInitialPollInterval_CancelsRemoteTaskAsync": null,
-        "InvokeAsync_InvalidUpdatedPollInterval_CancelsRemoteTaskAsync": null,
-        "InvokeAsync_LocalCancellation_CancelsRemoteTaskAsync": null,
-        "InvokeAsync_LocalCancellation_DoesNotCancelRemoteTaskWhenDisabledAsync": null,
-        "InvokeAsync_MalformedCompletedResult_DoesNotCancelTerminalTaskAsync": null,
-        "InvokeAsync_MissingPollInterval_ConstrainsFallbackToConfiguredRangeAsync": null,
-        "InvokeAsync_ServerCancelledTask_ThrowsOperationCanceledAsync": null,
-        "InvokeAsync_ServerWithoutTasks_ReturnsInlineResultAsync": null,
-        "InvokeAsync_SimpleResult_MatchesMcpClientToolProjectionAsync": null,
-        "InvokeAsync_StuckInputRequired_CancelsRemoteTaskAsync": null,
-        "InvokeAsync_TaskBackedTool_ReturnsResultAsync": null,
-        "InvokeAsync_ToolError_PreservesCallToolResultEnvelopeAsync": null,
-        "InvokeAsync_UpdateTaskFailure_CancelsRemoteTaskAndPreservesProtocolExceptionAsync": null
+        "InvokeAsync_ConfiguredPollingRange_AcceptsShortServerIntervalAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_ConfiguredPollingRangeAcceptsShortServerInterval",
+        "InvokeAsync_FailedTask_ThrowsMcpExceptionAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_FailedTaskThrowsMcpException",
+        "InvokeAsync_ForwardsNullPrimitiveAndComplexArgumentsAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_ForwardsNullPrimitiveAndComplexArguments",
+        "InvokeAsync_GetTaskFailure_CancelsRemoteTaskAndPreservesProtocolExceptionAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_GetTaskFailureCancelsRemoteTaskAndPreservesError",
+        "InvokeAsync_InputHandlerFailure_CancelsRemoteTaskAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_InputHandlerFailureCancelsRemoteTask",
+        "InvokeAsync_InputRequestLimitExceeded_CancelsBeforeDispatchAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_InputRequestLimitExceededCancelsBeforeDispatch",
+        "InvokeAsync_InputRequestsAtLimit_CompletesAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_InputRequestsAtLimitCompletes",
+        "InvokeAsync_InputRequired_DispatchesClientHandlerAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_InputRequiredDispatchesClientHandler",
+        "InvokeAsync_InvalidInitialPollInterval_CancelsRemoteTaskAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_InvalidInitialPollIntervalCancelsRemoteTask",
+        "InvokeAsync_InvalidUpdatedPollInterval_CancelsRemoteTaskAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_InvalidUpdatedPollIntervalCancelsRemoteTask",
+        "InvokeAsync_LocalCancellation_CancelsRemoteTaskAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_LocalCancellationCancelsRemoteTask",
+        "InvokeAsync_LocalCancellation_DoesNotCancelRemoteTaskWhenDisabledAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_LocalCancellationDoesNotCancelRemoteTaskWhenDisabled",
+        "InvokeAsync_MalformedCompletedResult_DoesNotCancelTerminalTaskAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_MalformedCompletedResultDoesNotCancelTerminalTask",
+        "InvokeAsync_MissingPollInterval_ConstrainsFallbackToConfiguredRangeAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_MissingPollIntervalConstrainsFallbackToConfiguredRange",
+        "InvokeAsync_ServerCancelledTask_ThrowsOperationCanceledAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_ServerCancelledTaskThrowsOperationCanceled",
+        "InvokeAsync_ServerWithoutTasks_ReturnsInlineResultAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_ServerWithoutTasksReturnsInlineResult",
+        "InvokeAsync_SimpleResult_MatchesMcpClientToolProjectionAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_SimpleResultMatchesMcpClientToolProjection",
+        "InvokeAsync_StuckInputRequired_CancelsRemoteTaskAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_StuckInputRequiredCancelsRemoteTask",
+        "InvokeAsync_TaskBackedTool_ReturnsResultAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_TaskBackedToolReturnsResult",
+        "InvokeAsync_ToolError_PreservesCallToolResultEnvelopeAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_ToolErrorPreservesCallToolResultEnvelope",
+        "InvokeAsync_UpdateTaskFailure_CancelsRemoteTaskAndPreservesProtocolExceptionAsync": "tool/mcptool.TestTaskAwareMcpClientAIFunction_InvokeAsync_UpdateTaskFailureCancelsRemoteTaskAndPreservesError"
       },
       "Microsoft.Agents.AI.Skills.Mcp.UnitTests.AgentMcpSkillsSourceArchiveTests": {
         "DetectFormat_TarSignals_ReturnUnknown": "agent/skills/mcpskills.TestArchiveFormat_TarSignalsAreUnsupported",
@@ -9781,6 +9800,67 @@
           }
         }
       },
+      "AgentMcpSkillsSourceOptions": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI.Mcp",
+        "mapping": {
+          "go": "mcpskills.Config{Session: session}",
+          "go_symbols": [
+            "agent/skills/mcpskills.Config"
+          ],
+          "status": "adapted",
+          "note": "Go configuration also carries the required MCP session; the source is constructed separately."
+        },
+        "properties": {
+          "ArchiveMaxFileCount": {
+            "go_symbols": [
+              "agent/skills/mcpskills.Config.ArchiveMaxFileCount"
+            ],
+            "status": "mapped"
+          },
+          "ArchiveMaxSizeBytes": {
+            "go_symbols": [
+              "agent/skills/mcpskills.Config.ArchiveMaxSizeBytes"
+            ],
+            "status": "mapped"
+          },
+          "ArchiveMaxUncompressedSizeBytes": {
+            "go_symbols": [
+              "agent/skills/mcpskills.Config.ArchiveMaxUncompressedSizeBytes"
+            ],
+            "status": "mapped"
+          },
+          "ArchiveResourceExtensions": {
+            "go_symbols": [
+              "agent/skills/mcpskills.Config.ArchiveResourceExtensions"
+            ],
+            "status": "mapped"
+          },
+          "ArchiveResourceSearchDepth": {
+            "go_symbols": [
+              "agent/skills/mcpskills.Config.ArchiveResourceSearchDepth"
+            ],
+            "status": "mapped"
+          },
+          "ArchiveSkillsDirectory": {
+            "go_symbols": [
+              "agent/skills/mcpskills.Config.ArchiveDirectory"
+            ],
+            "status": "adapted",
+            "note": "An empty Go directory uses a private temporary location removed by Source.Close; .NET defaults to a persistent current-directory/GUID path."
+          }
+        },
+        "constructors": {
+          "AgentMcpSkillsSourceOptions()": {
+            "go": "mcpskills.Config{}",
+            "go_symbols": [
+              "agent/skills/mcpskills.Config"
+            ],
+            "status": "adapted",
+            "note": "A zero-value Config replaces the mutable options constructor; set Session before calling NewSource."
+          }
+        }
+      },
       "AgentModeProvider": {
         "area": "agents",
         "assembly": "Microsoft.Agents.AI",
@@ -11436,6 +11516,38 @@
             ],
             "status": "adapted",
             "note": "Accumulate configuration in a zero-value options struct, then call NewContextProvider. Caching and name deduplication are enabled by default; all three skill tools require approval by default."
+          }
+        }
+      },
+      "AgentSkillsProviderBuilderMcpExtensions": {
+        "area": "agents",
+        "assembly": "Microsoft.Agents.AI.Mcp",
+        "mapping": {
+          "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{mcpskills.NewSource(mcpskills.Config{Session: session})}})",
+          "go_symbols": [
+            "agent/skills.NewContextProvider",
+            "agent/skills.ContextProviderOptions",
+            "agent/skills.ContextProviderOptions.Sources",
+            "agent/skills.Source",
+            "agent/skills/mcpskills.Config",
+            "agent/skills/mcpskills.NewSource"
+          ],
+          "status": "adapted",
+          "note": "Go replaces the static extension container with source construction and registration in ContextProviderOptions."
+        },
+        "methods": {
+          "UseMcpSkills(AgentSkillsProviderBuilder, McpClient, AgentMcpSkillsSourceOptions) -> AgentSkillsProviderBuilder": {
+            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{mcpskills.NewSource(mcpskills.Config{Session: session})}})",
+            "go_symbols": [
+              "agent/skills.NewContextProvider",
+              "agent/skills.ContextProviderOptions",
+              "agent/skills.ContextProviderOptions.Sources",
+              "agent/skills.Source",
+              "agent/skills/mcpskills.Config",
+              "agent/skills/mcpskills.NewSource"
+            ],
+            "status": "adapted",
+            "note": "The Go composition explicitly constructs and registers the source; caching is enabled by default on the provider."
           }
         }
       },
@@ -18210,6 +18322,96 @@
             ],
             "status": "partial",
             "note": "AG-UI JSON/SSE adapter becomes an http.Handler with routing left to the caller. The Go handler does not load/save sessions by thread ID or integrate a session-store isolation key, unlike the C# endpoint."
+          }
+        }
+      }
+    },
+    "Microsoft.Agents.AI.Mcp": {
+      "McpClientTaskExtensions": {
+        "area": "unclassified",
+        "assembly": "Microsoft.Agents.AI.Mcp",
+        "mapping": {
+          "go": "mcptool.ListToolsWithTasks(ctx, session, mcptool.TaskOptions{})",
+          "go_symbols": [
+            "tool/mcptool.ListToolsWithTasks"
+          ],
+          "status": "adapted",
+          "note": "The static extension container is represented by a package-level function."
+        },
+        "methods": {
+          "ListAgentToolsWithTasksAsync(McpClient, McpTaskOptions, CancellationToken) -> Task<IReadOnlyList<AIFunction>>": {
+            "go": "mcptool.ListToolsWithTasks(ctx, session, mcptool.TaskOptions{})",
+            "go_symbols": [
+              "tool/mcptool.ListToolsWithTasks"
+            ],
+            "status": "adapted",
+            "note": "Go takes an explicit context and a session created by mcptool.Connect, which registers task RPC methods."
+          }
+        }
+      },
+      "McpTaskOptions": {
+        "area": "unclassified",
+        "assembly": "Microsoft.Agents.AI.Mcp",
+        "mapping": {
+          "go": "mcptool.TaskOptions{}",
+          "go_symbols": [
+            "tool/mcptool.TaskOptions"
+          ],
+          "status": "adapted",
+          "note": "Go uses a value struct whose zero-valued fields select defaults when passed to ListToolsWithTasks."
+        },
+        "properties": {
+          "CancelRemoteTaskOnLocalCancellation": {
+            "go_symbols": [
+              "tool/mcptool.TaskOptions.DisableCancelRemoteTaskOnLocalCancellation"
+            ],
+            "status": "adapted",
+            "note": "The opt-out boolean is inverted so its zero value preserves .NET's default remote-cancellation behavior."
+          },
+          "MaxConsecutiveStuckPolls": {
+            "go_symbols": [
+              "tool/mcptool.TaskOptions.MaxConsecutiveStuckPolls"
+            ],
+            "status": "adapted",
+            "note": "Go treats zero as the default limit of 60; .NET requires a positive value."
+          },
+          "MaxTotalInputRequests": {
+            "go_symbols": [
+              "tool/mcptool.TaskOptions.MaxTotalInputRequests"
+            ],
+            "status": "adapted",
+            "note": "Go treats zero as the default limit of 100; .NET requires a positive value."
+          },
+          "MaximumPollingInterval": {
+            "go_symbols": [
+              "tool/mcptool.TaskOptions.MaximumPollingInterval"
+            ],
+            "status": "adapted",
+            "note": "Zero selects Go's maximum whole-millisecond time.Duration; .NET caps the interval at 4,294,967,294 milliseconds."
+          },
+          "MinimumPollingInterval": {
+            "go_symbols": [
+              "tool/mcptool.TaskOptions.MinimumPollingInterval"
+            ],
+            "status": "adapted",
+            "note": "Go treats zero as the default interval of 10 milliseconds; .NET requires a positive value."
+          },
+          "RemoteCancellationTimeout": {
+            "go_symbols": [
+              "tool/mcptool.TaskOptions.RemoteCancellationTimeout"
+            ],
+            "status": "adapted",
+            "note": "Zero selects 5 seconds in Go; its maximum whole-millisecond duration exceeds the .NET runtime delay cap."
+          }
+        },
+        "constructors": {
+          "McpTaskOptions()": {
+            "go": "mcptool.TaskOptions{}",
+            "go_symbols": [
+              "tool/mcptool.TaskOptions"
+            ],
+            "status": "adapted",
+            "note": "A zero-value struct literal replaces the mutable options constructor and selects lifecycle defaults when used."
           }
         }
       }

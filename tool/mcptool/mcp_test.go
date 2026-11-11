@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1452,6 +1454,73 @@ func connectInMemory(t *testing.T, ctx context.Context, server *mcp.Server) *mcp
 	}
 	t.Cleanup(func() { _ = clientSession.Close() })
 	return clientSession
+}
+
+func TestConnectLegacyStreamableHTTP(t *testing.T) {
+	const version = "2025-11-25"
+	server := mcp.NewServer(&mcp.Implementation{Name: "legacy", Version: "1.0.0"}, &mcp.ServerOptions{
+		SupportedProtocolVersions: []string{version},
+	})
+	mcptool.AddTool(server, stubFuncTool{
+		name:   "echo",
+		schema: map[string]any{"type": "object"},
+		call: func(context.Context, string) (any, error) {
+			return "legacy result", nil
+		},
+	})
+	handler := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+	getVersion := make(chan string, 1)
+	httpServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			select {
+			case getVersion <- r.Header.Get("Mcp-Protocol-Version"):
+			default:
+			}
+		}
+		handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(httpServer.Close)
+	session, err := mcptool.Connect(t.Context(), &mcp.StreamableClientTransport{Endpoint: httpServer.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := session.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if got := session.InitializeResult().ProtocolVersion; got != version {
+		t.Fatalf("protocol version = %q, want %q", got, version)
+	}
+	select {
+	case got := <-getVersion:
+		if got != version {
+			t.Fatalf("standalone SSE protocol header = %q, want %q", got, version)
+		}
+	default:
+		t.Fatal("Connect did not establish the standalone server-event stream")
+	}
+	tools, err := mcptool.ListTools(t.Context(), session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := findFuncTool(t, tools, "echo").Call(t.Context(), `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := mustTextResult(t, result); got != "legacy result" {
+		t.Fatalf("result = %q, want legacy result", got)
+	}
+	foundSession := false
+	for serverSession := range server.Sessions() {
+		foundSession = true
+		if err := serverSession.Ping(t.Context(), nil); err != nil {
+			t.Fatalf("server-initiated ping: %v", err)
+		}
+	}
+	if !foundSession {
+		t.Fatal("server has no active session")
+	}
 }
 
 // A tool exposed via AddTool may return a typed-nil message.Content (e.g. a

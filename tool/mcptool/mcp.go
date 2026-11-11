@@ -74,19 +74,51 @@ func AddTool(src *mcp.Server, tl tool.FuncTool) {
 	})
 }
 
-// Connect dials an MCP server over the given transport and returns a client session.
+// Connect dials an MCP server over the given transport and returns a client
+// session with task-extension support.
 func Connect(ctx context.Context, transport mcp.Transport) (*mcp.ClientSession, error) {
 	telemetry.MarkUsed(telemetry.FeatureMCP)
 	client := mcp.NewClient(&mcp.Implementation{
 		Name:    "agent-framework-go-mcp-client",
 		Version: "1.0.0",
 	}, nil)
-	return client.Connect(ctx, transport, nil)
+	if err := registerTaskMethods(client); err != nil {
+		return nil, err
+	}
+	return client.Connect(ctx, newTaskTransport(transport), nil)
 }
 
 // ListTools enumerates all pages of the remote server's tools and wraps each as a tool.Tool.
 func ListTools(ctx context.Context, session *mcp.ClientSession) ([]tool.Tool, error) {
+	if session == nil {
+		return nil, fmt.Errorf("MCP client session is nil")
+	}
 	telemetry.MarkUsed(telemetry.FeatureMCP)
+	return listTools(ctx, session, nil)
+}
+
+// ListToolsWithTasks lists the server's tools as task-aware functions. Calls to
+// tools that return an MCP task are polled until completion; servers that do
+// not create tasks can still return results inline. The session must be
+// created with [Connect] so the task RPC methods are registered. Zero-valued
+// options use the defaults documented on [TaskOptions].
+// The options and their capability declarations are copied before listing;
+// subsequent changes do not affect the returned tools. Task input handling
+// requires both a handler and explicit input capabilities in options.
+//
+// See https://modelcontextprotocol.io/extensions/tasks/overview.
+func ListToolsWithTasks(ctx context.Context, session *mcp.ClientSession, options TaskOptions) ([]tool.Tool, error) {
+	if session == nil {
+		return nil, fmt.Errorf("MCP client session is nil")
+	}
+	if err := options.validate(); err != nil {
+		return nil, err
+	}
+	telemetry.MarkUsed(telemetry.FeatureMCP)
+	return listTools(ctx, session, &options)
+}
+
+func listTools(ctx context.Context, session *mcp.ClientSession, taskOptions *TaskOptions) ([]tool.Tool, error) {
 	// Create agent.Tool instances for each MCP tool.
 	//
 	// Normalization (normalizeMCPName) can map distinct remote names onto the
@@ -102,7 +134,7 @@ func ListTools(ctx context.Context, session *mcp.ClientSession) ([]tool.Tool, er
 		if err != nil {
 			return nil, fmt.Errorf("failed to list tools: %w", err)
 		}
-		agentTool := newMCPToolWrapper(session, mcpTool)
+		agentTool := newMCPToolWrapper(session, mcpTool, taskOptions)
 		if existing, ok := seen[agentTool.name]; ok {
 			return nil, fmt.Errorf("normalized MCP tool name collision: remote tools %q and %q both normalize to %q", existing, mcpTool.Name, agentTool.name)
 		}
@@ -558,14 +590,16 @@ type mcpWrapper struct {
 	// name is the normalized tool name surfaced to providers and used as the
 	// autocall map key. tool.Name retains the original remote name used when
 	// invoking the MCP server.
-	name string
+	name        string
+	taskOptions *TaskOptions
 }
 
-func newMCPToolWrapper(session *mcp.ClientSession, tool *mcp.Tool) *mcpWrapper {
+func newMCPToolWrapper(session *mcp.ClientSession, tool *mcp.Tool, taskOptions *TaskOptions) *mcpWrapper {
 	return &mcpWrapper{
-		session: session,
-		tool:    tool,
-		name:    normalizeMCPName(tool.Name),
+		session:     session,
+		tool:        tool,
+		name:        normalizeMCPName(tool.Name),
+		taskOptions: taskOptions,
 	}
 }
 
@@ -608,12 +642,29 @@ func (w *mcpWrapper) ReturnSchema() any {
 // Call implements the Func-like calling pattern for MCP tools.
 func (w *mcpWrapper) Call(ctx context.Context, args string) (any, error) {
 	telemetry.MarkUsed(telemetry.FeatureMCP)
-	result, err := w.session.CallTool(ctx, &mcp.CallToolParams{
+	params := &mcp.CallToolParams{
 		Name:      w.tool.Name,
 		Arguments: json.RawMessage(args),
-	})
+	}
+	if w.taskOptions != nil {
+		params.Meta = w.taskOptions.requestMeta()
+	}
+	result, err := w.session.CallTool(ctx, params)
 	if err != nil {
 		return nil, fmt.Errorf("MCP tool call failed: %w", err)
+	}
+
+	if w.taskOptions != nil {
+		task, isTask, taskErr := taskFromMeta(result.Meta)
+		if taskErr != nil {
+			return nil, taskErr
+		}
+		if isTask {
+			result, err = pollTaskToCompletion(ctx, w.session, task, *w.taskOptions)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	contents := mcpCallToolResultToAgentContent(result)
