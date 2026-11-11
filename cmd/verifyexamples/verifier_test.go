@@ -37,7 +37,8 @@ func TestVerifyRequiresAIAgentForSemanticChecks(t *testing.T) {
 }
 
 func TestTruncateDoesNotSplitRunes(t *testing.T) {
-	// "°" is two bytes (0xC2 0xB0); truncating at byte 1 must not split it.
+	// "°" occupies bytes 1-2 (0xC2 0xB0); a 2-byte cut lands mid-rune, so the
+	// truncation must back off to the boundary after "a".
 	got := truncate("a°cdef", 2)
 	if !utf8.ValidString(got) {
 		t.Fatalf("truncate produced invalid UTF-8: %q", got)

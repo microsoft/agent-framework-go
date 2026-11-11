@@ -141,7 +141,8 @@ func truncate(text string, maxLength int) string {
 		return text
 	}
 	// Back off to a rune boundary so truncation never splits a multi-byte rune
-	// (examples print °C, emoji, etc.) and emits invalid UTF-8 into logs/CSV.
+	// (examples print °C, emoji, etc.), which would emit invalid UTF-8 into
+	// logs/CSV.
 	end := maxLength
 	for end > 0 && !utf8.RuneStart(text[end]) {
 		end--
