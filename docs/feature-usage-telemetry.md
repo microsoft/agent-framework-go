@@ -103,6 +103,7 @@ These switches do not configure OpenTelemetry or change service telemetry.
 | 14 | `core.mcp` | MCP connection, discovery, or tool invocation |
 | 15 | `core.file_skills_source` | File-backed skill discovery |
 | 16 | `core.in_memory_skills_source` | In-memory skill retrieval |
+| 19 | `core.mcp_skills_source` | MCP-backed skill discovery |
 | 32 | `orchestration.sequential` | Successful sequential workflow build |
 | 33 | `orchestration.concurrent` | Successful concurrent workflow build |
 | 34 | `orchestration.group_chat` | Successful group-chat workflow build |

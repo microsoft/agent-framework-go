@@ -540,6 +540,12 @@ var agentsExamples = []ExampleDefinition{
 		},
 	},
 	{
+		Name:                         "02_agents_providers_foundry_voice_live",
+		ProjectPath:                  "examples/02-agents/providers/foundry/voice_live",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT", "FOUNDRY_MODEL"},
+		SkipReason:                   "Starts an interactive browser voice server that does not exit.",
+	},
+	{
 		Name:                         "02_agents_providers_openai_step01_running",
 		ProjectPath:                  "examples/02-agents/providers/openai/step01_running",
 		RequiredEnvironmentVariables: []string{"OPENAI_API_KEY"},
@@ -809,6 +815,17 @@ var agentsExamples = []ExampleDefinition{
 		ExpectedOutputDescription: []string{
 			"The output should show the agent using mixed file-based and code-defined skills.",
 			"The response should include useful unit conversion results.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
+		Name:                         "02_agents_observability_step01_agent_tracing",
+		ProjectPath:                  "examples/02-agents/observability/step01_agent_tracing",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		ExpectedOutputDescription: []string{
+			"The output should contain a joke about a pirate from the agent.",
+			"The output should also contain an OpenTelemetry span printed to stdout for the agent run (an invoke_agent gen_ai span).",
 			"The output should not contain error messages or stack traces.",
 		},
 	},

@@ -93,6 +93,29 @@ Mapping output includes the original baseline and a flat `mappings` array with s
 
 The `go-only` view returns the original baseline and a paged `go_only` object. It supports `-file` and `-symbol`, not .NET filters. `mappings -summary` reports the separate, unfiltered `go_only_symbols` count when nonzero; these symbols do not enter .NET mapping/status/gap counts or the mapped `go_symbols` count.
 
+### Weekly audit coverage
+
+The [weekly maintenance workflow](../.github/workflows/symbolmap-maintenance-weekly.md) keeps one agent session, but validates completion independently before allowing a PR or `noop`. Its pre-agent step builds a trusted validator and freezes an `audit-plan.json` with a flat `items` list for:
+
+- Every original assessed leaf, including all statuses and out-of-inventory-scope assessments.
+- Every API-report entry and exported member of added types/packages.
+- Every recent commit/file diff, including behavioral changes without API changes.
+- Existing Go-only assessments, counted separately from .NET leaves.
+
+`go -C _catalog run ./cmd/symbolmap audit-plan -changes <complete-changes.json> -patch <recent-go-changes.patch>` creates the plan without changing the catalog. Each item has an `id`, `kind`, and `subject`. It requires the complete unfiltered `changes` report and the matching indexed Go checkout. It preserves original API/assessment indexes, pinned source revisions, parent API IDs for additional members, and complete patch line ranges. The agent groups items into bounded review batches following the workflow prompt; batch IDs, grouping, and size limits are not part of the coverage format.
+
+Reviewers return one receipt per item as a JSON stream, conventionally one object per line:
+
+```json
+{"id":"assessment:0","subject":"<exact plan subject>","outcome":"no-change","reason":"<source-backed conclusion>","evidence":[{"repository":"<plan Go repository>","commit":"<plan head>","path":"agent/agent.go","line":1},{"repository":"<item .NET repository>","commit":"<item .NET commit>","path":"dotnet/src/Example.cs","line":1}]}
+```
+
+Every required identity must have exactly one receipt with its exact subject, a substantive outcome, nonempty reason, and source references. Receipt order does not matter. Outcomes are `no-change`, `correction`, `addition`, `go-specific`, or `scope-limitation`; unresolved work is not complete. New assessments require an `implementing_commit` from the plan's recent commits and never increase original-leaf coverage.
+
+`go -C _catalog run ./cmd/symbolmap audit-check -plan <audit-plan.json> -plan-sha256 <pre-agent SHA-256> -results <audit-results.jsonl>` rejects modified plans, missing or duplicate items, unknown identities, unresolved outcomes, and missing or incorrectly pinned evidence. Successful output reports per-kind item counts. The workflow records the plan and validator hashes in step outputs before agent execution and runs that same validator afterward; it does not execute agent-modified tooling for the publication gate. Error-only safe outputs remain available on failure.
+
+This is a structural coverage/provenance gate, not proof that references were actually inspected, that conclusions are correct, or that reviewer invocations occurred. It cannot force an early-exiting agent to continue. Behavioral review and reconciliation remain required.
+
 ## Extract the .NET Declaration Inventory
 
 The [mapping catalog](../_catalog/dotnet-go-sdk-symbol-mapping.json) contains public declarations from the three core MAF 1.22.0 packages and the explicitly selected `Microsoft.Agents.AI.CosmosNoSql` `1.22.0-preview.260918.1` package at `net8.0`, plus 6,750 test method declarations from 45 upstream test assemblies. API package metadata retain version provenance under `dotnet`; test assemblies record source commits, target frameworks, and hashes under `dotnet.tests`. Public APIs from every provider integration or external dependency are not included; existing out-of-scope assessments are retained without extracted declaration metadata.

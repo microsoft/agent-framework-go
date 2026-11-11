@@ -862,8 +862,8 @@ func TestProvider_ToolSchemas(t *testing.T) {
 					t.Errorf("%q must be optional", name)
 				}
 			}
-			if schema.Properties["Arg0"] != nil {
-				t.Fatal("tool arguments must not have an Arg0 wrapper")
+			if schema.Properties["value"] != nil {
+				t.Fatal("tool arguments must not have a generic value wrapper")
 			}
 		})
 	}
@@ -1536,7 +1536,7 @@ func TestProvider_ConcurrentToolsWithTodo(t *testing.T) {
 			const count = 20
 			for i := range count {
 				builder.
-					AddFunctionCall(fmt.Sprintf("todo-%d", i), "todos_add", fmt.Sprintf(`{"Arg0":[{"title":"Task %d"}]}`, i)).
+					AddFunctionCall(fmt.Sprintf("todo-%d", i), "todos_add", fmt.Sprintf(`{"todos":[{"title":"Task %d"}]}`, i)).
 					AddFunctionCall(fmt.Sprintf("memory-%d", i), WriteToolName, fmt.Sprintf(`{"fileName":"note%02d.md","content":"remembered"}`, i))
 			}
 			builder.NewTurn(func(_ context.Context, messages []*message.Message, _ ...agent.Option) {

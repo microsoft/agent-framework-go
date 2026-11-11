@@ -118,6 +118,33 @@ The harness does not override those settings. Approval-required tools can still
 pause a run when `DisableToolApproval` is true; the application must return the
 approval response through the same session. The runnable example shows that flow.
 
+Function-call updates are buffered until the provider response completes so
+server-completed calls can be excluded from local execution and approval handling.
+The default approval bypass preserves serial call order when combining hidden
+safe calls with explicitly approved calls. Rejected calls produce a result telling
+the model that the approver denied the operation and it must not be retried.
+
+With approval bypassing enabled, safe calls returned alongside approval-required
+calls are retained in the session for the next run. Stored automatic approvals
+are rechecked against the current tools: a removed, declaration-only, or newly
+approval-required tool is rejected rather than invoked. The stored batch is
+consumed only after the provider loop completes successfully; errors,
+cancellation, and early stream termination preserve it for retry.
+
+Providers can advertise [`tool.SchemaTool`](../tool/tool.go) implementations
+without a [`tool.FuncTool`](../tool/tool.go) implementation. Automatic invocation
+returns these declaration-only calls to the application for execution.
+
+Function-invocation middleware can set
+[`FunctionInvocationContext.Terminate`](../agent/middleware.go) to return tool
+results without another provider request, including after approval. Remaining
+serial calls receive not-invoked results; concurrent calls finish normally.
+Invocation errors still follow the configured error handling. Providers that
+manage tool execution themselves return a tool error if termination is requested.
+When continuing service-managed history after termination, include the returned
+tool-result messages in the later run: they have not yet been sent to the service.
+Graceful termination counts as successful completion for retained approvals.
+
 ### Partial work and cancellation
 
 Tool invocation does not roll back side effects. When request cancellation stops
@@ -125,6 +152,8 @@ a tool batch, automatic invocation yields the actual outcomes of completed calls
 and failure results for calls that were not invoked, before returning the terminal
 error. The original tool error is preserved when a tool fails during cancellation.
 The same reporting applies when the consecutive-error limit stops a batch.
+Retrying a retained automatic approval may repeat side effects of a tool that
+completed before the failure; tool execution is not exactly-once.
 
 With [`agent.Stream(false)`](../agent/options.go), updates remain buffered until
 the tool loop stops, including when it fails. To inspect or checkpoint partial
