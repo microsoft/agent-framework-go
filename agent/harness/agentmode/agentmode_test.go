@@ -919,8 +919,8 @@ func TestModeSetTool_UsesNamedModeArgument(t *testing.T) {
 		if !strings.Contains(string(schema), `"mode"`) {
 			t.Errorf("mode_set schema does not contain a named mode argument: %s", schema)
 		}
-		if strings.Contains(string(schema), `"Arg0"`) {
-			t.Errorf("mode_set schema contains the generic Arg0 argument: %s", schema)
+		if strings.Contains(string(schema), `"value"`) {
+			t.Errorf("mode_set schema contains the generic value argument: %s", schema)
 		}
 		if _, err := modeSet.Call(context.Background(), `{"mode":"execute"}`); err != nil {
 			t.Fatalf("mode_set rejected its named mode argument: %v", err)

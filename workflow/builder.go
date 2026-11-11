@@ -99,6 +99,20 @@ func (wb *Builder) WithIntermediateOutputFrom(bindings ...ExecutorBinding) *Buil
 	return wb.withOutputFrom([]OutputTag{OutputTagIntermediate}, bindings...)
 }
 
+// WithTaggedOutputFrom registers bindings as workflow output sources carrying
+// tag. Tags accumulate across repeated calls for the same binding. An empty tag
+// records an error.
+func (wb *Builder) WithTaggedOutputFrom(tag OutputTag, bindings ...ExecutorBinding) *Builder {
+	if wb.err != nil {
+		return wb
+	}
+	if tag == "" {
+		wb.err = fmt.Errorf("output tag value cannot be empty")
+		return wb
+	}
+	return wb.withOutputFrom([]OutputTag{tag}, bindings...)
+}
+
 func (wb *Builder) withOutputFrom(tags []OutputTag, bindings ...ExecutorBinding) *Builder {
 	if wb.err != nil {
 		return wb

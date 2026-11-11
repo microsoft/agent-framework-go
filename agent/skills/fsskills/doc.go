@@ -6,4 +6,8 @@
 //
 // Loaded skill content preserves SKILL.md and appends resource and script
 // catalogs. Catalog entries omit descriptions that are empty or only whitespace.
+//
+// Frontmatter uses lightweight scalar parsing rather than a full YAML decoder.
+// Empty quoted values retain their quote tokens. Metadata values are read as
+// single-line scalars; block-scalar indicators in metadata remain literal.
 package fsskills

@@ -1765,7 +1765,6 @@ func persistentPlatformConfig(t *testing.T) shelltool.LocalConfig {
 	t.Helper()
 	cfg, _ := statelessPlatformConfig(t)
 	cfg.Mode = shelltool.ModePersistent
-	cfg.Timeout = new(20 * time.Second)
 	return cfg
 }
 
