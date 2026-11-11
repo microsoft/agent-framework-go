@@ -572,6 +572,292 @@ func TestFunctionInvoking_InvocationIdentity(t *testing.T) {
 	}
 }
 
+func TestFunctionInvoking_Termination(t *testing.T) {
+	toolFailure := errors.New("tool failed")
+	for _, tc := range []struct {
+		name            string
+		source          string
+		concurrent      bool
+		shortCircuit    bool
+		replaceContext  bool
+		replaceFunction bool
+		after           bool
+		panic           bool
+		toolErr         error
+		maxErrors       *int
+	}{
+		{name: "success"},
+		{name: "concurrent success", concurrent: true},
+		{name: "short circuit", shortCircuit: true},
+		{name: "substituted context", replaceContext: true},
+		{name: "replaced function", replaceFunction: true},
+		{name: "error", toolErr: toolFailure},
+		{name: "after error", after: true, toolErr: toolFailure},
+		{name: "after copied context", after: true, replaceContext: true},
+		{name: "panic", panic: true, toolErr: toolFailure},
+		{name: "fail on first error", toolErr: toolFailure, maxErrors: new(0)},
+		{name: "concurrent error", concurrent: true, toolErr: toolFailure},
+		{name: "concurrent fail on first error", concurrent: true, toolErr: toolFailure, maxErrors: new(0)},
+		{name: "additional tool", source: "additional"},
+		{name: "concurrent additional tool", source: "additional", concurrent: true},
+		{name: "context-provider tool", source: "context provider"},
+	} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", tc.name, stream), func(t *testing.T) {
+				phase := 0
+				var firstCalls, secondCalls atomic.Int32
+				secondStarted := make(chan struct{})
+				first := functool.MustNew(functool.Config{Name: "First"}, func(context.Context, struct{}) (string, error) {
+					firstCalls.Add(1)
+					if phase == 0 {
+						if tc.concurrent {
+							<-secondStarted
+						}
+						if tc.panic {
+							panic(tc.toolErr)
+						}
+						return "first result", tc.toolErr
+					}
+					return "later result", nil
+				})
+				second := functool.MustNew(functool.Config{Name: "Second"}, func(context.Context, struct{}) (string, error) {
+					secondCalls.Add(1)
+					close(secondStarted)
+					return "second result", nil
+				})
+				replacement := functool.MustNew(functool.Config{Name: "Replacement"}, func(context.Context, struct{}) (string, error) {
+					return "replacement result", nil
+				})
+				middleware := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+					if invocation.Terminate {
+						t.Error("termination leaked from another invocation")
+					}
+					if phase != 0 || invocation.Function.Name() != "First" {
+						return next(ctx, invocation)
+					}
+					if tc.replaceContext {
+						cloned := *invocation
+						invocation = &cloned
+					}
+					if tc.replaceFunction {
+						invocation.Function = replacement
+					}
+					if !tc.after {
+						invocation.Terminate = true
+					}
+					if tc.shortCircuit {
+						return "cached result", nil
+					}
+					result, err := next(ctx, invocation)
+					if tc.after {
+						invocation.Terminate = true
+					}
+					return result, err
+				})
+				providerCalls := 0
+				provider := func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+					return func(yield func(*agent.ResponseUpdate, error) bool) {
+						providerCalls++
+						switch providerCalls {
+						case 1:
+							yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+								&message.FunctionCallContent{CallID: "first", Name: "First", Arguments: `{}`},
+								&message.FunctionCallContent{CallID: "second", Name: "Second", Arguments: `{}`},
+							}}, nil)
+						case 2:
+							yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+								&message.FunctionCallContent{CallID: "later", Name: "First", Arguments: `{}`},
+							}}, nil)
+						default:
+							yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "done"}}}, nil)
+						}
+					}
+				}
+				autoCall := toolautocall.Config{
+					AllowConcurrentInvocations:         tc.concurrent,
+					MaximumConsecutiveErrorsPerRequest: tc.maxErrors,
+				}
+				cfg := agent.Config{Tools: []tool.Tool{first, second}, FunctionMiddlewares: []agent.FunctionInvocationMiddleware{middleware}}
+				switch tc.source {
+				case "additional":
+					autoCall.AdditionalTools = []tool.Tool{first}
+					cfg.Tools = []tool.Tool{second}
+				case "context provider":
+					cfg.Tools = []tool.Tool{second}
+					cfg.ContextProviders = []agent.ContextProvider{agent.NewContextProvider(agent.ContextProviderConfig{
+						SourceID: "tools",
+						Provide: func(context.Context, agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
+							return nil, []agent.Option{agent.WithTool(first)}, nil
+						},
+					})}
+				}
+				a := agent.New(agent.ProviderConfig{
+					Run: provider, Middlewares: []agent.Middleware{toolautocall.New(autoCall)},
+				}, cfg)
+				session := &agent.Session{}
+				var runErr error
+				var results []*message.FunctionResultContent
+				for update, err := range a.RunText(t.Context(), "start", agent.WithSession(session), agent.Stream(stream)) {
+					if update != nil {
+						for _, content := range update.Contents {
+							if result, ok := content.(*message.FunctionResultContent); ok {
+								results = append(results, result)
+							}
+						}
+					}
+					if err != nil {
+						runErr = err
+						break
+					}
+				}
+				if tc.maxErrors != nil {
+					if runErr != tc.toolErr {
+						t.Fatalf("run error = %v, want original error %v", runErr, tc.toolErr)
+					}
+				} else if runErr != nil {
+					t.Fatal(runErr)
+				}
+				wantFirstCalls := int32(1)
+				if tc.shortCircuit || tc.replaceFunction {
+					wantFirstCalls = 0
+				}
+				wantSecondCalls := int32(0)
+				if tc.concurrent {
+					wantSecondCalls = 1
+				}
+				if providerCalls != 1 || firstCalls.Load() != wantFirstCalls || secondCalls.Load() != wantSecondCalls {
+					t.Fatalf("provider calls=%d, first calls=%d, second calls=%d; want 1, %d, %d",
+						providerCalls, firstCalls.Load(), secondCalls.Load(), wantFirstCalls, wantSecondCalls)
+				}
+				if len(results) != 2 || results[0].CallID != "first" || results[1].CallID != "second" {
+					t.Fatalf("results = %+v, want one outcome per original call in order", results)
+				}
+				if !errors.Is(results[0].Error, tc.toolErr) {
+					t.Fatalf("first result error = %v, want %v", results[0].Error, tc.toolErr)
+				}
+				if tc.toolErr == nil {
+					wantResult := "first result"
+					if tc.shortCircuit {
+						wantResult = "cached result"
+					} else if tc.replaceFunction {
+						wantResult = "replacement result"
+					}
+					if results[0].Result != wantResult {
+						t.Fatalf("first result = %v, want %q", results[0].Result, wantResult)
+					}
+				}
+				if tc.concurrent {
+					if results[1].Result != "second result" || results[1].Error != nil {
+						t.Fatalf("concurrent sibling result = %+v", results[1])
+					}
+				} else if results[1].Result != "Error: Function was not invoked." || results[1].Error != runErr {
+					t.Fatalf("skipped sibling result = %+v, want not-invoked outcome and error %v", results[1], runErr)
+				}
+				phase = 1
+				response, err := a.RunText(t.Context(), "continue", agent.WithSession(session), agent.Stream(stream)).Collect()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if response.String() != "done" || providerCalls != 3 || firstCalls.Load() != wantFirstCalls+1 {
+					t.Fatalf("later run: response=%q, provider calls=%d, first calls=%d", response.String(), providerCalls, firstCalls.Load())
+				}
+			})
+		}
+	}
+}
+
+func TestFunctionInvoking_TerminationCanBeCleared(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			fn := functool.MustNew(functool.Config{Name: "Lookup"}, func(context.Context, struct{}) (string, error) {
+				return "found", nil
+			})
+			outer := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+				result, err := next(ctx, invocation)
+				invocation.Terminate = false
+				return result, err
+			})
+			inner := agent.FunctionInvocationMiddleware(func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+				invocation.Terminate = true
+				return next(ctx, invocation)
+			})
+			runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
+				AddFunctionCall("lookup", "Lookup", `{}`).
+				NewTurn().AddText("done").Build()}
+			a := agent.New(agent.ProviderConfig{
+				Run: runner.Run, Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{})},
+			}, agent.Config{Tools: []tool.Tool{fn}, FunctionMiddlewares: []agent.FunctionInvocationMiddleware{outer, inner}})
+			response, err := a.RunText(t.Context(), "lookup", agent.Stream(stream)).Collect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.String() != "done" {
+				t.Fatalf("outer middleware did not clear termination: %q", response.String())
+			}
+		})
+	}
+}
+
+func TestFunctionInvoking_NestedTerminationIsIsolated(t *testing.T) {
+	for _, managed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("providerManaged=%t", managed), func(t *testing.T) {
+			innerTool := functool.MustNew(functool.Config{Name: "Inner"}, func(context.Context, struct{}) (string, error) {
+				return "inner result", nil
+			})
+			innerProvider := agent.ProviderConfig{ManagesToolExecution: managed}
+			if !managed {
+				innerProvider.Middlewares = []agent.Middleware{toolautocall.New(toolautocall.Config{})}
+			}
+			innerProvider.Run = func(ctx context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				return func(yield func(*agent.ResponseUpdate, error) bool) {
+					if managed {
+						fn, _ := agent.GetOption(opts, agent.WithTool)
+						_, err := fn.(tool.FuncTool).Call(agent.WithFuncCallID(ctx, "inner"), `{}`)
+						if err != nil {
+							yield(nil, err)
+						}
+						return
+					}
+					yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+						&message.FunctionCallContent{CallID: "inner", Name: "Inner", Arguments: `{}`},
+					}}, nil)
+				}
+			}
+			inner := agent.New(innerProvider, agent.Config{
+				Tools: []tool.Tool{innerTool},
+				FunctionMiddlewares: []agent.FunctionInvocationMiddleware{func(next func(context.Context, *agent.FunctionInvocationContext) (any, error), ctx context.Context, invocation *agent.FunctionInvocationContext) (any, error) {
+					invocation.Terminate = true
+					return next(ctx, invocation)
+				}},
+			})
+			outerTool := functool.MustNew(functool.Config{Name: "Outer"}, func(ctx context.Context, _ struct{}) (string, error) {
+				_, err := inner.RunText(ctx, "inner").Collect()
+				if managed {
+					if err == nil || !strings.Contains(err.Error(), "graceful tool termination is not supported") {
+						t.Fatalf("provider-managed termination error = %v", err)
+					}
+				} else if err != nil {
+					return "", err
+				}
+				return "outer result", nil
+			})
+			runner := &agenttest.Runner{Responses: agenttest.NewResponseBuilder().
+				AddFunctionCall("outer", "Outer", `{}`).
+				NewTurn().AddText("done").Build()}
+			outer := agent.New(agent.ProviderConfig{
+				Run: runner.Run, Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{})},
+			}, agent.Config{Tools: []tool.Tool{outerTool}})
+			response, err := outer.RunText(t.Context(), "outer").Collect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if response.String() != "done" {
+				t.Fatalf("inner termination stopped outer run: %q", response.String())
+			}
+		})
+	}
+}
+
 func TestFunctionInvoking_DoesNotInvokeServerHandledFunctionCalls(t *testing.T) {
 	var toolInvoked atomic.Int32
 

@@ -5,6 +5,7 @@ package textsearch
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"runtime"
 	"slices"
@@ -70,8 +71,8 @@ type Config struct {
 
 	// ContextFormatter replaces the default formatting and ignores both prompts.
 	// Automatic searches do not call the formatter for an empty result list;
-	// on-demand searches do. Formatting errors are ignored during automatic
-	// searches, logged when Logger is configured, and returned from the on-demand tool.
+	// on-demand searches do. Formatting errors follow the search error policy in
+	// automatic mode and are returned from the on-demand tool.
 	ContextFormatter func([]Result) (string, error)
 
 	// RecentMessageMemoryLimit is the maximum number of individual messages
@@ -144,9 +145,10 @@ type Provider struct {
 // current request texts are joined with newlines, following any retained memory,
 // and passed to search. Non-empty results are formatted and appended as a
 // source-attributed user message. Search and formatting failures leave the input
-// unchanged, including cancellation and deadline errors returned by search.
-// Failures are logged only when Logger is configured. Message-filter and
-// session-state errors are returned.
+// unchanged, unless cancellation or a deadline error accompanies cancellation of
+// the invocation context. Those errors are returned. Other search failures are
+// logged only when Logger is configured. Message-filter and session-state errors
+// are returned.
 //
 // In on-demand mode, the provider adds a function tool accepting a userQuestion
 // string. The tool searches only that query, without recent-message memory, and
@@ -274,8 +276,7 @@ func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) 
 	query := sb.String()
 	results, err := p.searchFunc(ctx, query)
 	if err != nil {
-		p.logSearchFailure(ctx, err)
-		return nil, nil, nil
+		return nil, nil, p.handleSearchFailure(ctx, err)
 	}
 	if p.config.Logger != nil {
 		p.config.Logger.InfoContext(ctx, "text search completed", "count", len(results))
@@ -285,8 +286,7 @@ func (p *Provider) provide(ctx context.Context, invoking agent.InvokingContext) 
 	}
 	formatted, err := p.formatResults(results)
 	if err != nil {
-		p.logSearchFailure(ctx, err)
-		return nil, nil, nil
+		return nil, nil, p.handleSearchFailure(ctx, err)
 	}
 	p.logSearchResults(ctx, query, formatted)
 	return []*message.Message{message.NewText(formatted)}, nil, nil
@@ -395,10 +395,14 @@ func (p *Provider) formatResults(results []Result) (string, error) {
 	return sb.String(), nil
 }
 
-func (p *Provider) logSearchFailure(ctx context.Context, err error) {
+func (p *Provider) handleSearchFailure(ctx context.Context, err error) error {
+	if ctx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		return err
+	}
 	if logger := p.config.Logger; logger != nil {
 		logger.ErrorContext(ctx, "text search failed", "error", err)
 	}
+	return nil
 }
 
 func (p *Provider) logSearchResults(ctx context.Context, query, formatted string) {

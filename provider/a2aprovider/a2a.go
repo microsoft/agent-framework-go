@@ -232,6 +232,16 @@ func (a *a2aProvider) subscribeToTaskWithFallback(ctx context.Context, taskID a2
 	}
 }
 
+// agentRole maps an A2A message role onto the framework role, preserving a
+// user-role response instead of assuming assistant. Mirrors the hosting-side
+// toAgentMessage mapping and the Python client.
+func agentRole(role a2a.MessageRole) message.Role {
+	if role == a2a.MessageRoleAgent {
+		return message.RoleAssistant
+	}
+	return message.RoleUser
+}
+
 func sendMsg(session *agent.Session, contextID string, seq iter.Seq2[a2a.Event, error], stream bool, yield func(*agent.ResponseUpdate, error) bool) {
 	var taskID string
 	var taskState a2a.TaskState
@@ -281,15 +291,17 @@ func sendMsg(session *agent.Session, contextID string, seq iter.Seq2[a2a.Event, 
 			}
 		case *a2a.TaskStatusUpdateEvent:
 			var messageID string
+			role := message.RoleAssistant
 			if e.Status.Message != nil {
 				messageID = e.Status.Message.ID
+				role = agentRole(e.Status.Message.Role)
 			}
 			contents, err := statusContents(&e.Status)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
-			update := newResponseUpdate(e, e.Metadata, string(e.TaskID), messageID, message.RoleAssistant, contents)
+			update := newResponseUpdate(e, e.Metadata, string(e.TaskID), messageID, role, contents)
 			update.FinishReason = finishReasonForTaskState(e.Status.State)
 			if !forward(update, nil) {
 				return
@@ -310,7 +322,7 @@ func sendMsg(session *agent.Session, contextID string, seq iter.Seq2[a2a.Event, 
 				yield(nil, err)
 				return
 			}
-			update := newResponseUpdate(e, e.Metadata, e.ID, e.ID, message.RoleAssistant, contents)
+			update := newResponseUpdate(e, e.Metadata, e.ID, e.ID, agentRole(e.Role), contents)
 			update.FinishReason = "stop"
 			if !forward(update, nil) {
 				return
