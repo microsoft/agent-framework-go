@@ -775,6 +775,18 @@ var agentsExamples = []ExampleDefinition{
 		SkipReason:                   "Spawns a local stdio MCP server subprocess (go run) that requires live Foundry credentials.",
 	},
 	{
+		Name:                         "02_agents_mcp_long_running_task",
+		ProjectPath:                  "examples/02-agents/mcp/long_running_task",
+		RequiredEnvironmentVariables: []string{"FOUNDRY_PROJECT_ENDPOINT"},
+		OptionalEnvironmentVariables: []string{"FOUNDRY_MODEL"},
+		MustContain:                  []string{"MCP Long-Running Task", "Streaming completed after"},
+		ExpectedOutputDescription: []string{
+			"The output should show the agent summarizing findings for the 'sales-2025-q1' dataset twice, once collected and once streamed.",
+			"The findings should mention 12,403 rows, average revenue, anomalies in week 7, or the EMEA region.",
+			"The output should not contain error messages or stack traces.",
+		},
+	},
+	{
 		Name:            "02_agents_providers_github_copilot",
 		ProjectPath:     "examples/02-agents/providers/github-copilot",
 		IsDeterministic: true,
