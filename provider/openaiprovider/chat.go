@@ -411,7 +411,7 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 					params.WebSearchOptions.SearchContextSize = contextSize
 				}
 			}
-		case tool.FuncTool:
+		case tool.SchemaTool:
 			name, description := tl.Name(), tl.Description()
 			schema := tl.Schema()
 			funcParams, err := schemaToMap(schema)
@@ -447,7 +447,7 @@ func buildCompletionParams(model string, messages []*message.Message, opts []age
 // Returns a slice because some agent messages (like RoleTool) need to be split into multiple OpenAI messages.
 func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessageParamUnion, error) {
 	switch msg.Role {
-	case message.RoleSystem:
+	case message.RoleSystem, "developer":
 		var contents []openai.ChatCompletionContentPartTextParam
 		for _, c := range msg.Contents {
 			if tc, ok := c.(*message.TextContent); ok {
@@ -458,6 +458,18 @@ func buildMessageParam(msg *message.Message) ([]openai.ChatCompletionMessagePara
 		}
 		if len(contents) == 0 {
 			return nil, nil
+		}
+		if msg.Role == "developer" {
+			var dev openai.ChatCompletionMessageParamUnion
+			if len(contents) == 1 {
+				dev = openai.DeveloperMessage(contents[0].Text)
+			} else {
+				dev = openai.DeveloperMessage(contents)
+			}
+			if name := sanitizeAuthorName(msg.AuthorName); name != "" {
+				dev.OfDeveloper.Name = openai.String(name)
+			}
+			return []openai.ChatCompletionMessageParamUnion{dev}, nil
 		}
 		sys := openai.ChatCompletionSystemMessageParam{}
 		if len(contents) == 1 {

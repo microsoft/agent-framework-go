@@ -45,6 +45,7 @@ import (
 	"github.com/microsoft/agent-framework-go/agent/memory"
 	"github.com/microsoft/agent-framework-go/agent/skills"
 	"github.com/microsoft/agent-framework-go/agent/skills/fsskills"
+	"github.com/microsoft/agent-framework-go/agent/skills/mcpskills"
 	"github.com/microsoft/agent-framework-go/agent/textsearch"
 	"github.com/microsoft/agent-framework-go/embedding"
 	"github.com/microsoft/agent-framework-go/internal/agenttest"
@@ -105,6 +106,7 @@ var featureActivationCases = []struct {
 	{"skills-filtered-cache-hit", []int{8, 16}, nil},
 	{"in-memory-skills", []int{16}, nil},
 	{"file-skills", []int{15}, nil},
+	{"mcp-skills", []int{19}, nil},
 	{"tool-auto-call", nil, nil},
 	{"tool-auto-call-disabled", nil, nil},
 	{"tool-auto-call-invalid", nil, nil},
@@ -713,6 +715,33 @@ func runFeatureActivation(t *testing.T, name string) {
 		}
 	case "file-skills":
 		source := fsskills.NewSource(fstest.MapFS{})
+		activate = func() error { _, err := source.Skills(ctx, skills.SourceContext{}); return err }
+	case "mcp-skills":
+		server := mcp.NewServer(&mcp.Implementation{Name: "skills-feature-test", Version: "1"}, nil)
+		server.AddResource(&mcp.Resource{URI: "skill://index.json", Name: "index"},
+			func(context.Context, *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+				return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{
+					URI: "skill://index.json", Text: `{"skills":[]}`,
+				}}}, nil
+			})
+		clientTransport, serverTransport := mcp.NewInMemoryTransports()
+		serverSession, err := server.Connect(ctx, serverTransport, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = serverSession.Close() })
+		client := mcp.NewClient(&mcp.Implementation{Name: "skills-feature-test", Version: "1"}, nil)
+		session, err := client.Connect(ctx, clientTransport, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = session.Close() })
+		source := mcpskills.NewSource(mcpskills.Config{Session: session})
+		t.Cleanup(func() {
+			if err := source.Close(); err != nil {
+				t.Error(err)
+			}
+		})
 		activate = func() error { _, err := source.Skills(ctx, skills.SourceContext{}); return err }
 	case "todo":
 		p := todo.New(nil)

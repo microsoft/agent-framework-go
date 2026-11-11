@@ -4,9 +4,6 @@ intent: Close verified Go API and feature gaps against the .NET version recorded
 tracker-id: dotnet-port-api-nightly
 engine:
    id: copilot
-sandbox:
-   agent:
-      version: v0.28.25
 max-ai-credits: 2000
 network:
    allowed:

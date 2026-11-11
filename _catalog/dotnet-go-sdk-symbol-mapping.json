@@ -3746,7 +3746,7 @@
     "Microsoft.Agents.AI.Mcp.UnitTests": {
       "Microsoft.Agents.AI.Mcp.UnitTests.FeatureUsageActivationTests": {
         "ListAgentToolsWithTasksAsync_ActivatesCoreMcpAsync": null,
-        "McpSkillsSource_ActivatesOnlyWhenLoadedAsync": null
+        "McpSkillsSource_ActivatesOnlyWhenLoadedAsync": "agent/skills/mcpskills.TestSource_FeatureUsage"
       },
       "Microsoft.Agents.AI.Mcp.UnitTests.ListAgentToolsWithTasksTests": {
         "ListAgentToolsWithTasks_InvalidPollingIntervalRange_ThrowsAsync": null,
@@ -3786,59 +3786,59 @@
         "InvokeAsync_UpdateTaskFailure_CancelsRemoteTaskAndPreservesProtocolExceptionAsync": null
       },
       "Microsoft.Agents.AI.Skills.Mcp.UnitTests.AgentMcpSkillsSourceArchiveTests": {
-        "DetectFormat_TarSignals_ReturnUnknown": null,
-        "Extract_ArchiveExceedsDefaultFileCount_Throws": null,
-        "Extract_ArchiveExceedsDefaultUncompressedSize_Throws": null,
-        "Extract_CaseVariantZipSlipEntry_DoesNotEscapeTargetDirectory": null,
-        "Extract_RaisedLimits_AllowsLargerArchive": null,
-        "Extract_UnknownFormat_ThrowsBeforeCreatingTarget": null,
-        "Extract_WithinDefaultLimits_Succeeds": null,
-        "Extract_ZipSlipEntry_DoesNotEscapeTargetDirectory": null,
-        "GetSkillsAsync_AmbiguousArchiveFrontmatter_SkipsSkillAsync": null,
-        "GetSkillsAsync_ArchiveDigest_LoadsValidArchiveAsync": null,
-        "GetSkillsAsync_ArchiveDuplicateMetadata_KeepsFirstValueAndLogsWarningAsync": null,
-        "GetSkillsAsync_ArchiveEmptyOptionalScalar_RemainsNullAsync": null,
-        "GetSkillsAsync_ArchiveExceedsConfiguredArchiveSize_SkillSkippedAsync": null,
-        "GetSkillsAsync_ArchiveExceedsDefaultFileCount_SkillSkippedAsync": null,
-        "GetSkillsAsync_ArchiveExistingMetadataScalarFormats_PreservedAsync": null,
-        "GetSkillsAsync_ArchiveReturnsTextNotBlob_SkillSkippedAsync": null,
-        "GetSkillsAsync_ArchiveUpdatedBetweenCalls_ReturnsUpdatedContentAsync": null,
-        "GetSkillsAsync_ArchiveValueOnIndentedNextLine_PreservedAsync": null,
-        "GetSkillsAsync_ArchiveWithScript_SurfacesScriptAsReadableResourceAsync": null,
-        "GetSkillsAsync_ArchiveWithUnsupportedFormat_SkillSkippedAsync": null,
-        "GetSkillsAsync_ConcurrentCalls_ReconcilesArchiveDirectorySafelyAsync": null,
-        "GetSkillsAsync_DigestMismatchOnRefresh_RemovesPreviousExtractionAsync": null,
-        "GetSkillsAsync_DigestOfDifferentBytes_SkipsArchiveAsync": null,
-        "GetSkillsAsync_EntryMissingName_SkillSkippedAsync": null,
-        "GetSkillsAsync_EntryMissingUrl_SkillSkippedAsync": null,
-        "GetSkillsAsync_EntryWithInvalidNameChars_SkillSkippedAsync": null,
-        "GetSkillsAsync_FirstRun_PrunesLeftoverSkillDirectoryAsync": null,
-        "GetSkillsAsync_MatchingDigest_PreservesArchiveGuardsAsync": null,
-        "GetSkillsAsync_MatchingDigest_SkipsTraversalEntryAsync": null,
-        "GetSkillsAsync_NonStringDigest_RejectsIndexAsync": null,
-        "GetSkillsAsync_PreExtractionCleanupFails_DoesNotDiscoverStaleSkillAsync": null,
-        "GetSkillsAsync_RaisedFileCountOption_LoadsLargerArchiveAsync": null,
-        "GetSkillsAsync_RejectedDigest_KeepsValidSiblingAsync": null,
-        "GetSkillsAsync_RejectedDigest_SkipsBeforeExtractionAndLogsWarningAsync": null,
-        "GetSkillsAsync_SecondDiscovery_ReExtractsContentAsync": null,
-        "GetSkillsAsync_ServerListsNoArchives_PrunesLeftoversAsync": null,
-        "GetSkillsAsync_SkillNoLongerAdvertised_IsPrunedAsync": null,
-        "GetSkillsAsync_TarGzArchive_SkipsSkillAsync": null,
-        "GetSkillsAsync_TwoSourcesWithSeparateDirectories_DoNotCollideAsync": null,
-        "GetSkillsAsync_ZipArchive_DiscoversSkillAsync": null
+        "DetectFormat_TarSignals_ReturnUnknown": "agent/skills/mcpskills.TestArchiveFormat_TarSignalsAreUnsupported",
+        "Extract_ArchiveExceedsDefaultFileCount_Throws": "agent/skills/mcpskills.TestExtractArchive_ExceedsDefaultFileCount_ReturnsError",
+        "Extract_ArchiveExceedsDefaultUncompressedSize_Throws": "agent/skills/mcpskills.TestExtractArchive_ExceedsDefaultUncompressedSize_ReturnsError",
+        "Extract_CaseVariantZipSlipEntry_DoesNotEscapeTargetDirectory": "agent/skills/mcpskills.TestExtractArchive_CaseVariantZIPSlipEntry_DoesNotEscapeTargetDirectory",
+        "Extract_RaisedLimits_AllowsLargerArchive": "agent/skills/mcpskills.TestExtractArchive_RaisedLimits_AllowLargerArchive",
+        "Extract_UnknownFormat_ThrowsBeforeCreatingTarget": "agent/skills/mcpskills.TestExtractArchive_UnsupportedFormat_DoesNotCreateTarget",
+        "Extract_WithinDefaultLimits_Succeeds": "agent/skills/mcpskills.TestExtractArchive_WithinDefaultLimits_Succeeds",
+        "Extract_ZipSlipEntry_DoesNotEscapeTargetDirectory": "agent/skills/mcpskills.TestExtractArchive_ZIPSlipEntry_DoesNotEscapeTargetDirectory",
+        "GetSkillsAsync_AmbiguousArchiveFrontmatter_SkipsSkillAsync": "agent/skills/mcpskills.TestSource_ArchiveAmbiguousFrontmatter_IsSkipped",
+        "GetSkillsAsync_ArchiveDigest_LoadsValidArchiveAsync": "agent/skills/mcpskills.TestSource_ArchiveDigest_AcceptsOmittedNullAndMatching",
+        "GetSkillsAsync_ArchiveDuplicateMetadata_KeepsFirstValueAndLogsWarningAsync": "agent/skills/mcpskills.TestSource_ArchiveFrontmatter_DuplicateMetadataKeepsFirstAndLogs",
+        "GetSkillsAsync_ArchiveEmptyOptionalScalar_RemainsNullAsync": "agent/skills/mcpskills.TestSource_ArchiveFrontmatter_EmptyOptionalsRemainZeroValues",
+        "GetSkillsAsync_ArchiveExceedsConfiguredArchiveSize_SkillSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveExceedsConfiguredSize_IsSkipped",
+        "GetSkillsAsync_ArchiveExceedsDefaultFileCount_SkillSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveExceedsDefaultFileCount_IsSkipped",
+        "GetSkillsAsync_ArchiveExistingMetadataScalarFormats_PreservedAsync": "agent/skills/mcpskills.TestSource_ArchiveFrontmatter_PreservesMetadataScalarFormats",
+        "GetSkillsAsync_ArchiveReturnsTextNotBlob_SkillSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveTextInsteadOfBlob_IsSkipped",
+        "GetSkillsAsync_ArchiveUpdatedBetweenCalls_ReturnsUpdatedContentAsync": "agent/skills/mcpskills.TestSource_ArchiveRefresh_ReplacesContentAndRetainsInstructionSnapshots",
+        "GetSkillsAsync_ArchiveValueOnIndentedNextLine_PreservedAsync": "agent/skills/mcpskills.TestSource_ArchiveFrontmatter_PreservesIndentedValues",
+        "GetSkillsAsync_ArchiveWithScript_SurfacesScriptAsReadableResourceAsync": "agent/skills/mcpskills.TestSource_ArchiveScripts_AreOnlyReadableResources",
+        "GetSkillsAsync_ArchiveWithUnsupportedFormat_SkillSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveUnsupportedFormat_IsSkipped",
+        "GetSkillsAsync_ConcurrentCalls_ReconcilesArchiveDirectorySafelyAsync": "agent/skills/mcpskills.TestSource_ConcurrentArchiveCalls_ReconcileSafely",
+        "GetSkillsAsync_DigestMismatchOnRefresh_RemovesPreviousExtractionAsync": "agent/skills/mcpskills.TestSource_DigestMismatchOnRefresh_RemovesPreviousExtraction",
+        "GetSkillsAsync_DigestOfDifferentBytes_SkipsArchiveAsync": "agent/skills/mcpskills.TestSource_DigestOfDifferentBytes_IsRejected",
+        "GetSkillsAsync_EntryMissingName_SkillSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveMissingName_IsSkipped",
+        "GetSkillsAsync_EntryMissingUrl_SkillSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveMissingURL_IsSkipped",
+        "GetSkillsAsync_EntryWithInvalidNameChars_SkillSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveInvalidName_IsSkipped",
+        "GetSkillsAsync_FirstRun_PrunesLeftoverSkillDirectoryAsync": "agent/skills/mcpskills.TestSource_FirstRun_PrunesLeftoverArchive",
+        "GetSkillsAsync_MatchingDigest_PreservesArchiveGuardsAsync": "agent/skills/mcpskills.TestSource_MatchingDigest_DoesNotBypassArchiveGuards",
+        "GetSkillsAsync_MatchingDigest_SkipsTraversalEntryAsync": "agent/skills/mcpskills.TestSource_MatchingArchiveDigest_SkipsTraversalEntry",
+        "GetSkillsAsync_NonStringDigest_RejectsIndexAsync": "agent/skills/mcpskills.TestSource_NonStringDigest_RejectsEntireIndex",
+        "GetSkillsAsync_PreExtractionCleanupFails_DoesNotDiscoverStaleSkillAsync": "agent/skills/mcpskills.TestSource_PreExtractionCleanupFailure_DoesNotDiscoverStaleSkill",
+        "GetSkillsAsync_RaisedFileCountOption_LoadsLargerArchiveAsync": "agent/skills/mcpskills.TestSource_RaisedFileCount_LoadsLargerArchive",
+        "GetSkillsAsync_RejectedDigest_KeepsValidSiblingAsync": "agent/skills/mcpskills.TestSource_RejectedArchiveDigest_KeepsValidSibling",
+        "GetSkillsAsync_RejectedDigest_SkipsBeforeExtractionAndLogsWarningAsync": "agent/skills/mcpskills.TestSource_RejectedArchiveDigest_SkipsBeforeExtractionAndLogs",
+        "GetSkillsAsync_SecondDiscovery_ReExtractsContentAsync": "agent/skills/mcpskills.TestSource_SecondDiscovery_ReExtractsArchive",
+        "GetSkillsAsync_ServerListsNoArchives_PrunesLeftoversAsync": "agent/skills/mcpskills.TestSource_NoArchiveEntries_PrunesLeftovers",
+        "GetSkillsAsync_SkillNoLongerAdvertised_IsPrunedAsync": "agent/skills/mcpskills.TestSource_NoLongerAdvertisedArchive_IsPrunedOnFirstLoad",
+        "GetSkillsAsync_TarGzArchive_SkipsSkillAsync": "agent/skills/mcpskills.TestSource_TarGzArchive_IsSkipped",
+        "GetSkillsAsync_TwoSourcesWithSeparateDirectories_DoNotCollideAsync": "agent/skills/mcpskills.TestSource_SeparateArchiveDirectories_DoNotCollide",
+        "GetSkillsAsync_ZipArchive_DiscoversSkillAsync": "agent/skills/mcpskills.TestSource_ZIPArchive_ReturnsMetadataAndContent"
       },
       "Microsoft.Agents.AI.Skills.Mcp.UnitTests.AgentMcpSkillsSourceTests": {
-        "GetResourceAsync_PathTraversalName_ReturnsNullAsync": null,
-        "GetResourceAsync_SiblingBinary_ReturnsDataContentAsync": null,
-        "GetResourceAsync_SiblingText_ReturnsContentAsync": null,
-        "GetResourceAsync_UnknownName_ReturnsNullAsync": null,
-        "GetSkillsAsync_ArchiveEntryWithUnreadableResource_IsSkippedAsync": null,
-        "GetSkillsAsync_DoesNotReadSkillMdAsync": null,
-        "GetSkillsAsync_IndexBasedDiscovery_ReturnsSkillAsync": null,
-        "GetSkillsAsync_IndexEntryWithInvalidName_IsSkippedAsync": null,
-        "GetSkillsAsync_IndexEntryWithMissingRequiredFields_IsSkippedAsync": null,
-        "GetSkillsAsync_IndexEntryWithTemplateType_IsSkippedAsync": null,
-        "GetSkillsAsync_NoIndex_ReturnsEmptyAsync": null
+        "GetResourceAsync_PathTraversalName_ReturnsNullAsync": "agent/skills/mcpskills.TestSource_GetResource_PathTraversalName_ReturnsNil",
+        "GetResourceAsync_SiblingBinary_ReturnsDataContentAsync": "agent/skills/mcpskills.TestSource_GetResource_SiblingBinary_ReturnsDataContent",
+        "GetResourceAsync_SiblingText_ReturnsContentAsync": "agent/skills/mcpskills.TestSource_GetResource_SiblingText_ReturnsContent",
+        "GetResourceAsync_UnknownName_ReturnsNullAsync": "agent/skills/mcpskills.TestSource_GetResource_UnknownName_ReturnsNil",
+        "GetSkillsAsync_ArchiveEntryWithUnreadableResource_IsSkippedAsync": "agent/skills/mcpskills.TestSource_ArchiveEntryWithUnreadableResource_IsSkipped",
+        "GetSkillsAsync_DoesNotReadSkillMdAsync": "agent/skills/mcpskills.TestSource_DiscoveryDoesNotReadSkillMD",
+        "GetSkillsAsync_IndexBasedDiscovery_ReturnsSkillAsync": "agent/skills/mcpskills.TestSource_IndexBasedDiscovery_ReturnsSkill",
+        "GetSkillsAsync_IndexEntryWithInvalidName_IsSkippedAsync": "agent/skills/mcpskills.TestSource_IndexEntryWithInvalidName_IsSkipped",
+        "GetSkillsAsync_IndexEntryWithMissingRequiredFields_IsSkippedAsync": "agent/skills/mcpskills.TestSource_IndexEntryWithMissingRequiredFields_IsSkipped",
+        "GetSkillsAsync_IndexEntryWithTemplateType_IsSkippedAsync": "agent/skills/mcpskills.TestSource_IndexEntryWithTemplateType_IsSkipped",
+        "GetSkillsAsync_NoIndex_ReturnsEmptyAsync": "agent/skills/mcpskills.TestSource_NoIndex_ReturnsEmpty"
       }
     },
     "Microsoft.Agents.AI.Mem0.IntegrationTests": {
@@ -4731,7 +4731,7 @@
         "GetSkillsAsync_DeepResource_DiscoveredWithHigherDepthAsync": "agent/skills/fsskills.TestFileSource_DeepResource_DiscoveredWithHigherDepth",
         "GetSkillsAsync_DeepResource_NotDiscoveredWithDefaultDepthAsync": "agent/skills/fsskills.TestFileSource_DeepResource_ExcludedWithDefaultDepth",
         "GetSkillsAsync_DescriptionExceedsMaxLength_ExcludesSkillAsync": "agent/skills/fsskills.TestFileSource_DescriptionTooLong_ExcludesSkill",
-        "GetSkillsAsync_DuplicateMetadata_KeepsFirstValueAndLogsWarningAsync": null,
+        "GetSkillsAsync_DuplicateMetadata_KeepsFirstValueAndLogsWarningAsync": "agent/skills/fsskills.TestFileSource_DuplicateMetadataEntries_PreserveFirstValueAndWarn",
         "GetSkillsAsync_DuplicateNames_KeepsFirstOnlyAsync": "agent/skills.TestProvider_DuplicateFileSkillNames_KeepsOne",
         "GetSkillsAsync_DuplicateRecognizedFrontmatterField_ExcludesSkillAsync": "agent/skills/fsskills.TestFileSource_DuplicateRecognizedFields_ExcludeSkill",
         "GetSkillsAsync_EmptyBlockBeforeAnotherField_ExcludesSkillAsync": "agent/skills/fsskills.TestFileSource_EmptyBlockBeforeAnotherField_ExcludesSkill",
@@ -4739,9 +4739,9 @@
         "GetSkillsAsync_EmptyInlineValue_DoesNotConsumeNextFieldAsync": "agent/skills/fsskills.TestFileSource_EmptyInlineValue_DoesNotConsumeNextField",
         "GetSkillsAsync_EmptyOptionalScalarAtEnd_RemainsNullAsync": "agent/skills/fsskills.TestFileSource_EmptyOptionalScalarAtEnd_RemainsUnset",
         "GetSkillsAsync_EmptyPaths_ReturnsEmptyListAsync": "agent/skills/fsskills.TestFileSource_EmptyPaths_ReturnsEmptyList",
-        "GetSkillsAsync_EmptyQuotedOptionalValues_KeepExistingRepresentationAsync": null,
-        "GetSkillsAsync_ExistingMetadataScalarFormats_PreservedAsync": null,
-        "GetSkillsAsync_ExistingScalarFormats_PreservedAsync": null,
+        "GetSkillsAsync_EmptyQuotedOptionalValues_KeepExistingRepresentationAsync": "agent/skills/fsskills.TestFileSource_EmptyQuotedOptionalValues_PreserveRepresentation",
+        "GetSkillsAsync_ExistingMetadataScalarFormats_PreservedAsync": "agent/skills/fsskills.TestFileSource_ExistingMetadataScalarFormats_Preserved",
+        "GetSkillsAsync_ExistingScalarFormats_PreservedAsync": "agent/skills/fsskills.TestFileSource_ExistingScalarFormats_Preserved",
         "GetSkillsAsync_FileWithUtf8Bom_ParsesSuccessfullyAsync": "agent/skills/fsskills.TestFileSource_Utf8Bom_ParsesNameAndDescription",
         "GetSkillsAsync_FilesWithMatchingExtensions_DiscoveredAsResourcesAsync": "agent/skills/fsskills.TestFileSource_MatchingExtensions_DiscoverBothResources",
         "GetSkillsAsync_FilesWithNonMatchingExtensions_NotDiscoveredAsync": "agent/skills/fsskills.TestFileSource_NonMatchingExtensions_AreExcluded",
@@ -8657,10 +8657,12 @@
               "tool/agenttool.New",
               "agent.WithSession",
               "tool/functool.New",
-              "tool/agenttool.Config.RunOptions"
+              "tool/agenttool.Config.RunOptions",
+              "tool/agenttool.Config.ArgName",
+              "tool/agenttool.Config.ArgDescription"
             ],
             "status": "partial",
-            "note": "Agenttool supplies query-to-text invocation and a session option; functool can wrap customized metadata. Go does not automatically copy the parent's AdditionalProperties into the child run."
+            "note": "Agenttool supplies string-to-text invocation, a session option, and configurable argument name and description; functool can wrap other customized metadata. Go does not automatically copy the parent's AdditionalProperties into the child run."
           },
           "AsBuilder(AIAgent) -> AIAgentBuilder": {
             "go": "agent.New(provider, agent.Config{Middlewares: []agent.Middleware{middleware}})",
@@ -9478,7 +9480,7 @@
               "agent/skills.ScriptRunner"
             ],
             "status": "adapted",
-            "note": "Construct a named Go function value or closure instead of a CLR target/method-pointer delegate; argument-shape limitations are recorded on Invoke."
+            "note": "Use a named Go function or closure instead of a CLR target/method-pointer delegate; ScriptRunner receives raw JSON arguments."
           }
         }
       },
@@ -9512,7 +9514,7 @@
               "agent/skills/fsskills.SourceOptions.Logger"
             ],
             "status": "adapted",
-            "note": "Supply fs.FS roots instead of directory strings and put discovery settings, runner, and slog logger into a value options struct; runner arguments are positional strings."
+            "note": "Supply fs.FS roots instead of directory strings and put discovery settings, runner, and slog logger into a value options struct. The runner receives raw JSON; the default parameter schema describes positional strings."
           },
           "AgentFileSkillsSource(string, AgentFileSkillScriptRunner, AgentFileSkillsSourceOptions, ILoggerFactory)": {
             "go": "fsskills.NewSourceOptions(fsskills.SourceOptions{ScriptRunner: runner, Logger: logger}, root)",
@@ -9665,7 +9667,7 @@
               "agent/skills.NewInMemorySource"
             ],
             "status": "adapted",
-            "note": "Retrieve the in-memory skill slice through Source.Skills(context.Context); this implementation does not need the .NET agent/session argument."
+            "note": "Source.Skills(ctx, sourceContext) returns the in-memory slice; this implementation ignores SourceContext's agent/session identity."
           }
         },
         "constructors": {
@@ -9753,7 +9755,7 @@
               "agent/skills.Script.Name"
             ],
             "status": "adapted",
-            "note": "For caller-side retrieval, search Scripts by exact Name in order. The built-in tool instead uses an index created during provider-context loading, with last-duplicate selection; no exported async getter exists."
+            "note": "For caller-side retrieval, search Scripts by exact Name in order. The built-in tool uses the last matching static entry and falls back to GetScript for missing names."
           }
         },
         "constructors": {
@@ -9975,10 +9977,12 @@
             "note": "Source is usable as a Go map key, but Go exposes no integer hash code for it."
           },
           "ToString() -> string": {
-            "go": "",
-            "go_symbols": [],
-            "status": "unmapped",
-            "note": "Go Source has no formatter returning the .NET type:sourceId representation; its zero and empty source IDs are not distinct."
+            "go": "source.String()",
+            "go_symbols": [
+              "message.Source.String"
+            ],
+            "status": "adapted",
+            "note": "Formats the source type and optional identifier. Go treats an empty ID as absent, unlike .NET's distinct null and empty-string identifiers."
           },
           "op_Equality(AgentRequestMessageSourceAttribution, AgentRequestMessageSourceAttribution) -> bool": {
             "go": "var left, right message.Source; _ = left == right",
@@ -10257,8 +10261,8 @@
           "IsWrappedInObject": {
             "go_symbols": [
               "agent.WithStructuredOutput",
-              "agent/format/jsonformat.WrapNonObjectSchema",
-              "agent/format/jsonformat.Format.UnmarshalStructuredOutput"
+              "format/jsonformat.WrapNonObjectSchema",
+              "format/jsonformat.Format.UnmarshalStructuredOutput"
             ],
             "status": "partial",
             "note": "Built-in providers use shared jsonformat helpers to wrap non-object JSON schemas and decode the data property; agent middleware is format-agnostic. Go does not expose a per-response IsWrappedInObject flag or a way to query the wrapper state of a returned Response."
@@ -10267,10 +10271,10 @@
             "go_symbols": [
               "agent.WithStructuredOutput",
               "agent.ResponseStream.Collect",
-              "agent/format/jsonformat.Format.UnmarshalStructuredOutput"
+              "format/jsonformat.Format.UnmarshalStructuredOutput"
             ],
             "status": "adapted",
-            "note": "Read the caller-owned destination after successful collection, or use Format.UnmarshalStructuredOutput with the matching response format to decode existing text. Go decodes eagerly and has no generic Result property."
+            "note": "Read the caller-owned destination after successful collection; decoding occurs after automatic tool execution and uses the final response message. Format.UnmarshalStructuredOutput can decode existing text with a matching response format. Go decodes eagerly and has no generic Result property."
           }
         },
         "constructors": {
@@ -10278,9 +10282,9 @@
             "go": "format, _ := jsonformat.For[struct{ Answer string }](); decoder, _ := jsonformat.FromResponseFormat(format); var result struct{ Answer string }; decoder.Unmarshal([]byte(response.String()), &result)",
             "go_symbols": [
               "agent.Response.String",
-              "agent/format/jsonformat.For",
-              "agent/format/jsonformat.FromResponseFormat",
-              "agent/format/jsonformat.Format.Unmarshal"
+              "format/jsonformat.For",
+              "format/jsonformat.FromResponseFormat",
+              "format/jsonformat.Format.Unmarshal"
             ],
             "status": "adapted",
             "note": "Keep the response and decode its text into a destination using a JSON format; Go decoding is explicit rather than deferred to a generic Result getter."
@@ -10913,22 +10917,24 @@
             "note": "Content-loading method becomes a context-aware function field returning text/error."
           },
           "GetResourceAsync(string, CancellationToken) -> ValueTask<AgentSkillResource>": {
-            "go": "for _, resource := range skill.Resources { if resource.Name == name { break } }",
+            "go": "if skill.GetResource != nil { resource, err = skill.GetResource(ctx, name) }",
             "go_symbols": [
+              "agent/skills.Skill.GetResource",
               "agent/skills.Skill.Resources",
               "agent/skills.Resource.Name"
             ],
             "status": "adapted",
-            "note": "Search the exported Resources slice by Name; Go exposes stored resources rather than an overridable asynchronous lookup method. Callers handle the missing-entry case."
+            "note": "An optional context-aware GetResource callback provides dynamic lookup. The skills provider searches Resources first and calls the callback on a miss; direct callers must guard a nil callback."
           },
           "GetScriptAsync(string, CancellationToken) -> ValueTask<AgentSkillScript>": {
-            "go": "for _, script := range skill.Scripts { if script.Name == name { break } }",
+            "go": "if skill.GetScript != nil { script, err = skill.GetScript(ctx, name) }",
             "go_symbols": [
+              "agent/skills.Skill.GetScript",
               "agent/skills.Skill.Scripts",
               "agent/skills.Script.Name"
             ],
             "status": "adapted",
-            "note": "Search the exported Scripts slice by Name; there is no public GetScript method or asynchronous lookup hook. Callers handle the missing-entry case."
+            "note": "An optional context-aware GetScript callback provides dynamic lookup. The skills provider searches Scripts first and calls the callback on a miss; direct callers must guard a nil callback."
           }
         }
       },
@@ -10952,10 +10958,11 @@
           "Compatibility": {
             "go_symbols": [
               "agent/skills.Frontmatter.Compatibility",
-              "agent/skills.Frontmatter.Validate"
+              "agent/skills.Frontmatter.Validate",
+              "agent/skills.ValidateCompatibility"
             ],
             "status": "adapted",
-            "note": "Go field assignment does not run the C# setter's validation; call Validate explicitly, which also checks name and description. Empty represents absent compatibility."
+            "note": "Field assignment does not validate the value. Call ValidateCompatibility for compatibility-only validation or Frontmatter.Validate for all fields; empty represents absent compatibility."
           },
           "Description": {
             "go_symbols": [
@@ -10984,31 +10991,25 @@
         },
         "methods": {
           "ValidateCompatibility(string, out string) -> bool": {
-            "go": "frontmatter.Validate()",
+            "go": "skills.ValidateCompatibility(compatibility)",
             "go_symbols": [
-              "agent/skills.Frontmatter.Validate",
-              "agent/skills.Frontmatter.Compatibility"
+              "agent/skills.ValidateCompatibility"
             ],
-            "status": "partial",
-            "note": "Validate checks compatibility as part of the entire frontmatter and returns an error; earlier name/description failures take precedence. The 500-length limit counts UTF-16 code units."
+            "status": "mapped"
           },
           "ValidateDescription(string, out string) -> bool": {
-            "go": "frontmatter.Validate()",
+            "go": "skills.ValidateDescription(description)",
             "go_symbols": [
-              "agent/skills.Frontmatter.Validate",
-              "agent/skills.Frontmatter.Description"
+              "agent/skills.ValidateDescription"
             ],
-            "status": "partial",
-            "note": "Validate also checks name and compatibility rather than exposing an independent description validator. The 1024-length limit counts UTF-16 code units."
+            "status": "mapped"
           },
           "ValidateName(string, out string) -> bool": {
-            "go": "frontmatter.Validate()",
+            "go": "skills.ValidateName(name)",
             "go_symbols": [
-              "agent/skills.Frontmatter.Validate",
-              "agent/skills.Frontmatter.Name"
+              "agent/skills.ValidateName"
             ],
-            "status": "partial",
-            "note": "Validate checks name first and then the other frontmatter fields; Go does not export the independent name validator or a bool/out-reason contract."
+            "status": "mapped"
           }
         },
         "constructors": {
@@ -11019,7 +11020,7 @@
               "agent/skills.Frontmatter.Validate"
             ],
             "status": "adapted",
-            "note": "Use a struct literal and explicit Validate call; absent compatibility becomes an empty string. Go returns validation errors and measures string limits in bytes rather than UTF-16 code units."
+            "note": "Use a struct literal and explicit Validate call; absent compatibility becomes an empty string. Validation returns an error. Description and compatibility limits count UTF-16 code units; names use ASCII lowercase letters, digits, and interior hyphens."
           }
         }
       },
@@ -11215,14 +11216,16 @@
             "note": "Supply the skill slice in value options. The provider composes reusable source decorators with caching and first-name-wins deduplication enabled by default."
           },
           "AgentSkillsProvider(AgentSkillsSource, AgentSkillsProviderOptions, ILoggerFactory, bool)": {
-            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, Logger: logger, OwnsSources: ownsSource})",
+            "go": "skills.NewContextProvider(skills.ContextProviderOptions{Sources: []skills.Source{source}, Logger: logger, OwnsSources: ownsSource, DisableCaching: true, DisableSourceDeduplication: true})",
             "go_symbols": [
               "agent/skills.NewContextProvider",
               "agent/skills.ContextProviderOptions.Sources",
-              "agent/skills.ContextProviderOptions.OwnsSources"
+              "agent/skills.ContextProviderOptions.OwnsSources",
+              "agent/skills.ContextProviderOptions.DisableCaching",
+              "agent/skills.ContextProviderOptions.DisableSourceDeduplication"
             ],
-            "status": "adapted",
-            "note": "The constructor returns *skills.ContextProvider with Close. Sources, logging, and the ownership flag move into constructor options; source ownership defaults to false."
+            "status": "partial",
+            "note": "Configure the source, logger, and ownership flag; ownership defaults to false and Close supports io.Closer sources. Disable caching and source deduplication to match the custom-source constructor's direct pipeline. When duplicate names remain, Go tools select the last matching skill while .NET selects the first."
           },
           "AgentSkillsProvider(IEnumerable<AgentSkill>, AgentSkillsProviderOptions, ILoggerFactory)": {
             "go": "skills.NewContextProvider(skills.ContextProviderOptions{Skills: registeredSkills, Logger: logger})",
@@ -15395,8 +15398,7 @@
             "go_symbols": [
               "agent/harness/loop.Config.NonStreamingReturnsLastResponseOnly"
             ],
-            "status": "partial",
-            "note": ".NET retains usage from every iteration; Go yields only final-iteration updates in this mode, losing earlier usage."
+            "status": "mapped"
           },
           "OnBehalfOfAuthorName": {
             "go_symbols": [
@@ -20063,20 +20065,21 @@
             "note": "Set EmitUpdateEvents to a bool pointer and call New; this overload controls streaming updates, not aggregated response events."
           },
           "BindAsExecutor(RequestPort, bool) -> ExecutorBinding": {
-            "go": "port.Bind()",
+            "go": "port.BindWithWrappedRequests(allowWrapped)",
             "go_symbols": [
-              "workflow.RequestPort.Bind"
+              "workflow.RequestPort.Bind",
+              "workflow.RequestPort.BindWithWrappedRequests"
             ],
-            "status": "partial",
-            "note": "Go binds the port and accepts wrapped requests, but has no allowWrappedRequests=false setting."
+            "status": "mapped"
           },
           "BindAsExecutor(Workflow, string, ExecutorOptions) -> ExecutorBinding": {
             "go": "inproc.BindSubworkflowAsExecutor(wf, id, inproc.SubworkflowConfig{})",
             "go_symbols": [
-              "workflow/inproc.BindSubworkflowAsExecutor"
+              "workflow/inproc.BindSubworkflowAsExecutor",
+              "workflow/inproc.SubworkflowConfig"
             ],
-            "status": "partial",
-            "note": "Go hosts subworkflows through an inproc binding factory, but child outputs are always sent and yielded; the .NET host's independent ExecutorOptions forwarding gates are not exposed."
+            "status": "adapted",
+            "note": "Use value SubworkflowConfig for independent child-output send/yield gates; nil flags enable both. Go returns a general binding and snapshots flags when each host is created."
           },
           "BindAsExecutor<TInput, TAccumulate>(Func<TAccumulate, TInput, TAccumulate>, string, ExecutorOptions, bool) -> ExecutorBinding": {
             "go": "workflow.NewAggregatingExecutor(id, aggregator).SetCrossRunShareable(threadsafe).Bind()",
@@ -20312,10 +20315,11 @@
           "ConfigureSubWorkflow(Workflow, string, ExecutorOptions) -> ExecutorBinding": {
             "go": "inproc.BindSubworkflowAsExecutor(wf, id, inproc.SubworkflowConfig{})",
             "go_symbols": [
-              "workflow/inproc.BindSubworkflowAsExecutor"
+              "workflow/inproc.BindSubworkflowAsExecutor",
+              "workflow/inproc.SubworkflowConfig"
             ],
-            "status": "partial",
-            "note": "The obsolete alias has a Go subworkflow host factory, but Go always sends and yields child outputs rather than honoring the .NET host's independent ExecutorOptions forwarding gates."
+            "status": "adapted",
+            "note": "The obsolete alias maps to the same Go factory with SubworkflowConfig. Nil flags enable both forwarding gates; each created host snapshots the flags."
           }
         }
       },
@@ -20609,33 +20613,38 @@
           "go": "workflow.Executor{AutoSendMessageHandlerResultObject: new(true), AutoYieldOutputHandlerResultObject: new(true)}",
           "go_symbols": [
             "workflow.Executor.AutoSendMessageHandlerResultObject",
-            "workflow.Executor.AutoYieldOutputHandlerResultObject"
+            "workflow.Executor.AutoYieldOutputHandlerResultObject",
+            "workflow/inproc.SubworkflowConfig"
           ],
           "status": "adapted",
-          "note": "Behavior options live directly on Executor as optional bool pointers. Set them before the executor's protocol is first built; Go caches that protocol."
+          "note": "Behavior options live on Executor, or in value SubworkflowConfig for hosted workflows; nil flags enable send/yield. Configure Executor before protocol construction; subworkflow hosts snapshot flags at creation."
         },
         "properties": {
           "AutoSendMessageHandlerResultObject": {
             "go_symbols": [
-              "workflow.Executor.AutoSendMessageHandlerResultObject"
+              "workflow.Executor.AutoSendMessageHandlerResultObject",
+              "workflow/inproc.SubworkflowConfig.AutoSendMessageHandlerResultObject"
             ],
             "status": "adapted",
-            "note": "Nil means true; an explicit false pointer disables automatic sending of non-nil results from output-producing handlers, not messages sent manually through Context."
+            "note": "Nil enables automatic handler-result sending. SubworkflowConfig applies the same flag to child-output forwarding; explicit Context.SendMessage calls are unaffected."
           },
           "AutoYieldOutputHandlerResultObject": {
             "go_symbols": [
-              "workflow.Executor.AutoYieldOutputHandlerResultObject"
+              "workflow.Executor.AutoYieldOutputHandlerResultObject",
+              "workflow/inproc.SubworkflowConfig.AutoYieldOutputHandlerResultObject"
             ],
             "status": "adapted",
-            "note": "Nil means true; an explicit false pointer disables automatic yielding of non-nil handler results. Explicit Context.YieldOutput calls remain separate and require declared output types."
+            "note": "Nil enables automatic handler-result yielding. SubworkflowConfig controls child-output yielding and output declarations; explicit Context.YieldOutput calls remain separate and require declared output types."
           },
           "Default": {
             "go_symbols": [
               "workflow.Executor.AutoSendMessageHandlerResultObject",
-              "workflow.Executor.AutoYieldOutputHandlerResultObject"
+              "workflow.Executor.AutoYieldOutputHandlerResultObject",
+              "workflow/inproc.SubworkflowConfig.AutoSendMessageHandlerResultObject",
+              "workflow/inproc.SubworkflowConfig.AutoYieldOutputHandlerResultObject"
             ],
             "status": "adapted",
-            "note": "Leave both fields nil to enable automatic send and yield. Go has no shared mutable default-options object whose changes affect other executors."
+            "note": "Nil send/yield flags on Executor or SubworkflowConfig enable both behaviors. Go has no shared mutable default-options singleton."
           }
         }
       },
@@ -22897,7 +22906,7 @@
           "AllowWrapped": {
             "go_symbols": [],
             "status": "unmapped",
-            "note": "Go RequestPort has no wrapped-request policy field; its binding always registers wrapped-request handling."
+            "note": "Go RequestPort has no wrapped-request policy field; RequestPort.BindWithWrappedRequests selects acceptance per binding instead."
           }
         },
         "methods": {
@@ -22994,19 +23003,20 @@
         "area": "workflows",
         "assembly": "Microsoft.Agents.AI.Workflows",
         "mapping": {
-          "go": "port.Bind()",
+          "go": "port.BindWithWrappedRequests(allowWrapped)",
           "go_symbols": [
             "workflow.RequestPort.Bind",
+            "workflow.RequestPort.BindWithWrappedRequests",
             "workflow.ExecutorBinding"
           ],
-          "status": "partial",
-          "note": "Go creates a general binding for the request port and handles wrapped requests, but cannot disable wrapped-request acceptance."
+          "status": "adapted",
+          "note": "Go creates a general ExecutorBinding; BindWithWrappedRequests captures the wrapped-request policy in the factory rather than exposing a derived binding record."
         },
         "properties": {
           "AllowWrapped": {
             "go_symbols": [],
             "status": "unmapped",
-            "note": "Go port bindings have no AllowWrapped setting or getter; wrapped requests are always handled."
+            "note": "RequestPort.BindWithWrappedRequests configures the policy, but ExecutorBinding exposes no AllowWrapped getter."
           },
           "IsSharedInstance": {
             "go_symbols": [
@@ -23050,7 +23060,7 @@
               "workflow.ExecutorBinding.RawValue"
             ],
             "status": "partial",
-            "note": "The bound port is extractable from RawValue; the AllowWrapped component has no Go representation.",
+            "note": "The bound port is extractable from RawValue; the captured wrapped-request policy is not exposed as a binding field.",
             "compiler_generated": true
           },
           "Equals(ExecutorBinding) -> bool": {
@@ -23107,12 +23117,13 @@
         },
         "constructors": {
           "RequestPortBinding(RequestPort, bool)": {
-            "go": "port.Bind()",
+            "go": "port.BindWithWrappedRequests(allowWrapped)",
             "go_symbols": [
-              "workflow.RequestPort.Bind"
+              "workflow.RequestPort.Bind",
+              "workflow.RequestPort.BindWithWrappedRequests"
             ],
-            "status": "partial",
-            "note": "Bind constructs the port host with wrapped-request support; the false AllowWrapped case is not configurable in Go."
+            "status": "adapted",
+            "note": "The Go binding factory accepts the wrapped-request policy and returns a general ExecutorBinding rather than a derived record; Bind supplies the default true."
           }
         }
       },
@@ -24005,16 +24016,17 @@
           "go": "inproc.BindSubworkflowAsExecutor(wf, id, inproc.SubworkflowConfig{})",
           "go_symbols": [
             "workflow/inproc.BindSubworkflowAsExecutor",
-            "workflow.ExecutorBinding"
+            "workflow.ExecutorBinding",
+            "workflow/inproc.SubworkflowConfig"
           ],
-          "status": "partial",
-          "note": "Go provides ownership-taking, session-aware subworkflow hosting through a general binding; it always sends and yields child outputs instead of exposing the .NET host's independent ExecutorOptions gates."
+          "status": "adapted",
+          "note": "Ownership-taking, session-aware hosting uses a general ExecutorBinding with SubworkflowConfig for independent child-output send/yield gates. The binding is not a typed subworkflow record."
         },
         "properties": {
           "ExecutorOptions": {
             "go_symbols": [],
             "status": "unmapped",
-            "note": "The Go subworkflow binding does not retain or expose ExecutorOptions controlling child-output send/yield forwarding."
+            "note": "SubworkflowConfig configures forwarding at bind time; ExecutorBinding has no getter for the captured options."
           },
           "IsSharedInstance": {
             "go_symbols": [
@@ -24058,7 +24070,7 @@
               "workflow.ExecutorBinding.ID"
             ],
             "status": "partial",
-            "note": "Go exposes the workflow and executor ID through RawValue and ID; the ExecutorOptions component is not retained.",
+            "note": "Read the child workflow and ID from RawValue and ID; captured SubworkflowConfig cannot be read back through the binding.",
             "compiler_generated": true
           },
           "Equals(ExecutorBinding) -> bool": {
@@ -24117,10 +24129,11 @@
           "SubworkflowBinding(Workflow, string, ExecutorOptions)": {
             "go": "inproc.BindSubworkflowAsExecutor(wf, id, inproc.SubworkflowConfig{})",
             "go_symbols": [
-              "workflow/inproc.BindSubworkflowAsExecutor"
+              "workflow/inproc.BindSubworkflowAsExecutor",
+              "workflow/inproc.SubworkflowConfig"
             ],
-            "status": "partial",
-            "note": "The Go factory constructs the subworkflow binding, but cannot configure the .NET host's independent child-output send/yield forwarding gates."
+            "status": "adapted",
+            "note": "The factory returns a general ExecutorBinding with ownership-taking, session-aware hosting and independent send/yield flags in SubworkflowConfig; nil enables both."
           }
         }
       },
@@ -24641,7 +24654,8 @@
             "go_symbols": [
               "workflow.Builder.AddFanOutEdge"
             ],
-            "status": "mapped"
+            "status": "partial",
+            "note": "Go delivers once per selected target ID. The .NET builder accepts repeated target bindings and can deliver once per occurrence."
           },
           "AddFanOutEdge(ExecutorBinding, IEnumerable<ExecutorBinding>, string) -> WorkflowBuilder": {
             "go": "builder.AddFanOutEdge(source, targets, workflow.WithEdgeLabel(label))",
@@ -24649,8 +24663,8 @@
               "workflow.Builder.AddFanOutEdge",
               "workflow.WithEdgeLabel"
             ],
-            "status": "adapted",
-            "note": "The label becomes an edge option rather than a positional overload argument."
+            "status": "partial",
+            "note": "The label becomes a Go edge option. Go delivers once per selected target ID, while .NET accepts repeated target bindings and can deliver once per occurrence."
           },
           "AddFanOutEdge<T>(ExecutorBinding, IEnumerable<ExecutorBinding>, Func<T, int, IEnumerable<int>>) -> WorkflowBuilder": {
             "go": "builder.AddFanOutEdge(source, targets, workflow.WithEdgeAssigner[string](assigner))",
@@ -24658,8 +24672,8 @@
               "workflow.Builder.AddFanOutEdge",
               "workflow.WithEdgeAssigner"
             ],
-            "status": "adapted",
-            "note": "Use a typed assigner option whose Go callback takes target count before message and returns iter.Seq[int], rather than message/count and IEnumerable<int>."
+            "status": "partial",
+            "note": "Use a typed Go assigner option whose callback takes target count before message and returns iter.Seq[int]. Go delivers once per selected target ID; .NET preserves repeated target bindings and repeated assigner indexes, which can produce repeated deliveries."
           },
           "AddFanOutEdge<T>(ExecutorBinding, IEnumerable<ExecutorBinding>, Func<T, int, IEnumerable<int>>, string) -> WorkflowBuilder": {
             "go": "builder.AddFanOutEdge(source, targets, workflow.WithEdgeAssigner[any](assigner), workflow.WithEdgeLabel(label))",
@@ -24668,8 +24682,8 @@
               "workflow.WithEdgeAssigner",
               "workflow.WithEdgeLabel"
             ],
-            "status": "adapted",
-            "note": "Selector and label become options; the selector takes count/message rather than message/count and returns iter.Seq[int]."
+            "status": "partial",
+            "note": "Selector and label become Go options; the selector takes count before message and returns iter.Seq[int]. Go delivers once per selected target ID; .NET preserves repeated target bindings and repeated assigner indexes, which can produce repeated deliveries."
           },
           "BindExecutor(ExecutorBinding) -> WorkflowBuilder": {
             "go": "builder.BindExecutor(binding)",

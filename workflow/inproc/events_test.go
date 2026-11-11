@@ -575,6 +575,41 @@ func TestExecutionEnvironment_RunStreamingPropagatesStartExecutorInitializationE
 	}
 }
 
+func TestExecutionEnvironment_CloseIgnoresExecutorInitializationFailure(t *testing.T) {
+	expected := errors.New("initialize start executor")
+	binding := workflow.ExecutorBinding{ID: "start", ImplementationID: "start"}
+	binding.NewExecutorFunc = func(string) (*workflow.Executor, error) {
+		return &workflow.Executor{
+			ID: binding.ID,
+			InitializeFunc: func(*workflow.Context) error {
+				return expected
+			},
+			ConfigureProtocol: func(builder *workflow.ProtocolBuilder) (*workflow.ProtocolBuilder, error) {
+				builder.RouteBuilder.AddHandlerRaw(reflect.TypeFor[string](), nil, func(*workflow.Context, any) (any, error) {
+					return nil, nil
+				})
+				return builder, nil
+			},
+		}, nil
+	}
+	wf, err := workflow.NewBuilder(binding).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = inproc.Default.RunStreaming(t.Context(), wf, "message")
+	if !errors.Is(err, expected) {
+		t.Fatalf("RunStreaming() error = %v, want %v", err, expected)
+	}
+	if got := err.Error(); got != expected.Error() {
+		t.Fatalf("RunStreaming() error = %q, want the initialization error reported once", got)
+	}
+
+	if _, err := inproc.Default.RunStreaming(t.Context(), wf, "message"); !errors.Is(err, expected) {
+		t.Fatalf("second RunStreaming() error = %v, want %v", err, expected)
+	}
+}
+
 func TestExecutionEnvironment_RunStreamingPropagatesRuntimeProtocolError(t *testing.T) {
 	expected := errors.New("configure runtime protocol")
 	binding := workflow.ExecutorBinding{ID: "start", ImplementationID: "start"}

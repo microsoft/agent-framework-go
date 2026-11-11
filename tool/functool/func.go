@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"reflect"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/microsoft/agent-framework-go/format/jsonformat"
 	"github.com/microsoft/agent-framework-go/tool"
 )
@@ -16,6 +17,11 @@ import (
 type Config struct {
 	Name        string
 	Description string
+
+	// ArgName overrides the name of the single property wrapping the input.
+	// When empty, [New] chooses the name based on the input type. Setting ArgName
+	// for an object-shaped struct input causes [New] to return an error.
+	ArgName string
 }
 
 // A Handler handles a call to tools/call.
@@ -48,9 +54,19 @@ func MustNew[In, Out any](cfg Config, h HandlerFor[In, Out]) tool.FuncTool {
 }
 
 // New builds a [tool.FuncTool] from cfg and the typed handler h. It derives the
-// JSON input schema from In and the output schema from Out, wrapping non-struct
-// inputs and validating arguments before invoking h. It returns an error if
-// either schema cannot be constructed.
+// JSON input schema from In and the output schema from Out, and validates
+// arguments before invoking h. It returns an error if either schema cannot be
+// constructed.
+//
+// The input schema always describes a JSON object. Object-shaped structs use
+// their JSON fields as arguments. Other inputs require a single property:
+//   - "values" for slices and arrays;
+//   - "entries" for maps;
+//   - "value" for all other types.
+//
+// Pointers follow their pointed-to type. For example, an []int input requires
+// {"values":[1,2]}; a bare array is rejected. [Config.ArgName] overrides the
+// wrapped property name and cannot be set for object-shaped struct inputs.
 func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) {
 	if h == nil {
 		return nil, errors.New("functool: handler is required")
@@ -59,11 +75,11 @@ func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) 
 		cfg: cfg,
 	}
 	var err error
-	t.inputFormat, t.inputWrapped, err = inputFormatFor[In]()
+	t.inputFormat, t.inputKey, err = inputFormatFor[In](cfg.ArgName)
 	if err != nil {
 		return nil, fmt.Errorf("input schema: %w", err)
 	}
-	t.outputFormat, err = outputFormatFor[Out]()
+	t.outputFormat, err = formatFor[Out]()
 	if err != nil {
 		return nil, fmt.Errorf("output schema: %w", err)
 	}
@@ -84,16 +100,16 @@ func New[In, Out any](cfg Config, h HandlerFor[In, Out]) (tool.FuncTool, error) 
 	}
 
 	t.handler = func(ctx context.Context, args string) (any, error) {
+		data := []byte(args)
 		var in In
-		if t.inputWrapped {
-			// Extract wrapped value.
-			var decodedArgs inputWrapper[In]
-			if err := t.inputFormat.Unmarshal([]byte(args), &decodedArgs); err != nil {
+		if t.inputKey != "" {
+			var decodedArgs map[string]In
+			if err := t.inputFormat.Unmarshal(data, &decodedArgs); err != nil {
 				return nil, err
 			}
-			in = decodedArgs.Arg0
+			in = decodedArgs[t.inputKey]
 		} else {
-			if err := t.inputFormat.Unmarshal([]byte(args), &in); err != nil {
+			if err := t.inputFormat.Unmarshal(data, &in); err != nil {
 				return nil, err
 			}
 		}
@@ -118,7 +134,7 @@ type funcTool struct {
 	handler Handler
 
 	inputFormat  *jsonformat.Format
-	inputWrapped bool
+	inputKey     string
 	outputFormat *jsonformat.Format
 }
 
@@ -148,35 +164,49 @@ func (t *funcTool) Call(ctx context.Context, args string) (any, error) {
 	return t.handler(ctx, args)
 }
 
-type inputWrapper[T any] struct {
-	Arg0 T
-}
-
-func inputFormatFor[T any]() (format *jsonformat.Format, wrapped bool, err error) {
+func inputFormatFor[T any](argName string) (*jsonformat.Format, string, error) {
 	typ := reflect.TypeFor[T]()
 	if typ == reflect.TypeFor[any]() {
-		return nil, false, fmt.Errorf("input type any is not supported by HandlerFor; use Handler for dynamic inputs")
+		return nil, "", fmt.Errorf("input type any is not supported by HandlerFor; use Handler for dynamic inputs")
 	}
-	// Dereference pointers so a *Struct input produces the same flat schema as
-	// a Struct input (jsonformat.ForType treats pointers equivalently); only
-	// genuinely non-struct inputs are wrapped in inputWrapper.
-	elem := typ
-	for elem.Kind() == reflect.Pointer {
-		elem = elem.Elem()
+	for typ.Kind() == reflect.Pointer {
+		typ = typ.Elem()
 	}
-	if elem.Kind() != reflect.Struct {
-		typ = reflect.TypeFor[inputWrapper[T]]()
-		wrapped = true
+	if typ.Kind() == reflect.Struct {
+		format, err := formatFor[T]()
+		if err != nil {
+			return nil, "", err
+		}
+		if format.Schema.(*jsonschema.Schema).Type == "object" {
+			if argName != "" {
+				return nil, "", errors.New("ArgName cannot be used with object-shaped struct inputs")
+			}
+			return format, "", nil
+		}
 	}
-	responseFormat, err := jsonformat.ForType(typ)
+	if argName == "" {
+		switch typ.Kind() {
+		case reflect.Slice, reflect.Array:
+			argName = "values"
+		case reflect.Map:
+			argName = "entries"
+		default:
+			argName = "value"
+		}
+	}
+	format, err := formatFor[struct {
+		Value T `json:"value"`
+	}]()
 	if err != nil {
-		return nil, false, err
+		return nil, "", err
 	}
-	format, err = jsonformat.FromResponseFormat(responseFormat)
-	return format, wrapped, err
+	schema := format.Schema.(*jsonschema.Schema)
+	schema.Properties = map[string]*jsonschema.Schema{argName: schema.Properties["value"]}
+	schema.Required = []string{argName}
+	return format, argName, nil
 }
 
-func outputFormatFor[T any]() (*jsonformat.Format, error) {
+func formatFor[T any]() (*jsonformat.Format, error) {
 	typ := reflect.TypeFor[T]()
 	responseFormat, err := jsonformat.ForType(typ)
 	if err != nil {
