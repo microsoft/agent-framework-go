@@ -4,9 +4,6 @@ intent: Reduce maintainer effort when porting .NET changes to Go without cosmeti
 tracker-id: dotnet-code-portability-weekly
 engine:
    id: copilot
-sandbox:
-   agent:
-      version: v0.28.25
 network:
    allowed:
       - defaults

@@ -242,6 +242,59 @@ func TestResponsesConfigInstructions_NonStreaming(t *testing.T) {
 	}
 }
 
+func TestResponsesRawInstructionsArePreserved(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		raw        string
+		configured string
+		runtime    string
+		want       string
+	}{
+		{name: "raw only", raw: "raw", want: "raw"},
+		{name: "empty raw", configured: "configured", runtime: "runtime", want: "configured\nruntime"},
+		{name: "additive", raw: "raw", configured: "configured", runtime: "runtime", want: "raw\nconfigured\nruntime"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			requests := make(chan string, 1)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Instructions string `json:"instructions"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+					http.Error(w, "invalid request", http.StatusBadRequest)
+					return
+				}
+				requests <- body.Instructions
+				w.Header().Set("Content-Type", "application/json")
+				if _, err := io.WriteString(w, `{"id":"resp-test","object":"response","status":"completed","model":"test-model","output":[]}`); err != nil {
+					t.Error(err)
+				}
+			}))
+			defer server.Close()
+			a := openaiprovider.NewResponsesAgent(openai.NewClient(option.WithAPIKey("test"), option.WithBaseURL(server.URL)), openaiprovider.AgentConfig{
+				Model: "test-model", Instructions: tc.configured,
+			})
+			params := responses.ResponseNewParams{Instructions: openai.String(tc.raw)}
+			opts := []agent.Option{openaiprovider.ResponsesNewParams(params)}
+			if tc.runtime != "" {
+				opts = append(opts, agent.WithInstructions(tc.runtime))
+			}
+			for range 2 {
+				if _, err := a.RunText(t.Context(), "hello", opts...).Collect(); err != nil {
+					t.Fatal(err)
+				}
+				if got := <-requests; got != tc.want {
+					t.Fatalf("instructions=%q, want %q", got, tc.want)
+				}
+			}
+			if params.Instructions.Or("") != tc.raw {
+				t.Fatal("request construction changed caller-owned raw instructions")
+			}
+		})
+	}
+}
+
 func TestResponsesBasicRequestResponse_NonStreaming(t *testing.T) {
 	const input = `
             {

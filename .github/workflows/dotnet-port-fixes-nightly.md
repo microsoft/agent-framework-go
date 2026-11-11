@@ -4,9 +4,6 @@ intent: Correct existing Go behavior and test gaps using verified .NET evidence 
 tracker-id: dotnet-port-fixes-nightly
 engine:
    id: copilot
-sandbox:
-   agent:
-      version: v0.28.25
 max-ai-credits: 2000
 network:
    allowed:

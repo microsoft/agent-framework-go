@@ -26,6 +26,71 @@ import (
 
 const testModel = "gemini-test"
 
+func TestDeclarationOnlyToolsAreAdvertised(t *testing.T) {
+	requests := make(chan []string, 1)
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requestCount.Add(1) != 1 {
+			t.Error("declaration-only call caused another provider request")
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		var body struct {
+			Tools []struct {
+				FunctionDeclarations []struct {
+					Name string `json:"name"`
+				} `json:"functionDeclarations"`
+			} `json:"tools"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		var names []string
+		for _, wireTool := range body.Tools {
+			for _, declaration := range wireTool.FunctionDeclarations {
+				names = append(names, declaration.Name)
+			}
+		}
+		requests <- names
+		w.Header().Set("Content-Type", "application/json")
+		if _, err := io.WriteString(w, `{"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"frontend-call","name":"frontend","args":{}}}]},"finishReason":"STOP"}]}`); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer server.Close()
+	client, err := genai.NewClient(t.Context(), &genai.ClientConfig{
+		Backend:     genai.BackendGeminiAPI,
+		APIKey:      "test",
+		HTTPOptions: genai.HTTPOptions{BaseURL: server.URL},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := geminiprovider.NewAgent(client, geminiprovider.AgentConfig{Model: testModel})
+	fn := functool.MustNew(functool.Config{Name: "frontend"}, func(context.Context, struct{}) (string, error) {
+		t.Error("declaration-only tool was invoked")
+		return "", nil
+	})
+	response, err := a.RunText(t.Context(), "hello", agent.WithTool(struct{ tool.SchemaTool }{fn})).Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names := <-requests; !slices.Equal(names, []string{"frontend"}) {
+		t.Fatalf("wire tools=%v, want frontend", names)
+	}
+	var call *message.FunctionCallContent
+	for content := range response.Contents() {
+		if functionCall, ok := content.(*message.FunctionCallContent); ok {
+			call = functionCall
+		}
+	}
+	if call == nil || call.Name != "frontend" || call.CallID != "frontend-call" || call.InformationalOnly {
+		t.Fatalf("returned call=%+v, want an unexecuted frontend call", call)
+	}
+}
+
 // testOutput is the structured type used across structured output tests.
 type testOutput struct {
 	Name string `json:"name"`
