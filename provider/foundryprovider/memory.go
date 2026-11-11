@@ -270,15 +270,19 @@ func (p *MemoryProvider) staticMemories(ctx context.Context, session *agent.Sess
 	var initialized bool
 	if ok, _ := session.Get(initKey, &initialized); ok && initialized {
 		var cached []string
-		session.Get(memKey, &cached)
+		_, _ = session.Get(memKey, &cached)
 		return cached
 	}
 	result, err := p.client.SearchMemories(ctx, p.memoryStoreName, scope, &azaiprojects.MemoryStoresClientSearchMemoriesOptions{
 		Options: &azaiprojects.MemorySearchResultOptions{MaxMemories: p.config.MaxMemories},
 	})
 	if err != nil {
-		// Leave the session uninitialized so the next turn retries.
+		// Match the Python provider's one-shot semantics: cache an empty list
+		// and mark the session initialized even on failure, so a failing store
+		// is not re-queried on every subsequent turn.
 		p.log(ctx, slog.LevelError, "foundrymemory: failed to search static memories", "memory_store", p.memoryStoreName, "error", err)
+		session.Set(memKey, []string{})
+		session.Set(initKey, true)
 		return nil
 	}
 	static := memoryContents(result.Memories)

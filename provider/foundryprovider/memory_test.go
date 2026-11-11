@@ -229,6 +229,49 @@ func TestMemoryProviderInjectsStaticMemories(t *testing.T) {
 	}
 }
 
+// A failed item-less static search is attempted only once per session: the
+// provider caches an empty static list and proceeds, matching the Python
+// provider's one-shot semantics (test_static_memories_only_retrieved_once).
+func TestMemoryProviderStaticSearchFailureNotRetried(t *testing.T) {
+	transport := &recordingTransport{}
+	transport.handle = func(req *http.Request, body string) (*http.Response, error) {
+		if strings.Contains(body, `"items":[{`) {
+			return jsonResponse(req, http.StatusOK, `{"memories":[{"memory_item":{"content":"contextual memory","kind":"procedural","memory_id":"mem_c","scope":"user-456","updated_at":1}}]}`), nil
+		}
+		return jsonResponse(req, http.StatusInternalServerError, `{"error":{"code":"InternalError"}}`), nil
+	}
+	provider := foundryprovider.NewMemoryProvider(validEndpoint, validCredential, "memory", validScope, foundryprovider.MemoryProviderConfig{
+		// Disable the SDK's own retry policy so each provider-level search is
+		// exactly one recorded request.
+		ClientOptions: azcore.ClientOptions{Transport: transport, Retry: policy.RetryOptions{MaxRetries: -1}},
+		ContextPrompt: new("Memories:"),
+	})
+	session := &agent.Session{}
+
+	for turn := 1; turn <= 2; turn++ {
+		messages, _, err := provider.Invoking(t.Context(), agent.InvokingContext{
+			Messages: []*message.Message{message.NewText("turn")},
+			Options:  []agent.Option{agent.WithSession(session)},
+		})
+		if err != nil {
+			t.Fatalf("turn %d Invoking error = %v", turn, err)
+		}
+		if ctx := messagesString(messages); !strings.Contains(ctx, "contextual memory") {
+			t.Fatalf("turn %d context = %q, want contextual memories despite static failure", turn, ctx)
+		}
+	}
+
+	itemless := 0
+	for _, r := range transport.Requests() {
+		if !strings.Contains(r.Body, `"items":[{`) {
+			itemless++
+		}
+	}
+	if itemless != 1 {
+		t.Fatalf("item-less static searches = %d, want 1 (failure cached, not retried)", itemless)
+	}
+}
+
 func messagesString(messages []*message.Message) string {
 	var b strings.Builder
 	for _, m := range messages {
