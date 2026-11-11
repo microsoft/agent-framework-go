@@ -19,9 +19,12 @@ const (
 	remainingTodosPlaceholder = "{remaining_todos}"
 
 	// defaultCompletionLoopFeedbackTemplate is used when a completion-loop
-	// evaluator does not receive a custom feedback template.
-	defaultCompletionLoopFeedbackTemplate = "The following todo items are not complete yet:\n" +
-		remainingTodosPlaceholder + "\nContinue working on the remaining items, and mark each one complete as you finish it."
+	// evaluator does not receive a custom feedback template. It mirrors .NET's
+	// TodoCompletionLoopEvaluator.DefaultFeedbackMessageTemplate so agents see
+	// the same model-facing prompt across SDKs.
+	defaultCompletionLoopFeedbackTemplate = "You still have incomplete todo items. " +
+		"Continue working until every item is complete, marking each item as complete when finished. " +
+		"The following items are still open:\n" + remainingTodosPlaceholder
 )
 
 // ModeProvider reports a session's current agent mode. *agentmode.Provider
@@ -71,6 +74,11 @@ func NewCompletionLoopEvaluator(provider *Provider, config CompletionLoopEvaluat
 	if len(config.Modes) > 0 && config.ModeProvider == nil {
 		panic("todo: completion loop evaluator requires a ModeProvider when Modes is set")
 	}
+	for _, mode := range config.Modes {
+		if strings.TrimSpace(mode) == "" {
+			panic("todo: completion loop evaluator mode names cannot be blank")
+		}
+	}
 	template := defaultCompletionLoopFeedbackTemplate
 	if config.FeedbackMessageTemplate != nil {
 		template = *config.FeedbackMessageTemplate
@@ -111,8 +119,10 @@ func formatCompletionLoopFeedback(template string, remaining []Item) string {
 			sb.WriteString("\n")
 		}
 		fmt.Fprintf(&sb, "- %d: %s", item.ID, item.Title)
-		if item.Description != "" {
-			fmt.Fprintf(&sb, " (%s)", item.Description)
+		// Match .NET's FormatRemainingTodos: an em-dash separator, and
+		// whitespace-only descriptions are omitted entirely.
+		if strings.TrimSpace(item.Description) != "" {
+			fmt.Fprintf(&sb, " — %s", item.Description)
 		}
 	}
 	return strings.ReplaceAll(template, remainingTodosPlaceholder, sb.String())

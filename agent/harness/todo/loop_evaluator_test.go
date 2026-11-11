@@ -97,6 +97,40 @@ func TestCompletionLoopEvaluatorCustomTemplate(t *testing.T) {
 	}
 }
 
+// Descriptions render with .NET's em-dash separator, and whitespace-only
+// descriptions are omitted, matching FormatRemainingTodos.
+func TestCompletionLoopEvaluatorDescriptionFormat(t *testing.T) {
+	provider := todo.New(nil)
+	opts := sessionOpts()
+	_, outOpts, err := invokeProvider(provider, context.Background(), newMessages("start"), opts...)
+	if err != nil {
+		t.Fatalf("Invoking() error = %v", err)
+	}
+	callTool(t, outOpts, "todos_add", `{"todos":[{"title":"described","description":"has detail"},{"title":"blank desc","description":"   "}]}`)
+
+	template := "{remaining_todos}"
+	evaluator := todo.NewCompletionLoopEvaluator(provider, todo.CompletionLoopEvaluatorConfig{
+		FeedbackMessageTemplate: &template,
+	})
+
+	evaluation := evaluate(t, evaluator, opts)
+	if want := "- 1: described — has detail\n- 2: blank desc"; evaluation.Feedback != want {
+		t.Errorf("Feedback = %q, want %q", evaluation.Feedback, want)
+	}
+}
+
+func TestCompletionLoopEvaluatorBlankModePanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected a panic for a blank mode name")
+		}
+	}()
+	todo.NewCompletionLoopEvaluator(todo.New(nil), todo.CompletionLoopEvaluatorConfig{
+		Modes:        []string{"planning", "  "},
+		ModeProvider: fixedModeProvider("planning"),
+	})
+}
+
 func TestCompletionLoopEvaluatorModeGate(t *testing.T) {
 	provider := todo.New(nil)
 	opts := sessionOpts()
