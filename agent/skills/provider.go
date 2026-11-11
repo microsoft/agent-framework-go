@@ -124,10 +124,10 @@ type ContextProviderOptions struct {
 	// run_skill_script requires approval.
 	DisableRunSkillScriptApproval bool
 
-	// IncludeDetailedErrors includes script execution error details in the
+	// IncludeDetailedErrors includes script lookup and execution error details in the
 	// run_skill_script result returned to the model.
 	//
-	// When false, script execution errors are returned to the caller so tool
+	// When false, script lookup and execution errors are returned to the caller so tool
 	// invocation middleware can apply its own error-detail policy. When true,
 	// the exception message is appended to the tool result so the model can
 	// retry with different arguments. Only enable this for trusted skills and
@@ -503,9 +503,23 @@ func (p *ContextProvider) loadSkill(ctx context.Context, skills providedSkillSet
 }
 
 func (p *ContextProvider) readSkillResource(ctx context.Context, skills providedSkillSet, skillName, resourceName string) (any, error) {
-	_, resource, lookupError := resolveSkillItem(skills, skillName, resourceName, "Resource", providedSkill.lookupResource)
+	resolved, lookupError := skills.resolveItemSkill(skillName, resourceName, "Resource")
 	if lookupError != "" {
 		return lookupError, nil
+	}
+	resource, found := resolved.lookupResource(resourceName)
+	if !found && resolved.skill.GetResource != nil {
+		dynamic, err := resolved.skill.GetResource(ctx, resourceName)
+		if err != nil {
+			p.logger.Error("Failed to resolve resource from skill", "resourceName", resourceName, "skillName", skillName, "error", err)
+			return nil, err
+		}
+		if dynamic != nil {
+			resource, found = *dynamic, true
+		}
+	}
+	if !found {
+		return fmt.Sprintf("Error: Resource '%s' not found in skill '%s'.", resourceName, skillName), nil
 	}
 	if resource.Read == nil {
 		err := fmt.Errorf("skills: resource %q in skill %q has no reader", resourceName, skillName)
@@ -521,16 +535,29 @@ func (p *ContextProvider) readSkillResource(ctx context.Context, skills provided
 }
 
 func (p *ContextProvider) runSkillScript(ctx context.Context, skills providedSkillSet, skillName, scriptName string, arguments json.RawMessage) (any, error) {
-	resolved, script, lookupError := resolveSkillItem(skills, skillName, scriptName, "Script", providedSkill.lookupScript)
+	resolved, lookupError := skills.resolveItemSkill(skillName, scriptName, "Script")
 	if lookupError != "" {
 		return lookupError, nil
 	}
-	var result any
+	script, found := resolved.lookupScript(scriptName)
 	var err error
-	if script.Run == nil {
-		err = errors.New("script runner is nil")
-	} else {
-		result, err = script.Run(ctx, resolved.skill, arguments)
+	if !found && resolved.skill.GetScript != nil {
+		var dynamic *Script
+		dynamic, err = resolved.skill.GetScript(ctx, scriptName)
+		if dynamic != nil {
+			script, found = *dynamic, true
+		}
+	}
+	var result any
+	if err == nil {
+		if !found {
+			return fmt.Sprintf("Error: Script '%s' not found in skill '%s'.", scriptName, skillName), nil
+		}
+		if script.Run == nil {
+			err = errors.New("script runner is nil")
+		} else {
+			result, err = script.Run(ctx, resolved.skill, arguments)
+		}
 	}
 	if err != nil {
 		p.logger.Error("Failed to execute script from skill", "scriptName", scriptName, "skillName", skillName, "error", err)
@@ -557,27 +584,14 @@ func (skills providedSkillSet) lookupSkill(skillName string) (providedSkill, str
 	return resolved, ""
 }
 
-func resolveSkillItem[T any](
-	skills providedSkillSet,
-	skillName, itemName, itemKind string,
-	lookup func(providedSkill, string) (T, bool),
-) (providedSkill, T, string) {
-	var zero T
+func (skills providedSkillSet) resolveItemSkill(skillName, itemName, itemKind string) (providedSkill, string) {
 	if lookupError := validateSkillName(skillName); lookupError != "" {
-		return providedSkill{}, zero, lookupError
+		return providedSkill{}, lookupError
 	}
 	if strings.TrimSpace(itemName) == "" {
-		return providedSkill{}, zero, fmt.Sprintf("Error: %s name cannot be empty.", itemKind)
+		return providedSkill{}, fmt.Sprintf("Error: %s name cannot be empty.", itemKind)
 	}
-	resolved, lookupError := skills.lookupSkill(skillName)
-	if lookupError != "" {
-		return providedSkill{}, zero, lookupError
-	}
-	item, ok := lookup(resolved, itemName)
-	if !ok {
-		return providedSkill{}, zero, fmt.Sprintf("Error: %s '%s' not found in skill '%s'.", itemKind, itemName, skillName)
-	}
-	return resolved, item, ""
+	return skills.lookupSkill(skillName)
 }
 
 func validateSkillName(skillName string) string {

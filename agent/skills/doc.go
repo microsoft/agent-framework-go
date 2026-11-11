@@ -9,6 +9,10 @@
 // Scripts accept JSON values through [Script.Run]. Providers support opt-in
 // source ownership and explicit cleanup; see [ContextProvider.Close].
 //
+// Skills can resolve additional resources and scripts on demand through
+// [Skill.GetResource] and [Skill.GetScript]. Declared resources and scripts take
+// precedence; the provider does not cache dynamic lookup results.
+//
 // [AggregatingSource], [CachingSource], [FilteringSource], and
 // [DeduplicatingSource] can also be composed independently of a provider.
 package skills

@@ -266,18 +266,35 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			}
 			messagesCloned = changed
 		}
+		tools, _ := f.createToolsMap(opts)
 		var approvalCallOrder []string
+		var autoApprovedCalls *pendingAutoApprovedCallsState
+		var injectedAutoApprovals bool
 		if !f.disableApprovalNotRequiredBypassing {
 			var changed bool
 			var err error
-			messages, approvalCallOrder, changed, err = injectPendingAutoApprovedCalls(session, messages)
+			messages, approvalCallOrder, changed, err = f.injectPendingAutoApprovedCalls(ctx, session, messages, tools)
 			if err != nil {
 				yield(nil, err)
 				return
 			}
+			injectedAutoApprovals = changed
 			messagesCloned = messagesCloned || changed
+			if session != nil {
+				autoApprovedCalls = new(pendingAutoApprovedCallsState)
+			}
 		}
-		tools, _ := f.createToolsMap(opts)
+		var completed bool
+		defer func() {
+			if !completed || autoApprovedCalls == nil {
+				return
+			}
+			if len(autoApprovedCalls.Calls) > 0 {
+				session.Set(pendingAutoApprovedCallsStateKey, *autoApprovedCalls)
+			} else if injectedAutoApprovals {
+				session.Delete(pendingAutoApprovedCallsStateKey)
+			}
+		}()
 
 		// This is a synthetic ID since we're generating the tool messages instead of getting them from
 		// the underlying provider. When emitting the streamed chunks, it's perfectly valid for us to
@@ -340,6 +357,7 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 				if finalConversationID != nil && serviceManagedHistory {
 					*finalConversationID = new(serviceID)
 				}
+				completed = true
 				return
 			}
 		}
@@ -370,7 +388,9 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 					return
 				}
 				if update == nil {
-					yield(nil, nil)
+					if !yield(nil, nil) {
+						return
+					}
 					continue
 				}
 				if update.ConversationID != nil {
@@ -403,12 +423,7 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 			for ; lastYieldedUpdateIdx < len(updates); lastYieldedUpdateIdx++ {
 				update := updates[lastYieldedUpdateIdx]
 				if hasApprovalRequiringFcc {
-					contents, err := f.prepareApprovalContents(ctx, update.Contents, tools, session, functionCallContents)
-					if err != nil {
-						yield(nil, err)
-						return
-					}
-					if contents != nil {
+					if contents := f.prepareApprovalContents(ctx, update.Contents, tools, autoApprovedCalls, functionCallContents); contents != nil {
 						update.Contents = contents
 					}
 				}
@@ -442,6 +457,7 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 				return
 			}
 			if shouldTerminate {
+				completed = true
 				return
 			}
 
@@ -470,10 +486,11 @@ func (f *autocall) run(next agent.RunFunc, ctx context.Context, messages []*mess
 				messagesToSend = []*message.Message{newMsg}
 			}
 		}
+		completed = true
 	}
 }
 
-func (f *autocall) prepareApprovalContents(ctx context.Context, contents message.Contents, tools map[string]tool.SchemaTool, session *agent.Session, callOrder []*message.FunctionCallContent) (message.Contents, error) {
+func (f *autocall) prepareApprovalContents(ctx context.Context, contents message.Contents, tools map[string]tool.SchemaTool, pending *pendingAutoApprovedCallsState, callOrder []*message.FunctionCallContent) message.Contents {
 	var updated message.Contents
 	var autoApproved []*message.FunctionCallContent
 	for i, c := range contents {
@@ -483,7 +500,7 @@ func (f *autocall) prepareApprovalContents(ctx context.Context, contents message
 			}
 			declaration, known := tools[fcc.Name]
 			_, invocable := declaration.(tool.FuncTool)
-			if !f.disableApprovalNotRequiredBypassing && session != nil && known && invocable && !toolRequiresApproval(declaration) {
+			if pending != nil && known && invocable && !toolRequiresApproval(declaration) {
 				autoApproved = append(autoApproved, snapshotFunctionCall(fcc))
 				updated[i] = nil
 				continue
@@ -496,12 +513,10 @@ func (f *autocall) prepareApprovalContents(ctx context.Context, contents message
 		}
 	}
 	if len(autoApproved) > 0 {
-		if err := recordPendingAutoApprovedCalls(session, autoApproved, callOrder); err != nil {
-			return nil, err
-		}
+		recordPendingAutoApprovedCalls(pending, autoApproved, callOrder)
 		updated = slices.DeleteFunc(updated, func(content message.Content) bool { return content == nil })
 	}
-	return updated, nil
+	return updated
 }
 
 func toolRequiresApproval(t tool.SchemaTool) bool {
@@ -978,7 +993,7 @@ func toolCallsEquivalent(a, b message.ToolCallContent) bool {
 	return reflect.TypeOf(a) == reflect.TypeOf(b) && a.GetCallID() == b.GetCallID()
 }
 
-func injectPendingAutoApprovedCalls(session *agent.Session, messages []*message.Message) ([]*message.Message, []string, bool, error) {
+func (f *autocall) injectPendingAutoApprovedCalls(ctx context.Context, session *agent.Session, messages []*message.Message, tools map[string]tool.SchemaTool) ([]*message.Message, []string, bool, error) {
 	if session == nil {
 		return messages, nil, false, nil
 	}
@@ -990,8 +1005,6 @@ func injectPendingAutoApprovedCalls(session *agent.Session, messages []*message.
 	if !ok || len(state.Calls) == 0 {
 		return messages, nil, false, nil
 	}
-	session.Delete(pendingAutoApprovedCallsStateKey)
-
 	requests := make(message.Contents, 0, len(state.Calls))
 	responses := make(message.Contents, 0, len(state.Calls))
 	for _, call := range state.Calls {
@@ -1000,10 +1013,15 @@ func injectPendingAutoApprovedCalls(session *agent.Session, messages []*message.
 		}
 		request := &message.ToolApprovalRequestContent{
 			RequestID: composeApprovalRequestID(call.CallID),
-			ToolCall:  call,
+			ToolCall:  snapshotFunctionCall(call),
+		}
+		current, invocable := tools[call.Name].(tool.FuncTool)
+		approved := invocable && !toolRequiresApproval(current)
+		if !approved {
+			f.logger.Warn(ctx, "stored automatic approval rejected; tool now requires approval or is unavailable", "funcName", call.Name)
 		}
 		requests = append(requests, request)
-		responses = append(responses, request.CreateResponse(true, ""))
+		responses = append(responses, request.CreateResponse(approved, ""))
 	}
 	if len(requests) == 0 {
 		return messages, nil, false, nil
@@ -1024,14 +1042,7 @@ func injectPendingAutoApprovedCalls(session *agent.Session, messages []*message.
 	return out, state.Order, true, nil
 }
 
-func recordPendingAutoApprovedCalls(session *agent.Session, calls, callOrder []*message.FunctionCallContent) error {
-	if session == nil || len(calls) == 0 {
-		return nil
-	}
-	var state pendingAutoApprovedCallsState
-	if _, err := session.Get(pendingAutoApprovedCallsStateKey, &state); err != nil {
-		return err
-	}
+func recordPendingAutoApprovedCalls(state *pendingAutoApprovedCallsState, calls, callOrder []*message.FunctionCallContent) {
 	byID := make(map[string]int, len(state.Calls)+len(calls))
 	for i, call := range state.Calls {
 		if call != nil {
@@ -1059,8 +1070,6 @@ func recordPendingAutoApprovedCalls(session *agent.Session, calls, callOrder []*
 			orderIDs[call.CallID] = struct{}{}
 		}
 	}
-	session.Set(pendingAutoApprovedCallsStateKey, state)
-	return nil
 }
 
 func snapshotApprovalRequest(request *message.ToolApprovalRequestContent) *message.ToolApprovalRequestContent {
