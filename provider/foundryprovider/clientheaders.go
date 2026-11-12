@@ -63,10 +63,9 @@ type clientHeadersMiddleware struct {
 }
 
 func (m clientHeadersMiddleware) Run(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
-	headers := collectClientHeaders(options)
-	if len(headers) != 0 {
-		ctx = context.WithValue(ctx, clientHeadersContextKey{}, headers)
-	}
+	// Always record this run's headers, including none, so a nested headerless
+	// run does not inherit the outer run's headers through the shared context.
+	ctx = context.WithValue(ctx, clientHeadersContextKey{}, collectClientHeaders(options))
 	return func(yield func(*agent.ResponseUpdate, error) bool) {
 		telemetry.MarkUsed(telemetry.FeatureFoundryChatClient)
 		if m.serverAgent {

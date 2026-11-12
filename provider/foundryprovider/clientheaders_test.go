@@ -3,8 +3,10 @@
 package foundryprovider_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/foundryprovider"
 	"github.com/openai/openai-go/v3/option"
 )
@@ -354,5 +357,37 @@ func TestWithHostedAgentUserIdentityCoexistsWithClientHeaders(t *testing.T) {
 		foundryprovider.WithClientHeader("x-client-chat-id", "chat-42"),
 	).Collect(); err != nil {
 		t.Fatalf("RunText error = %v", err)
+	}
+}
+
+func TestHeaderlessNestedRunDoesNotInheritClientHeaders(t *testing.T) {
+	var mu sync.Mutex
+	var values []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		values = append(values, r.Header.Get("x-client-end-user-id"))
+		writeResponsesOK(w)
+	}))
+	defer server.Close()
+
+	nested := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{})
+	outer := newFoundryAgent(t, server, foundryprovider.ModelDeployment("gpt-4o-mini"), foundryprovider.AgentConfig{
+		Config: agent.Config{Middlewares: []agent.Middleware{
+			agent.MiddlewareFunc(func(next agent.RunFunc, ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				if _, err := nested.RunText(ctx, "nested").Collect(); err != nil {
+					t.Errorf("nested RunText error = %v", err)
+				}
+				return next(ctx, messages, options...)
+			}),
+		}},
+	})
+	if _, err := outer.RunText(t.Context(), "outer", foundryprovider.WithClientHeader("x-client-end-user-id", "alice")).Collect(); err != nil {
+		t.Fatalf("outer RunText error = %v", err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(values) != 2 || values[0] != "" || values[1] != "alice" {
+		t.Fatalf("x-client-end-user-id values = %#v, want [\"\" \"alice\"]", values)
 	}
 }
