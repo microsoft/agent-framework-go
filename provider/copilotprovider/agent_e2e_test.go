@@ -4,6 +4,8 @@ package copilotprovider_test
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -12,6 +14,7 @@ import (
 	copilot "github.com/github/copilot-sdk/go"
 	"github.com/github/copilot-sdk/go/rpc"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/copilotprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -252,8 +255,22 @@ func TestE2E_RunTextFetchesURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.ToLower(response.String()), "agent framework") {
-		t.Fatalf("response = %q, want it to contain Agent Framework", response.String())
+	if strings.TrimSpace(response.String()) == "" {
+		t.Fatal("response is empty")
+	}
+	// Check the fetched page rather than the model's one-sentence summary,
+	// whose wording varies between runs.
+	var fetched bool
+	for _, msg := range response.Messages {
+		for _, content := range msg.Contents {
+			result, ok := content.(*message.FunctionResultContent)
+			if ok && result.Error == nil && strings.Contains(strings.ToLower(fmt.Sprint(result.Result)), "agent framework") {
+				fetched = true
+			}
+		}
+	}
+	if !fetched {
+		t.Fatalf("response = %q, want a successful tool result containing Agent Framework", response.String())
 	}
 }
 
@@ -339,8 +356,70 @@ func newE2EClient(t *testing.T) *copilot.Client {
 	if err := client.Start(t.Context()); err != nil {
 		t.Fatalf("start Copilot client: %v", err)
 	}
-	t.Cleanup(client.ForceStop)
+	// Stop gracefully: ForceStop does not wait for the CLI to exit, so it may
+	// still write session state while another client deletes that session.
+	t.Cleanup(func() {
+		if err := client.Stop(); err != nil {
+			if isUnsupportedSessionDetach(err) {
+				t.Logf("Copilot runtime does not support session.detach during shutdown: %v", err)
+				return
+			}
+			t.Errorf("stop Copilot client: %v", err)
+		}
+	})
 	return client
+}
+
+func isUnsupportedSessionDetach(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		errs := joined.Unwrap()
+		if len(errs) == 0 {
+			return false
+		}
+		for _, err := range errs {
+			if !isUnsupportedSessionDetach(err) {
+				return false
+			}
+		}
+		return true
+	}
+
+	var rpcErr *copilot.RPCError
+	return errors.As(err, &rpcErr) &&
+		rpcErr.Code == -32601 &&
+		rpcErr.Message == "Unhandled method session.detach" &&
+		strings.HasPrefix(err.Error(), "failed to disconnect session ")
+}
+
+func TestIsUnsupportedSessionDetach(t *testing.T) {
+	detachErr := fmt.Errorf(
+		"failed to disconnect session id: failed to disconnect session: %w",
+		&copilot.RPCError{Code: -32601, Message: "Unhandled method session.detach"},
+	)
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "unsupported detach", err: detachErr, want: true},
+		{name: "shutdown failure", err: errors.Join(detachErr, errors.New("runtime shutdown failed"))},
+		{
+			name: "different method",
+			err: fmt.Errorf(
+				"failed to disconnect session id: failed to disconnect session: %w",
+				&copilot.RPCError{Code: -32601, Message: "Unhandled method session.attach"},
+			),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isUnsupportedSessionDetach(test.err); got != test.want {
+				t.Fatalf("isUnsupportedSessionDetach(%v) = %t, want %t", test.err, got, test.want)
+			}
+		})
+	}
 }
 
 func skipUnlessE2EEnabled(t *testing.T) {
