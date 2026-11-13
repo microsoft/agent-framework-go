@@ -4,6 +4,7 @@ package copilotprovider_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -359,10 +360,66 @@ func newE2EClient(t *testing.T) *copilot.Client {
 	// still write session state while another client deletes that session.
 	t.Cleanup(func() {
 		if err := client.Stop(); err != nil {
+			if isUnsupportedSessionDetach(err) {
+				t.Logf("Copilot runtime does not support session.detach during shutdown: %v", err)
+				return
+			}
 			t.Errorf("stop Copilot client: %v", err)
 		}
 	})
 	return client
+}
+
+func isUnsupportedSessionDetach(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		errs := joined.Unwrap()
+		if len(errs) == 0 {
+			return false
+		}
+		for _, err := range errs {
+			if !isUnsupportedSessionDetach(err) {
+				return false
+			}
+		}
+		return true
+	}
+
+	var rpcErr *copilot.RPCError
+	return errors.As(err, &rpcErr) &&
+		rpcErr.Code == -32601 &&
+		rpcErr.Message == "Unhandled method session.detach" &&
+		strings.HasPrefix(err.Error(), "failed to disconnect session ")
+}
+
+func TestIsUnsupportedSessionDetach(t *testing.T) {
+	detachErr := fmt.Errorf(
+		"failed to disconnect session id: failed to disconnect session: %w",
+		&copilot.RPCError{Code: -32601, Message: "Unhandled method session.detach"},
+	)
+	for _, test := range []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "unsupported detach", err: detachErr, want: true},
+		{name: "shutdown failure", err: errors.Join(detachErr, errors.New("runtime shutdown failed"))},
+		{
+			name: "different method",
+			err: fmt.Errorf(
+				"failed to disconnect session id: failed to disconnect session: %w",
+				&copilot.RPCError{Code: -32601, Message: "Unhandled method session.attach"},
+			),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isUnsupportedSessionDetach(test.err); got != test.want {
+				t.Fatalf("isUnsupportedSessionDetach(%v) = %t, want %t", test.err, got, test.want)
+			}
+		})
+	}
 }
 
 func skipUnlessE2EEnabled(t *testing.T) {
