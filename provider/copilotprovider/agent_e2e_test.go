@@ -4,6 +4,7 @@ package copilotprovider_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -12,6 +13,7 @@ import (
 	copilot "github.com/github/copilot-sdk/go"
 	"github.com/github/copilot-sdk/go/rpc"
 	"github.com/microsoft/agent-framework-go/agent"
+	"github.com/microsoft/agent-framework-go/message"
 	"github.com/microsoft/agent-framework-go/provider/copilotprovider"
 	"github.com/microsoft/agent-framework-go/tool"
 	"github.com/microsoft/agent-framework-go/tool/functool"
@@ -252,8 +254,22 @@ func TestE2E_RunTextFetchesURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.ToLower(response.String()), "agent framework") {
-		t.Fatalf("response = %q, want it to contain Agent Framework", response.String())
+	if strings.TrimSpace(response.String()) == "" {
+		t.Fatal("response is empty")
+	}
+	// Check the fetched page rather than the model's one-sentence summary,
+	// whose wording varies between runs.
+	var fetched bool
+	for _, msg := range response.Messages {
+		for _, content := range msg.Contents {
+			result, ok := content.(*message.FunctionResultContent)
+			if ok && result.Error == nil && strings.Contains(strings.ToLower(fmt.Sprint(result.Result)), "agent framework") {
+				fetched = true
+			}
+		}
+	}
+	if !fetched {
+		t.Fatalf("response = %q, want a successful tool result containing Agent Framework", response.String())
 	}
 }
 
@@ -339,7 +355,13 @@ func newE2EClient(t *testing.T) *copilot.Client {
 	if err := client.Start(t.Context()); err != nil {
 		t.Fatalf("start Copilot client: %v", err)
 	}
-	t.Cleanup(client.ForceStop)
+	// Stop gracefully: ForceStop does not wait for the CLI to exit, so it may
+	// still write session state while another client deletes that session.
+	t.Cleanup(func() {
+		if err := client.Stop(); err != nil {
+			t.Errorf("stop Copilot client: %v", err)
+		}
+	})
 	return client
 }
 

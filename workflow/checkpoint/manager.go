@@ -47,6 +47,18 @@ type inMemoryManager struct {
 
 func (s *inMemoryManager) internal() {}
 
+type inMemoryManagerJSON struct {
+	Store map[string]*checkpoint.SessionCache[*checkpoint.Checkpoint]
+}
+
+// MarshalJSON holds mu so a manager embedded in another workflow's checkpoint
+// state (such as a subworkflow's) is not encoded while it is being committed to.
+func (s *inMemoryManager) MarshalJSON() ([]byte, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return json.Marshal(inMemoryManagerJSON{Store: s.Store})
+}
+
 func (s *inMemoryManager) sessionStore(sessionID string) *checkpoint.SessionCache[*checkpoint.Checkpoint] {
 	if s.Store == nil {
 		s.Store = make(map[string]*checkpoint.SessionCache[*checkpoint.Checkpoint])

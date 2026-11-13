@@ -745,54 +745,66 @@ func sampleEchoSubworkflow(t *testing.T) *workflow.Workflow {
 func TestSample_Step13_SubworkflowCheckpointResume(t *testing.T) {
 	for _, environment := range sampleEnvironments() {
 		t.Run(environment.name, func(t *testing.T) {
-			env := environment.env.WithCheckpointing(checkpoint.NewInMemoryManager())
-			var resumeFrom *workflow.CheckpointInfo
-			for step := 1; step <= 2; step++ {
-				wf := sampleEchoSubworkflow(t)
-				input := fmt.Sprintf("[%d] Hello, World!", step)
-				var stream *inproc.StreamingRun
-				var err error
-				if resumeFrom == nil {
-					stream, err = env.RunStreaming(t.Context(), wf, input)
-				} else {
-					stream, err = env.ResumeStreaming(t.Context(), wf, *resumeFrom)
-					if err == nil {
-						_, err = stream.TrySendMessage(t.Context(), input)
+			runSampleSubworkflowCheckpointResume(t, environment.env.WithCheckpointing(checkpoint.NewInMemoryManager()))
+		})
+	}
+}
+
+func TestSample_Step13b_SubworkflowJSONCheckpointResume(t *testing.T) {
+	for _, environment := range sampleEnvironments() {
+		t.Run(environment.name, func(t *testing.T) {
+			runSampleSubworkflowCheckpointResume(t, environment.env.WithCheckpointing(checkpoint.NewJSONManager(&sampleJSONStore{})))
+		})
+	}
+}
+
+func runSampleSubworkflowCheckpointResume(t *testing.T, env *inproc.ExecutionEnvironment) {
+	t.Helper()
+	var resumeFrom *workflow.CheckpointInfo
+	for step := 1; step <= 2; step++ {
+		wf := sampleEchoSubworkflow(t)
+		input := fmt.Sprintf("[%d] Hello, World!", step)
+		var stream *inproc.StreamingRun
+		var err error
+		if resumeFrom == nil {
+			stream, err = env.RunStreaming(t.Context(), wf, input)
+		} else {
+			stream, err = env.ResumeStreaming(t.Context(), wf, *resumeFrom)
+			if err == nil {
+				_, err = stream.TrySendMessage(t.Context(), input)
+			}
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sent, err := stream.TrySendMessage(t.Context(), workflow.TurnToken{}); err != nil || !sent {
+			t.Fatalf("send token = %t, %v", sent, err)
+		}
+		events := readStreamToHalt(t, t.Context(), stream)
+		if err := stream.Close(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if hasErrorEvents(events) {
+			t.Fatalf("workflow errors: %v", events)
+		}
+		var lines []string
+		for _, event := range events {
+			switch event := event.(type) {
+			case workflow.OutputEvent:
+				if messages, ok := event.Output.([]*message.Message); ok {
+					for _, msg := range messages {
+						lines = append(lines, fmt.Sprintf("%s: %s", event.ExecutorID, msg.Contents.Text()))
 					}
 				}
-				if err != nil {
-					t.Fatal(err)
-				}
-				if sent, err := stream.TrySendMessage(t.Context(), workflow.TurnToken{}); err != nil || !sent {
-					t.Fatalf("send token = %t, %v", sent, err)
-				}
-				events := readStreamToHalt(t, t.Context(), stream)
-				if err := stream.Close(t.Context()); err != nil {
-					t.Fatal(err)
-				}
-				if hasErrorEvents(events) {
-					t.Fatalf("workflow errors: %v", events)
-				}
-				var lines []string
-				for _, event := range events {
-					switch event := event.(type) {
-					case workflow.OutputEvent:
-						if messages, ok := event.Output.([]*message.Message); ok {
-							for _, msg := range messages {
-								lines = append(lines, fmt.Sprintf("%s: %s", event.ExecutorID, msg.Contents.Text()))
-							}
-						}
-					case workflow.SuperStepCompletedEvent:
-						if event.CompletionInfo != nil && event.CompletionInfo.CheckpointInfo != nil {
-							resumeFrom = new(*event.CompletionInfo.CheckpointInfo)
-						}
-					}
-				}
-				if len(lines) != 1 || !strings.Contains(lines[0], "EchoSubworkflow: "+input) || resumeFrom == nil {
-					t.Fatalf("lines/checkpoint = %v/%v", lines, resumeFrom)
+			case workflow.SuperStepCompletedEvent:
+				if event.CompletionInfo != nil && event.CompletionInfo.CheckpointInfo != nil {
+					resumeFrom = new(*event.CompletionInfo.CheckpointInfo)
 				}
 			}
-		})
+		}
+		if len(lines) != 1 || !strings.Contains(lines[0], "EchoSubworkflow: "+input) || resumeFrom == nil {
+			t.Fatalf("lines/checkpoint = %v/%v", lines, resumeFrom)
+		}
 	}
 }
 
