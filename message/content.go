@@ -1212,6 +1212,9 @@ func (contents Contents) Coalesce() Contents {
 			first := contents[start].(*DataContent)
 
 			return &DataContent{
+				ContentHeader: ContentHeader{
+					AdditionalProperties: maps.Clone(first.AdditionalProperties),
+				},
 				Name:      first.Name,
 				MediaType: first.MediaType,
 				Data:      mergeBase64(contents, start, end),
