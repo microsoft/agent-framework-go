@@ -2575,3 +2575,589 @@ func createFunc2() tool.FuncTool {
 		return fmt.Sprintf("Result 2: %d", args.I), nil
 	})
 }
+
+func TestFunctionInvoking_MaximumFunctionCallsIncludesApprovedCalls(t *testing.T) {
+	var toolCalls int
+	approvedTool := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "action1"}, func(ctx context.Context, _ struct{}) (string, error) {
+		toolCalls++
+		return "action1 done", nil
+	}))
+	otherTool := functool.MustNew(functool.Config{Name: "action2"}, func(ctx context.Context, _ struct{}) (string, error) {
+		toolCalls++
+		return "action2 done", nil
+	})
+
+	var providerRuns int
+	next := func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		providerRuns++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if providerRuns == 1 {
+				// Initial run: surface approval request for action1
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "call-1", Name: "action1"},
+					},
+				}, nil)
+				return
+			}
+			// Resumed run after approval: since limit is 1 and approved call was executed,
+			// schema tools must be stripped so no automatic calls can be requested.
+			for optTool := range agent.AllOptions(opts, agent.WithTool) {
+				if _, ok := optTool.(tool.SchemaTool); ok {
+					yield(nil, fmt.Errorf("expected schema tools to be stripped after approved tool hit limit"))
+					return
+				}
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "final response after approved tool"}},
+			}, nil)
+		}
+	}
+
+	session := &agent.Session{}
+	cfg := toolautocall.Config{
+		MaximumFunctionCallsPerRequest: new(1),
+	}
+	middleware := toolautocall.New(cfg)
+
+	// Step 1: initial run surfaces approval request
+	var request *message.ToolApprovalRequestContent
+	for update, err := range middleware.Run(next, t.Context(), []*message.Message{message.NewText("run action")}, agent.WithSession(session), agent.WithTool(approvedTool), agent.WithTool(otherTool)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range update.Contents {
+			if req, ok := c.(*message.ToolApprovalRequestContent); ok {
+				request = req
+			}
+		}
+	}
+	if request == nil {
+		t.Fatal("expected approval request to be surfaced")
+	}
+	if toolCalls != 0 {
+		t.Fatalf("expected 0 tool calls executed before approval, got %d", toolCalls)
+	}
+
+	// Step 2: run with approval response
+	approvalMsg := message.New(request.CreateResponse(true, ""))
+	var resp agent.Response
+	for update, err := range middleware.Run(next, t.Context(), []*message.Message{approvalMsg}, agent.WithSession(session), agent.WithTool(approvedTool), agent.WithTool(otherTool)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Update(update)
+	}
+
+	if toolCalls != 1 {
+		t.Fatalf("expected 1 approved tool call executed, got %d", toolCalls)
+	}
+	if text := resp.String(); text != "final response after approved tool" {
+		t.Fatalf("expected final text response, got %q", text)
+	}
+}
+
+func TestFunctionInvoking_ResumedApprovalWithZeroBudgetSkipsExecution(t *testing.T) {
+	toolCalls := 0
+	approvedTool := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "Action"},
+		func(ctx context.Context, args struct{}) (string, error) {
+			toolCalls++
+			return "executed action", nil
+		},
+	))
+
+	nextCalls := 0
+	next := func(_ context.Context, msgs []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		nextCalls++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if nextCalls == 1 {
+				// Initial run: return FCC requiring approval
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "call_action_1", Name: "Action"},
+					},
+				}, nil)
+				return
+			}
+			// Turn 2: resumed approval run with zero budget
+			// Verify that the tool message contains budget exceeded error result
+			var hasBudgetExceededResult bool
+			for _, m := range msgs {
+				if m.Role == message.RoleTool {
+					for _, c := range m.Contents {
+						if frc, ok := c.(*message.FunctionResultContent); ok && frc.CallID == "call_action_1" {
+							if frc.Error != nil && strings.Contains(frc.Result.(string), "Function invocation limit reached") {
+								hasBudgetExceededResult = true
+							}
+						}
+					}
+				}
+			}
+			if !hasBudgetExceededResult {
+				yield(nil, errors.New("expected budget exceeded non-execution result in tool message"))
+				return
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "final response without executing Action"}},
+			}, nil)
+		}
+	}
+
+	session := &agent.Session{}
+
+	// Step 1: initial run surfaces approval request (default unlimited budget)
+	var request *message.ToolApprovalRequestContent
+	for update, err := range toolautocall.New(toolautocall.Config{}).Run(
+		next,
+		t.Context(),
+		[]*message.Message{message.NewText("run action")},
+		agent.WithSession(session),
+		agent.WithTool(approvedTool),
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range update.Contents {
+			if req, ok := c.(*message.ToolApprovalRequestContent); ok {
+				request = req
+			}
+		}
+	}
+	if request == nil {
+		t.Fatal("expected approval request to be surfaced")
+	}
+	if toolCalls != 0 {
+		t.Fatalf("expected 0 tool calls executed before approval, got %d", toolCalls)
+	}
+
+	// Step 2: resume approval with MaximumFunctionCallsPerRequest = 0
+	approvalMsg := message.New(request.CreateResponse(true, ""))
+	var resp agent.Response
+	for update, err := range toolautocall.New(toolautocall.Config{
+		MaximumFunctionCallsPerRequest: new(0),
+	}).Run(
+		next,
+		t.Context(),
+		[]*message.Message{approvalMsg},
+		agent.WithSession(session),
+		agent.WithTool(approvedTool),
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Update(update)
+	}
+
+	if toolCalls != 0 {
+		t.Fatalf("expected 0 tool calls executed with zero budget, got %d", toolCalls)
+	}
+	if text := resp.String(); text != "final response without executing Action" {
+		t.Fatalf("unexpected final response: %q", text)
+	}
+}
+
+func TestFunctionInvoking_ResumedApprovalWithOnlyRequestIDRestoresNonzeroBudget(t *testing.T) {
+	var toolCalls int
+	action1 := functool.MustNew(functool.Config{Name: "action1"}, func(ctx context.Context, _ struct{}) (string, error) {
+		toolCalls++
+		return "action1 done", nil
+	})
+	action2 := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "action2"}, func(ctx context.Context, _ struct{}) (string, error) {
+		toolCalls++
+		return "action2 done", nil
+	}))
+	action3 := functool.MustNew(functool.Config{Name: "action3"}, func(ctx context.Context, _ struct{}) (string, error) {
+		toolCalls++
+		return "action3 done", nil
+	})
+
+	var turn int
+	next := func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		turn++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if turn == 1 {
+				// Turn 1, Iteration 0: model calls action1 (safe)
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "call-1", Name: "action1"},
+					},
+				}, nil)
+				return
+			}
+			if turn == 2 {
+				// Turn 1, Iteration 1: action1 result was returned, now model calls action2 (requires approval)
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "call-2", Name: "action2"},
+					},
+				}, nil)
+				return
+			}
+			// Turn 2 (resumed run): limit is 2. action1 (1) + action2 (1) = 2.
+			// Schema tools must be stripped so no 3rd call can be requested.
+			for optTool := range agent.AllOptions(opts, agent.WithTool) {
+				if _, ok := optTool.(tool.SchemaTool); ok {
+					yield(nil, fmt.Errorf("expected schema tools to be stripped after reaching budget of 2"))
+					return
+				}
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "final response after budget exhausted"}},
+			}, nil)
+		}
+	}
+
+	session := &agent.Session{}
+	cfg := toolautocall.Config{
+		MaximumFunctionCallsPerRequest: new(2),
+	}
+	middleware := toolautocall.New(cfg)
+
+	// Step 1: initial run executes action1 (count=1), then action2 requires approval
+	var request *message.ToolApprovalRequestContent
+	for update, err := range middleware.Run(next, t.Context(), []*message.Message{message.NewText("start")}, agent.WithSession(session), agent.WithTool(action1), agent.WithTool(action2), agent.WithTool(action3)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range update.Contents {
+			if req, ok := c.(*message.ToolApprovalRequestContent); ok {
+				request = req
+			}
+		}
+	}
+	if request == nil {
+		t.Fatal("expected approval request for action2")
+	}
+	if toolCalls != 1 {
+		t.Fatalf("expected 1 tool call executed before approval, got %d", toolCalls)
+	}
+
+	// Step 2: resumption providing ONLY RequestID and decision (ToolCall is nil)
+	approvalOnlyMsg := message.New(&message.ToolApprovalResponseContent{
+		RequestID: request.RequestID,
+		Approved:  true,
+		ToolCall:  nil, // ToolCall omitted by caller
+	})
+	var resp agent.Response
+	for update, err := range middleware.Run(next, t.Context(), []*message.Message{approvalOnlyMsg}, agent.WithSession(session), agent.WithTool(action1), agent.WithTool(action2), agent.WithTool(action3)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Update(update)
+	}
+
+	if toolCalls != 2 {
+		t.Fatalf("expected 2 total tool calls executed, got %d", toolCalls)
+	}
+	if text := resp.String(); text != "final response after budget exhausted" {
+		t.Fatalf("unexpected final response: %q", text)
+	}
+}
+
+func TestFunctionInvoking_PendingApprovalBudgetPreservedAcrossUnrelatedRun(t *testing.T) {
+	var toolCalls int
+	action1 := functool.MustNew(functool.Config{Name: "action1"}, func(ctx context.Context, _ struct{}) (string, error) {
+		toolCalls++
+		return "action1 done", nil
+	})
+	action2 := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "action2"}, func(ctx context.Context, _ struct{}) (string, error) {
+		toolCalls++
+		return "action2 done", nil
+	}))
+	action3 := functool.MustNew(functool.Config{Name: "action3"}, func(ctx context.Context, _ struct{}) (string, error) {
+		toolCalls++
+		return "action3 done", nil
+	})
+
+	var turn int
+	next := func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		turn++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if turn == 1 {
+				// Turn 1, Iteration 0: model calls action1 (safe)
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "call-1", Name: "action1"},
+					},
+				}, nil)
+				return
+			}
+			if turn == 2 {
+				// Turn 1, Iteration 1: model calls action2 (requires approval)
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "call-2", Name: "action2"},
+					},
+				}, nil)
+				return
+			}
+			if turn == 3 {
+				// Turn 2: unrelated run, model returns plain text
+				yield(&agent.ResponseUpdate{
+					Role:     message.RoleAssistant,
+					Contents: []message.Content{&message.TextContent{Text: "unrelated answer"}},
+				}, nil)
+				return
+			}
+			// Turn 3: resumed approval run. action1 (1) + action2 (1) = 2.
+			// Schema tools must be stripped.
+			for optTool := range agent.AllOptions(opts, agent.WithTool) {
+				if _, ok := optTool.(tool.SchemaTool); ok {
+					yield(nil, fmt.Errorf("expected schema tools to be stripped after reaching budget of 2"))
+					return
+				}
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "final response after approval"}},
+			}, nil)
+		}
+	}
+
+	session := &agent.Session{}
+	cfg := toolautocall.Config{
+		MaximumFunctionCallsPerRequest: new(2),
+	}
+	middleware := toolautocall.New(cfg)
+
+	// Step 1: initial run executes action1 (count=1), then action2 requires approval
+	var request *message.ToolApprovalRequestContent
+	for update, err := range middleware.Run(next, t.Context(), []*message.Message{message.NewText("start")}, agent.WithSession(session), agent.WithTool(action1), agent.WithTool(action2), agent.WithTool(action3)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range update.Contents {
+			if req, ok := c.(*message.ToolApprovalRequestContent); ok {
+				request = req
+			}
+		}
+	}
+	if request == nil {
+		t.Fatal("expected approval request for action2")
+	}
+	if toolCalls != 1 {
+		t.Fatalf("expected 1 tool call executed before approval, got %d", toolCalls)
+	}
+
+	// Step 2: unrelated run in same session does not answer the approval
+	for update, err := range middleware.Run(next, t.Context(), []*message.Message{message.NewText("how are you?")}, agent.WithSession(session), agent.WithTool(action1), agent.WithTool(action2), agent.WithTool(action3)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = update
+	}
+	if toolCalls != 1 {
+		t.Fatalf("expected toolCalls to remain 1 after unrelated run, got %d", toolCalls)
+	}
+
+	// Step 3: user responds to the pending approval from Step 1
+	approvalMsg := message.New(request.CreateResponse(true, ""))
+	var resp agent.Response
+	for update, err := range middleware.Run(next, t.Context(), []*message.Message{approvalMsg}, agent.WithSession(session), agent.WithTool(action1), agent.WithTool(action2), agent.WithTool(action3)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Update(update)
+	}
+
+	if toolCalls != 2 {
+		t.Fatalf("expected 2 total tool calls executed, got %d", toolCalls)
+	}
+	if text := resp.String(); text != "final response after approval" {
+		t.Fatalf("unexpected final response: %q", text)
+	}
+}
+
+func TestFunctionInvoking_HostedToolApprovalPreservesLocalBudgetWithoutCountingHostedCalls(t *testing.T) {
+	var localCalls int
+	localTool := functool.MustNew(functool.Config{Name: "local_action"}, func(ctx context.Context, _ struct{}) (string, error) {
+		localCalls++
+		return "local action done", nil
+	})
+
+	hostedCall := &message.WebSearchToolCallContent{
+		CallID:  "web-search-1",
+		Queries: []string{"golang"},
+	}
+
+	var turn int
+	next := func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		turn++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if turn == 1 {
+				// Turn 1, Iteration 0: model calls localTool
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "call-1", Name: "local_action"},
+					},
+				}, nil)
+				return
+			}
+			if turn == 2 {
+				// Turn 1, Iteration 1: provider returns native approval request for hosted tool
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.ToolApprovalRequestContent{
+							RequestID: "req-web-1",
+							ToolCall:  hostedCall,
+						},
+					},
+				}, nil)
+				return
+			}
+			if turn == 3 {
+				// Turn 2, Iteration 0: provider handled web search, model calls localTool again
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "call-2", Name: "local_action"},
+					},
+				}, nil)
+				return
+			}
+			// Turn 2, Iteration 1: budget of 2 reached (1 local pre-approval + 1 local post-approval).
+			// Hosted call was NOT counted locally. Schema tools must be stripped.
+			for optTool := range agent.AllOptions(opts, agent.WithTool) {
+				if _, ok := optTool.(tool.SchemaTool); ok {
+					yield(nil, fmt.Errorf("expected schema tools to be stripped after reaching budget of 2"))
+					return
+				}
+			}
+			yield(&agent.ResponseUpdate{
+				Role:     message.RoleAssistant,
+				Contents: []message.Content{&message.TextContent{Text: "final response after hosted approval"}},
+			}, nil)
+		}
+	}
+
+	session := &agent.Session{}
+	cfg := toolautocall.Config{
+		MaximumFunctionCallsPerRequest: new(2),
+	}
+	middleware := toolautocall.New(cfg)
+
+	// Step 1: initial run executes 1 local call, then provider returns hosted tool approval request
+	var request *message.ToolApprovalRequestContent
+	for update, err := range middleware.Run(next, t.Context(), []*message.Message{message.NewText("start")}, agent.WithSession(session), agent.WithTool(localTool)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range update.Contents {
+			if req, ok := c.(*message.ToolApprovalRequestContent); ok {
+				request = req
+			}
+		}
+	}
+	if request == nil {
+		t.Fatal("expected hosted tool approval request")
+	}
+	if localCalls != 1 {
+		t.Fatalf("expected 1 local call executed in turn 1, got %d", localCalls)
+	}
+
+	// Step 2: resumed run with approval response for hosted tool
+	approvalMsg := message.New(&message.ToolApprovalResponseContent{
+		RequestID: request.RequestID,
+		Approved:  true,
+		ToolCall:  hostedCall,
+	})
+	var resp agent.Response
+	for update, err := range middleware.Run(next, t.Context(), []*message.Message{approvalMsg}, agent.WithSession(session), agent.WithTool(localTool)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Update(update)
+	}
+
+	if localCalls != 2 {
+		t.Fatalf("expected 2 total local calls executed, got %d", localCalls)
+	}
+	if text := resp.String(); text != "final response after hosted approval" {
+		t.Fatalf("unexpected final response: %q", text)
+	}
+}
+
+func TestFunctionInvoking_SafeToolsNotConvertedToApprovalsAtBudgetLimit(t *testing.T) {
+	safeTool := functool.MustNew(functool.Config{Name: "safe_tool"}, func(ctx context.Context, _ struct{}) (string, error) {
+		return "safe result", nil
+	})
+	sensitiveTool := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "sensitive_tool"}, func(ctx context.Context, _ struct{}) (string, error) {
+		return "sensitive result", nil
+	}))
+
+	// Set budget = 1, and configure tools as AdditionalTools so they remain available
+	maxCalls := 1
+	cfg := toolautocall.Config{
+		MaximumFunctionCallsPerRequest: &maxCalls,
+		AdditionalTools:                []tool.Tool{safeTool, sensitiveTool},
+	}
+	middleware := toolautocall.New(cfg)
+
+	// Turn 1, Iteration 0: model calls safe_tool -> executed, consumes 1 call (reaches budget).
+	// Turn 1, Iteration 1: model returns both safe_tool and sensitive_tool.
+	// Because sensitive_tool requires approval, middleware pauses and prepares approvals.
+	// safe_tool must NOT be converted to an approval request even though budget has been reached.
+	var round int
+	next := func(_ context.Context, _ []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+		round++
+		return func(yield func(*agent.ResponseUpdate, error) bool) {
+			if round == 1 {
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "call-safe-1", Name: "safe_tool"},
+					},
+				}, nil)
+				return
+			}
+			if round == 2 {
+				yield(&agent.ResponseUpdate{
+					Role: message.RoleAssistant,
+					Contents: []message.Content{
+						&message.FunctionCallContent{CallID: "call-safe-2", Name: "safe_tool"},
+						&message.FunctionCallContent{CallID: "call-sensitive-1", Name: "sensitive_tool"},
+					},
+				}, nil)
+				return
+			}
+		}
+	}
+
+	session := &agent.Session{}
+	var approvalRequests []*message.ToolApprovalRequestContent
+
+	for update, err := range middleware.Run(next, t.Context(), []*message.Message{message.NewText("hello")}, agent.WithSession(session)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range update.Contents {
+			if req, ok := c.(*message.ToolApprovalRequestContent); ok {
+				approvalRequests = append(approvalRequests, req)
+			}
+		}
+	}
+
+	if len(approvalRequests) != 1 {
+		t.Fatalf("expected exactly 1 approval request, got %d", len(approvalRequests))
+	}
+	fcc, ok := approvalRequests[0].ToolCall.(*message.FunctionCallContent)
+	if !ok || fcc.CallID != "call-sensitive-1" {
+		t.Fatalf("expected approval request for call-sensitive-1, got %v", approvalRequests[0].ToolCall)
+	}
+	for _, req := range approvalRequests {
+		if fc, ok := req.ToolCall.(*message.FunctionCallContent); ok && fc.Name == "safe_tool" {
+			t.Fatalf("safe_tool was unexpectedly converted to an approval request: %+v", req)
+		}
+	}
+}
