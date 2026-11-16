@@ -10,13 +10,13 @@ require (
 	github.com/ag-ui-protocol/ag-ui/sdks/community/go v0.0.0-20260312103001-8e7ab1df34c8
 	github.com/anthropics/anthropic-sdk-go v1.84.0
 	github.com/coder/websocket v1.8.15
-	github.com/github/copilot-sdk/go v1.0.29
+	github.com/github/copilot-sdk/go v1.0.32
 	github.com/gofrs/flock v0.13.2
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/neo4j/neo4j-go-driver/v5 v5.28.6
-	github.com/openai/openai-go/v3 v3.98.0
+	github.com/openai/openai-go/v3 v3.99.0
 	github.com/qdrant/go-client v1.20.1
 	go.opentelemetry.io/otel v1.47.0
 	go.opentelemetry.io/otel/exporters/stdout/stdouttrace v1.47.0
@@ -37,7 +37,7 @@ require (
 	github.com/bahlo/generic-list-go v0.2.0 // indirect
 	github.com/buger/jsonparser v1.1.2 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
-	github.com/ebitengine/purego v0.11.2 // indirect
+	github.com/ebitengine/purego v0.11.3 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
