@@ -78,9 +78,7 @@ type Config struct {
 	// Local history uses an internal conversation ID, stripped before the provider
 	// is called, to prevent middleware from replaying already persisted messages.
 	// Background and continuation requests skip local history simulation and defer
-	// successful persistence and session ID updates until run completion. Abandoning
-	// an initial background stream before receiving a continuation token persists
-	// its inputs, but not its partial response.
+	// successful persistence and session ID updates until run completion.
 	RequirePerServiceCallHistoryPersistence bool
 
 	// ThrowOnHistoryProviderConflict controls whether a configured
@@ -121,8 +119,8 @@ type Config struct {
 
 	// MessageInjector configures mid-run message injection. Call its
 	// EnqueueMessages method to queue messages. Nil disables message injection.
-	// Enable RequirePerServiceCallHistoryPersistence to retain injected messages
-	// and earlier responses between provider calls when the service is stateless.
+	// Enable [Config.RequirePerServiceCallHistoryPersistence] to retain injected
+	// messages and earlier responses between foreground calls to a stateless service.
 	MessageInjector *MessageInjector
 
 	// Tools are added to every run.
@@ -388,13 +386,12 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 		// callback so range-over-function lowering heap-boxes one object instead of
 		// allocating each captured local separately.
 		var state struct {
-			contextResponse      *Response
-			historyResponse      *Response
-			continuationUpdates  []*ResponseUpdate
-			conversationID       *string
-			runErr               error
-			stopped              bool
-			continuationObserved bool
+			contextResponse     *Response
+			historyResponse     *Response
+			continuationUpdates []*ResponseUpdate
+			conversationID      *string
+			runErr              error
+			stopped             bool
 		}
 		if historyStoreProvider != nil {
 			state.historyResponse = new(Response)
@@ -405,8 +402,6 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 		if trackContinuationUpdates {
 			state.continuationUpdates = cloneResponseUpdates(continuationState.ResponseUpdates)
 		}
-		ctx = context.WithValue(ctx, messageInjectionStateKey{}, new(messageInjectionState))
-
 		for update, err := range a.providerPipeline(ctx, messages, options...) {
 			if update != nil {
 				a.setAuthor(update)
@@ -423,14 +418,10 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 					state.contextResponse.Update(update)
 				}
 				if update.ContinuationToken != "" {
-					state.continuationObserved = true
 					var tokenInputMessages []*message.Message
 					var tokenResponseUpdates []*ResponseUpdate
 					if stream {
 						tokenInputMessages = inputMessagesForContinuation(inputMessages, continuationState)
-						if a.perServiceCallHistoryPersistence {
-							tokenInputMessages = slices.Concat(tokenInputMessages, injectedMessages(ctx))
-						}
 						tokenResponseUpdates = state.continuationUpdates
 					}
 					wrappedToken, err := wrapContinuationToken(update.ContinuationToken, tokenInputMessages, tokenResponseUpdates)
@@ -450,14 +441,6 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			}
 		}
 		if state.stopped && state.runErr == nil {
-			if a.perServiceCallHistoryPersistence && allowBackground && continuationToken == "" && !state.continuationObserved {
-				earlyMessages, earlyOptions, recorded := earlyExitPersistence(ctx)
-				if !recorded {
-					earlyMessages = slices.Concat(requestMessages, injectedMessages(ctx))
-					earlyOptions = withoutContinuationToken(options)
-				}
-				a.notifyServiceCallProvidersOnEarlyExit(ctx, session, earlyMessages, earlyOptions)
-			}
 			return
 		}
 		// Per-call failures have already been reported, including failures from
@@ -482,12 +465,6 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			continuationResponse := responseFromUpdates(state.continuationUpdates)
 			storeResponseMessages = continuationResponse.Messages
 		}
-		if a.perServiceCallHistoryPersistence && (continuationToken != "" || historyStoreProvider != nil) {
-			if injected := injectedMessages(ctx); len(injected) > 0 {
-				requestMessages = slices.Concat(requestMessages, injected)
-			}
-		}
-
 		if historyStoreProvider != nil {
 			storeHistory := a.shouldStoreHistoryProvider(historyStoreProvider, session)
 			if storeHistory {

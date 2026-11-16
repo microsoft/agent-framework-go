@@ -2147,59 +2147,55 @@ func TestAgent_PerServiceCallHistory_AbandonedStreamWithContinuationToken(t *tes
 	}
 }
 
-func TestAgent_PerServiceCallHistory_BackgroundEarlyExitAfterToolUpdate(t *testing.T) {
-	for _, background := range []bool{false, true} {
-		t.Run(fmt.Sprintf("background=%t", background), func(t *testing.T) {
-			var stored [][]*message.Message
-			history := agent.NewHistoryProvider(agent.HistoryProviderConfig{
-				SourceID: "history",
-				Store: func(_ context.Context, invoked agent.InvokedContext) error {
-					stored = append(stored, invoked.RequestMessages)
-					return nil
-				},
-			})
-			lookup := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) {
-				return "found", nil
-			}))
-			a := agent.New(agent.ProviderConfig{
-				Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{})},
-				Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
-					return func(yield func(*agent.ResponseUpdate, error) bool) {
-						yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
-							&message.FunctionCallContent{CallID: "call-1", Name: "lookup", Arguments: `{}`},
-						}}, nil)
-					}
-				},
-			}, agent.Config{
-				HistoryProvider:                         history,
-				RequirePerServiceCallHistoryPersistence: true,
-				Tools:                                   []tool.Tool{lookup},
-			})
+func TestAgent_PerServiceCallHistory_EarlyExitAfterToolUpdate(t *testing.T) {
+	var stored [][]*message.Message
+	history := agent.NewHistoryProvider(agent.HistoryProviderConfig{
+		SourceID: "history",
+		Store: func(_ context.Context, invoked agent.InvokedContext) error {
+			stored = append(stored, invoked.RequestMessages)
+			return nil
+		},
+	})
+	lookup := tool.ApprovalRequiredFunc(functool.MustNew(functool.Config{Name: "lookup"}, func(context.Context, struct{}) (string, error) {
+		return "found", nil
+	}))
+	a := agent.New(agent.ProviderConfig{
+		Middlewares: []agent.Middleware{toolautocall.New(toolautocall.Config{})},
+		Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+			return func(yield func(*agent.ResponseUpdate, error) bool) {
+				yield(&agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{
+					&message.FunctionCallContent{CallID: "call-1", Name: "lookup", Arguments: `{}`},
+				}}, nil)
+			}
+		},
+	}, agent.Config{
+		HistoryProvider:                         history,
+		RequirePerServiceCallHistoryPersistence: true,
+		Tools:                                   []tool.Tool{lookup},
+	})
 
-			approvalSeen := false
-			for update, err := range a.RunText(t.Context(), "start", agent.WithSession(&agent.Session{}), agent.Stream(true), agent.AllowBackgroundResponses(background)) {
-				if err != nil {
-					t.Fatal(err)
-				}
-				if update != nil {
-					for _, content := range update.Contents {
-						if _, ok := content.(*message.ToolApprovalRequestContent); ok {
-							approvalSeen = true
-							break
-						}
-					}
-				}
-				if approvalSeen {
+	approvalSeen := false
+	for update, err := range a.RunText(t.Context(), "start", agent.WithSession(&agent.Session{}), agent.Stream(true)) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if update != nil {
+			for _, content := range update.Contents {
+				if _, ok := content.(*message.ToolApprovalRequestContent); ok {
+					approvalSeen = true
 					break
 				}
 			}
-			if !approvalSeen {
-				t.Fatal("expected tool approval update")
-			}
-			if len(stored) != 1 || !slices.Equal(messageStrings(stored[0]), []string{"start"}) {
-				t.Fatalf("stored requests = %v, want one [start] notification", stored)
-			}
-		})
+		}
+		if approvalSeen {
+			break
+		}
+	}
+	if !approvalSeen {
+		t.Fatal("expected tool approval update")
+	}
+	if len(stored) != 1 || !slices.Equal(messageStrings(stored[0]), []string{"start"}) {
+		t.Fatalf("stored requests = %v, want one [start] notification", stored)
 	}
 }
 
@@ -2240,19 +2236,9 @@ func TestAgent_PerServiceCallHistory_ContextProviderEnablesBackgroundPersistence
 	}
 }
 
-func TestAgent_PerServiceCallHistory_BackgroundPersistsInjectedMessages(t *testing.T) {
-	for _, tc := range []struct {
-		name       string
-		stream     bool
-		background bool
-		stopEarly  bool
-	}{
-		{name: "non-streaming", background: true},
-		{name: "streaming", stream: true, background: true},
-		{name: "foreground early exit", stream: true, stopEarly: true},
-		{name: "background early exit", stream: true, background: true, stopEarly: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
+func TestAgent_PerServiceCallHistory_AbandonedStreamWithInjectedMessages(t *testing.T) {
+	for _, background := range []bool{false, true} {
+		t.Run(fmt.Sprintf("background=%t", background), func(t *testing.T) {
 			injector := &agent.MessageInjector{}
 			session := &agent.Session{}
 			var stored [][]*message.Message
@@ -2275,74 +2261,16 @@ func TestAgent_PerServiceCallHistory_BackgroundPersistsInjectedMessages(t *testi
 			if err := injector.EnqueueMessages(session, message.NewText("injected")); err != nil {
 				t.Fatal(err)
 			}
-			updates := a.RunText(t.Context(), "start", agent.WithSession(session), agent.Stream(tc.stream), agent.AllowBackgroundResponses(tc.background))
-			if tc.stopEarly {
-				for _, err := range updates {
-					if err != nil {
-						t.Fatal(err)
-					}
-					break
+			for _, err := range a.RunText(t.Context(), "start", agent.WithSession(session), agent.Stream(true), agent.AllowBackgroundResponses(background)) {
+				if err != nil {
+					t.Fatal(err)
 				}
-			} else if _, err := updates.Collect(); err != nil {
-				t.Fatal(err)
+				break
 			}
 			if len(stored) != 1 || !slices.Equal(messageStrings(stored[0]), []string{"start", "injected"}) {
 				t.Fatalf("stored requests = %v, want one [start injected] notification", stored)
 			}
 		})
-	}
-}
-
-func TestAgent_PerServiceCallHistory_ContinuationPersistsInjectedMessagesOnce(t *testing.T) {
-	injector := &agent.MessageInjector{}
-	session := &agent.Session{}
-	var stored [][]*message.Message
-	history := agent.NewHistoryProvider(agent.HistoryProviderConfig{
-		SourceID: "history",
-		Store: func(_ context.Context, invoked agent.InvokedContext) error {
-			stored = append(stored, invoked.RequestMessages)
-			return nil
-		},
-	})
-	calls := 0
-	a := agent.New(agent.ProviderConfig{Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
-		return func(yield func(*agent.ResponseUpdate, error) bool) {
-			calls++
-			update := &agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "partial"}}}
-			if calls == 1 {
-				update.ContinuationToken = agenttest.NewContinuationToken(t, "response-1")
-			} else {
-				update.Contents[0] = &message.TextContent{Text: "done"}
-			}
-			yield(update, nil)
-		}
-	}}, agent.Config{
-		HistoryProvider:                         history,
-		MessageInjector:                         injector,
-		RequirePerServiceCallHistoryPersistence: true,
-	})
-	if err := injector.EnqueueMessages(session, message.NewText("injected")); err != nil {
-		t.Fatal(err)
-	}
-
-	var token string
-	for update, err := range a.RunText(t.Context(), "start", agent.WithSession(session), agent.Stream(true), agent.AllowBackgroundResponses(true)) {
-		if err != nil {
-			t.Fatal(err)
-		}
-		if update != nil && update.ContinuationToken != "" {
-			token = update.ContinuationToken
-			break
-		}
-	}
-	if token == "" || len(stored) != 0 {
-		t.Fatalf("token=%q stored before resume=%d; want a continuation token and no early persistence", token, len(stored))
-	}
-	if _, err := a.Run(t.Context(), nil, agent.WithSession(session), agent.WithContinuationToken(token), agent.Stream(true), agent.AllowBackgroundResponses(true)).Collect(); err != nil {
-		t.Fatal(err)
-	}
-	if len(stored) != 1 || !slices.Equal(messageStrings(stored[0]), []string{"start", "injected"}) {
-		t.Fatalf("stored requests = %v, want one [start injected] notification after resume", stored)
 	}
 }
 

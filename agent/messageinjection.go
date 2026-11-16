@@ -14,67 +14,14 @@ import (
 
 const pendingInjectedMessagesStateKey = "agent.pendingInjectedMessages"
 
-type messageInjectionStateKey struct{}
-
-type messageInjectionState struct {
-	mu                sync.Mutex
-	messages          []*message.Message
-	earlyExitMessages []*message.Message
-	earlyExitOptions  []Option
-}
-
-func recordInjectedMessages(ctx context.Context, messages []*message.Message) {
-	state, _ := ctx.Value(messageInjectionStateKey{}).(*messageInjectionState)
-	if state == nil || len(messages) == 0 {
-		return
-	}
-	state.mu.Lock()
-	state.messages = append(state.messages, messages...)
-	state.mu.Unlock()
-}
-
-func injectedMessages(ctx context.Context) []*message.Message {
-	state, _ := ctx.Value(messageInjectionStateKey{}).(*messageInjectionState)
-	if state == nil {
-		return nil
-	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	return slices.Clone(state.messages)
-}
-
-func recordEarlyExitPersistence(ctx context.Context, messages []*message.Message, options []Option) {
-	state, _ := ctx.Value(messageInjectionStateKey{}).(*messageInjectionState)
-	if state == nil || len(messages) == 0 {
-		return
-	}
-	state.mu.Lock()
-	state.earlyExitMessages = slices.Clone(messages)
-	state.earlyExitOptions = slices.Clone(options)
-	state.mu.Unlock()
-}
-
-func earlyExitPersistence(ctx context.Context) ([]*message.Message, []Option, bool) {
-	state, _ := ctx.Value(messageInjectionStateKey{}).(*messageInjectionState)
-	if state == nil {
-		return nil, nil, false
-	}
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if len(state.earlyExitMessages) == 0 {
-		return nil, nil, false
-	}
-	return slices.Clone(state.earlyExitMessages), slices.Clone(state.earlyExitOptions), true
-}
-
 type pendingInjectedMessagesState struct {
 	Messages []*message.Message
 }
 
 // MessageInjector queues messages for injection between provider calls.
 // Its zero value is ready to use.
-// To retain delivered messages across stateless provider calls, enable
-// [Config.RequirePerServiceCallHistoryPersistence] and use a [HistoryProvider]
+// To retain delivered messages across foreground calls to a stateless provider,
+// enable [Config.RequirePerServiceCallHistoryPersistence] and use a [HistoryProvider]
 // that preserves their content, including images and other non-text parts.
 type MessageInjector struct {
 	mu sync.Mutex
@@ -88,15 +35,10 @@ func (m *MessageInjector) run(next RunFunc, ctx context.Context, messages []*mes
 			return
 		}
 
-		injected, err := m.drain(session)
+		currentMessages, err := m.drainInto(session, messages)
 		if err != nil {
 			yield(nil, err)
 			return
-		}
-		recordInjectedMessages(ctx, injected)
-		currentMessages := messages
-		if len(injected) > 0 {
-			currentMessages = slices.Concat(messages, injected)
 		}
 
 		stream, _ := GetOption(options, Stream)
@@ -148,7 +90,6 @@ func (m *MessageInjector) run(next RunFunc, ctx context.Context, messages []*mes
 					yield(nil, err)
 					return
 				}
-				recordInjectedMessages(ctx, injected)
 			}
 			if hasActionableFunctionCall || len(injected) == 0 {
 				if !stream {
@@ -238,6 +179,14 @@ func (m *MessageInjector) PendingMessages(session *Session) ([]*message.Message,
 		return nil, err
 	}
 	return slices.Clone(state.Messages), nil
+}
+
+func (m *MessageInjector) drainInto(session *Session, messages []*message.Message) ([]*message.Message, error) {
+	injected, err := m.drain(session)
+	if err != nil || len(injected) == 0 {
+		return messages, err
+	}
+	return slices.Concat(messages, injected), nil
 }
 
 func (m *MessageInjector) drain(session *Session) ([]*message.Message, error) {
