@@ -411,8 +411,12 @@ func (a *Agent) persistServiceCallHistory(next RunFunc, ctx context.Context, mes
 			}
 		}
 		if stopped {
-			if len(messages) > 0 && !continuationObserved {
-				recordEarlyExitPersistence(ctx, messages, options)
+			if !continuationObserved {
+				if backgroundOrContinuation {
+					recordEarlyExitPersistence(ctx, messages, options)
+				} else {
+					a.notifyServiceCallProvidersOnEarlyExit(ctx, session, messages, options)
+				}
 			}
 			return
 		}
@@ -448,6 +452,19 @@ func (a *Agent) persistServiceCallHistory(next RunFunc, ctx context.Context, mes
 				}
 			}
 		}
+	}
+}
+
+func (a *Agent) notifyServiceCallProvidersOnEarlyExit(ctx context.Context, session *Session, messages []*message.Message, options []Option) {
+	if len(messages) == 0 {
+		return
+	}
+	if ctx.Err() != nil {
+		ctx = context.WithoutCancel(ctx)
+	}
+	// Cleanup must not replace the consumer's reason for stopping.
+	if err := a.notifyServiceCallProviders(ctx, session, messages, nil, options, nil); err != nil && a.logger != nil {
+		a.logger.WarnContext(ctx, "failed to persist inputs after early stream termination", "error", err)
 	}
 }
 
