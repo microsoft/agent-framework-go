@@ -2102,11 +2102,45 @@ func TestAgent_PerServiceCallHistory_BackgroundAndContinuation(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if historyLoads != 0 || notifications != 2 || response.ConversationID != nil || session.ServiceID() != "" {
-					t.Fatalf("loads=%d notifications=%d response/session ID=%v/%q; want per-call and end-of-run notifications without local history simulation", historyLoads, notifications, response.ConversationID, session.ServiceID())
+				if historyLoads != 0 || notifications != 1 || response.ConversationID != nil || session.ServiceID() != "" {
+					t.Fatalf("loads=%d notifications=%d response/session ID=%v/%q; want one end-of-run notification without local history simulation", historyLoads, notifications, response.ConversationID, session.ServiceID())
 				}
 			})
 		}
+	}
+}
+
+func TestAgent_PerServiceCallHistory_AbandonedStreamWithContinuationToken(t *testing.T) {
+	for _, withToken := range []bool{false, true} {
+		t.Run(fmt.Sprintf("token=%t", withToken), func(t *testing.T) {
+			var stored [][]*message.Message
+			history := agent.NewHistoryProvider(agent.HistoryProviderConfig{
+				SourceID: "history",
+				Store: func(_ context.Context, invoked agent.InvokedContext) error {
+					stored = append(stored, invoked.RequestMessages)
+					return nil
+				},
+			})
+			a := agent.New(agent.ProviderConfig{Run: func(context.Context, []*message.Message, ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+				return func(yield func(*agent.ResponseUpdate, error) bool) {
+					update := &agent.ResponseUpdate{Role: message.RoleAssistant, Contents: message.Contents{&message.TextContent{Text: "partial"}}}
+					if withToken {
+						update.ContinuationToken = agenttest.NewContinuationToken(t, "response-1")
+					}
+					yield(update, nil)
+				}
+			}}, agent.Config{HistoryProvider: history, RequirePerServiceCallHistoryPersistence: true})
+			for range a.Run(t.Context(), []*message.Message{message.NewText("start")}, agent.WithSession(&agent.Session{}), agent.Stream(true), agent.AllowBackgroundResponses(true)) {
+				break
+			}
+			want := 1
+			if withToken {
+				want = 0
+			}
+			if len(stored) != want {
+				t.Fatalf("stored %d request sets, want %d: the resumed run persists inputs once a token was handed out", len(stored), want)
+			}
+		})
 	}
 }
 
