@@ -77,9 +77,8 @@ type Config struct {
 	//
 	// Local history uses an internal conversation ID, stripped before the provider
 	// is called, to prevent middleware from replaying already persisted messages.
-	// Background and continuation requests skip local history simulation and update
-	// session IDs at run completion. History and context providers are still notified
-	// per call, and again after successful run completion.
+	// Background and continuation requests skip local history simulation and defer
+	// successful persistence and session ID updates until run completion.
 	RequirePerServiceCallHistoryPersistence bool
 
 	// ThrowOnHistoryProviderConflict controls whether a configured
@@ -120,8 +119,8 @@ type Config struct {
 
 	// MessageInjector configures mid-run message injection. Call its
 	// EnqueueMessages method to queue messages. Nil disables message injection.
-	// Enable RequirePerServiceCallHistoryPersistence to retain injected messages
-	// and earlier responses between provider calls when the service is stateless.
+	// Enable [Config.RequirePerServiceCallHistoryPersistence] to retain injected
+	// messages and earlier responses between foreground calls to a stateless service.
 	MessageInjector *MessageInjector
 
 	// Tools are added to every run.
@@ -347,25 +346,20 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 		}
 		noSession, _ := GetOption(options, noSessionProvided)
 		stream, _ := GetOption(options, Stream)
-		allowBackground, _ := GetOption(options, AllowBackgroundResponses)
-		notifyAtEnd := !a.perServiceCallHistoryPersistence || continuationToken != "" || allowBackground
 		inputMessages := messages
 		lifecycleOptions := withoutContinuationToken(options)
 
-		historyProvider := a.historyProviderForRun(session, options, continuationToken, noSession)
-		if !notifyAtEnd {
-			historyProvider = nil
-		}
-		runContextProviders := continuationToken == "" && len(a.contextProviders) > 0
-		if historyProvider != nil && !a.perServiceCallHistoryPersistence {
-			var err error
-			messages, err = historyProvider.Invoking(ctx, InvokingContext{Messages: messages, Options: lifecycleOptions})
-			if err != nil {
-				yield(nil, err)
-				return
+		if !a.perServiceCallHistoryPersistence {
+			if history := a.historyProviderForRun(session, options, continuationToken, noSession); history != nil {
+				messages, err = history.Invoking(ctx, InvokingContext{Messages: messages, Options: lifecycleOptions})
+				if err != nil {
+					yield(nil, err)
+					return
+				}
 			}
 		}
 
+		runContextProviders := continuationToken == "" && len(a.contextProviders) > 0
 		if runContextProviders {
 			options = lifecycleOptions
 			for _, provider := range a.contextProviders {
@@ -378,10 +372,14 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			}
 		}
 
-		var requestMessages []*message.Message
-		if historyProvider != nil || runContextProviders {
-			requestMessages = messages
+		allowBackground, _ := GetOption(options, AllowBackgroundResponses)
+		notifyAtEnd := !a.perServiceCallHistoryPersistence || continuationToken != "" || allowBackground
+		var historyStoreProvider HistoryProvider
+		if notifyAtEnd {
+			historyStoreProvider = a.historyProviderForRun(session, options, continuationToken, noSession)
 		}
+
+		requestMessages := messages
 		trackContinuationUpdates := stream || continuationToken != ""
 
 		// invocationState groups values captured by the provider sequence's yield
@@ -395,7 +393,7 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			runErr              error
 			stopped             bool
 		}
-		if historyProvider != nil {
+		if historyStoreProvider != nil {
 			state.historyResponse = new(Response)
 		}
 		if runContextProviders && notifyAtEnd {
@@ -404,7 +402,6 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 		if trackContinuationUpdates {
 			state.continuationUpdates = cloneResponseUpdates(continuationState.ResponseUpdates)
 		}
-
 		for update, err := range a.providerPipeline(ctx, messages, options...) {
 			if update != nil {
 				a.setAuthor(update)
@@ -414,7 +411,7 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 				if trackContinuationUpdates {
 					state.continuationUpdates = append(state.continuationUpdates, cloneResponseUpdate(update))
 				}
-				if historyProvider != nil {
+				if state.historyResponse != nil {
 					state.historyResponse.Update(update)
 				}
 				if state.contextResponse != nil {
@@ -458,7 +455,6 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			}
 		}
 
-		historyStoreProvider := historyProvider
 		var storeResponseMessages []*message.Message
 		if state.historyResponse != nil {
 			storeResponseMessages = state.historyResponse.Messages
@@ -469,7 +465,6 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			continuationResponse := responseFromUpdates(state.continuationUpdates)
 			storeResponseMessages = continuationResponse.Messages
 		}
-
 		if historyStoreProvider != nil {
 			storeHistory := a.shouldStoreHistoryProvider(historyStoreProvider, session)
 			if storeHistory {

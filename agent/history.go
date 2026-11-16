@@ -382,10 +382,14 @@ func (a *Agent) persistServiceCallHistory(next RunFunc, ctx context.Context, mes
 		var response Response
 		var runErr error
 		var stopped bool
+		var continuationObserved bool
 		for update, err := range next(ctx, messagesForService, options...) {
 			if err != nil {
 				runErr = err
 				break
+			}
+			if update != nil && update.ContinuationToken != "" {
+				continuationObserved = true
 			}
 			// Assemble the actual service response before outer middleware can
 			// replace function calls with approval requests or stamp its own ID.
@@ -407,15 +411,15 @@ func (a *Agent) persistServiceCallHistory(next RunFunc, ctx context.Context, mes
 			}
 		}
 		if stopped {
-			if len(messages) > 0 {
-				// Preserve inputs on a cooperative pause, notably tool results
-				// paired with calls already stored by an earlier service request.
-				// Cleanup must not replace the caller's reason for stopping.
+			if len(messages) > 0 && !continuationObserved {
 				persistCtx := ctx
 				if ctx.Err() != nil {
 					persistCtx = context.WithoutCancel(ctx)
 				}
-				_ = a.notifyServiceCallProviders(persistCtx, session, messages, nil, options, nil)
+				// Cleanup must not replace the consumer's reason for stopping.
+				if err := a.notifyServiceCallProviders(persistCtx, session, messages, nil, options, nil); err != nil && a.logger != nil {
+					a.logger.WarnContext(persistCtx, "failed to persist inputs after early stream termination", "error", err)
+				}
 			}
 			return
 		}
@@ -427,13 +431,13 @@ func (a *Agent) persistServiceCallHistory(next RunFunc, ctx context.Context, mes
 			return
 		}
 		response.Coalesce()
-		if err := a.notifyServiceCallProviders(ctx, session, messages, response.Messages, options, nil); err != nil {
-			yield(nil, err)
-			return
-		}
-		// Background and continuation calls still notify providers above, but
-		// leave session IDs to the outer, continuation-aware lifecycle.
+		// Background and continuation runs are persisted by the outer
+		// end-of-run lifecycle, which also owns their session IDs.
 		if !backgroundOrContinuation {
+			if err := a.notifyServiceCallProviders(ctx, session, messages, response.Messages, options, nil); err != nil {
+				yield(nil, err)
+				return
+			}
 			if serviceManaged || response.ConversationID != nil && *response.ConversationID != "" {
 				if err := a.updateSessionConversationID(ctx, session, response.ConversationID); err != nil {
 					yield(nil, err)
