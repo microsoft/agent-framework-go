@@ -2130,7 +2130,10 @@ func TestAgent_PerServiceCallHistory_AbandonedStreamWithContinuationToken(t *tes
 					yield(update, nil)
 				}
 			}}, agent.Config{HistoryProvider: history, RequirePerServiceCallHistoryPersistence: true})
-			for range a.Run(t.Context(), []*message.Message{message.NewText("start")}, agent.WithSession(&agent.Session{}), agent.Stream(true), agent.AllowBackgroundResponses(true)) {
+			for _, err := range a.Run(t.Context(), []*message.Message{message.NewText("start")}, agent.WithSession(&agent.Session{}), agent.Stream(true), agent.AllowBackgroundResponses(true)) {
+				if err != nil {
+					t.Fatal(err)
+				}
 				break
 			}
 			want := 1
