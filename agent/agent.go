@@ -347,13 +347,11 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 		}
 		noSession, _ := GetOption(options, noSessionProvided)
 		stream, _ := GetOption(options, Stream)
-		allowBackground, _ := GetOption(options, AllowBackgroundResponses)
-		notifyAtEnd := !a.perServiceCallHistoryPersistence || continuationToken != "" || allowBackground
 		inputMessages := messages
 		lifecycleOptions := withoutContinuationToken(options)
 
 		historyProvider := a.historyProviderForRun(session, options, continuationToken, noSession)
-		if !notifyAtEnd {
+		if a.perServiceCallHistoryPersistence && continuationToken == "" {
 			historyProvider = nil
 		}
 		runContextProviders := continuationToken == "" && len(a.contextProviders) > 0
@@ -378,24 +376,32 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			}
 		}
 
-		var requestMessages []*message.Message
-		if historyProvider != nil || runContextProviders {
-			requestMessages = messages
+		allowBackground, _ := GetOption(options, AllowBackgroundResponses)
+		notifyAtEnd := !a.perServiceCallHistoryPersistence || continuationToken != "" || allowBackground
+		var historyStoreProvider HistoryProvider
+		if notifyAtEnd {
+			historyStoreProvider = a.historyProviderForRun(session, options, continuationToken, noSession)
 		}
+		if !notifyAtEnd {
+			historyStoreProvider = nil
+		}
+
+		requestMessages := messages
 		trackContinuationUpdates := stream || continuationToken != ""
 
 		// invocationState groups values captured by the provider sequence's yield
 		// callback so range-over-function lowering heap-boxes one object instead of
 		// allocating each captured local separately.
 		var state struct {
-			contextResponse     *Response
-			historyResponse     *Response
-			continuationUpdates []*ResponseUpdate
-			conversationID      *string
-			runErr              error
-			stopped             bool
+			contextResponse      *Response
+			historyResponse      *Response
+			continuationUpdates  []*ResponseUpdate
+			conversationID       *string
+			runErr               error
+			stopped              bool
+			continuationObserved bool
 		}
-		if historyProvider != nil {
+		if historyProvider != nil || historyStoreProvider != nil {
 			state.historyResponse = new(Response)
 		}
 		if runContextProviders && notifyAtEnd {
@@ -404,6 +410,7 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 		if trackContinuationUpdates {
 			state.continuationUpdates = cloneResponseUpdates(continuationState.ResponseUpdates)
 		}
+		ctx = context.WithValue(ctx, messageInjectionStateKey{}, new(messageInjectionState))
 
 		for update, err := range a.providerPipeline(ctx, messages, options...) {
 			if update != nil {
@@ -414,17 +421,21 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 				if trackContinuationUpdates {
 					state.continuationUpdates = append(state.continuationUpdates, cloneResponseUpdate(update))
 				}
-				if historyProvider != nil {
+				if state.historyResponse != nil {
 					state.historyResponse.Update(update)
 				}
 				if state.contextResponse != nil {
 					state.contextResponse.Update(update)
 				}
 				if update.ContinuationToken != "" {
+					state.continuationObserved = true
 					var tokenInputMessages []*message.Message
 					var tokenResponseUpdates []*ResponseUpdate
 					if stream {
 						tokenInputMessages = inputMessagesForContinuation(inputMessages, continuationState)
+						if a.perServiceCallHistoryPersistence {
+							tokenInputMessages = slices.Concat(tokenInputMessages, injectedMessages(ctx))
+						}
 						tokenResponseUpdates = state.continuationUpdates
 					}
 					wrappedToken, err := wrapContinuationToken(update.ContinuationToken, tokenInputMessages, tokenResponseUpdates)
@@ -444,6 +455,20 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			}
 		}
 		if state.stopped && state.runErr == nil {
+			injected := injectedMessages(ctx)
+			earlyMessages, earlyOptions, recorded := earlyExitPersistence(ctx)
+			if !recorded {
+				earlyMessages = requestMessages
+				earlyOptions = withoutContinuationToken(options)
+			}
+			if a.perServiceCallHistoryPersistence && continuationToken == "" && !state.continuationObserved && len(earlyMessages)+len(injected) > 0 {
+				persistCtx := ctx
+				if ctx.Err() != nil {
+					persistCtx = context.WithoutCancel(ctx)
+				}
+				earlyMessages = slices.Concat(earlyMessages, injected)
+				_ = a.notifyServiceCallProviders(persistCtx, session, earlyMessages, nil, earlyOptions, nil)
+			}
 			return
 		}
 		// Per-call failures have already been reported, including failures from
@@ -458,7 +483,6 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 			}
 		}
 
-		historyStoreProvider := historyProvider
 		var storeResponseMessages []*message.Message
 		if state.historyResponse != nil {
 			storeResponseMessages = state.historyResponse.Messages
@@ -466,8 +490,17 @@ func (a *Agent) invoke(ctx context.Context, messages []*message.Message, options
 		if continuationToken != "" {
 			historyStoreProvider = a.historyProviderForSession(session, options, noSession)
 			requestMessages = inputMessagesForContinuation(nil, continuationState)
+			if a.perServiceCallHistoryPersistence {
+				if injected := injectedMessages(ctx); len(injected) > 0 {
+					requestMessages = slices.Concat(requestMessages, injected)
+				}
+			}
 			continuationResponse := responseFromUpdates(state.continuationUpdates)
 			storeResponseMessages = continuationResponse.Messages
+		} else if a.perServiceCallHistoryPersistence && historyStoreProvider != nil {
+			if injected := injectedMessages(ctx); len(injected) > 0 {
+				requestMessages = slices.Concat(requestMessages, injected)
+			}
 		}
 
 		if historyStoreProvider != nil {

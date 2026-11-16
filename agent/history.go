@@ -382,8 +382,6 @@ func (a *Agent) persistServiceCallHistory(next RunFunc, ctx context.Context, mes
 		var response Response
 		var runErr error
 		var stopped bool
-		// A handed-out continuation token means the resumed run persists the
-		// inputs itself at its end.
 		var continuationObserved bool
 		for update, err := range next(ctx, messagesForService, options...) {
 			if err != nil {
@@ -414,14 +412,7 @@ func (a *Agent) persistServiceCallHistory(next RunFunc, ctx context.Context, mes
 		}
 		if stopped {
 			if len(messages) > 0 && !continuationObserved {
-				// Preserve inputs on a cooperative pause, notably tool results
-				// paired with calls already stored by an earlier service request.
-				// Cleanup must not replace the caller's reason for stopping.
-				persistCtx := ctx
-				if ctx.Err() != nil {
-					persistCtx = context.WithoutCancel(ctx)
-				}
-				_ = a.notifyServiceCallProviders(persistCtx, session, messages, nil, options, nil)
+				recordEarlyExitPersistence(ctx, messages, options)
 			}
 			return
 		}
