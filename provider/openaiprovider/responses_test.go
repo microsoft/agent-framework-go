@@ -8590,11 +8590,31 @@ func TestResponsesAssistantPhaseReplay(t *testing.T) {
 			if _, ok := resp.AdditionalProperties["phase"]; ok {
 				t.Error("phase leaked to response metadata")
 			}
-			for _, msg := range resp.Messages {
-				phase, _ := msg.AdditionalProperties["phase"].(string)
-				if phase != want[msg.ID] {
-					t.Errorf("message %s phase = %q, want %q", msg.ID, phase, want[msg.ID])
+			assertMessagePhase := func(msg *message.Message) {
+				t.Helper()
+				phase, present := msg.AdditionalProperties["phase"]
+				expected, expectedPresent := want[msg.ID]
+				if !expectedPresent {
+					if present {
+						t.Errorf("message %s unexpectedly has phase metadata %#v", msg.ID, phase)
+					}
+					return
 				}
+				if !present {
+					t.Errorf("message %s is missing phase metadata", msg.ID)
+					return
+				}
+				actual, ok := phase.(string)
+				if !ok {
+					t.Errorf("message %s phase has type %T, want string", msg.ID, phase)
+					return
+				}
+				if actual != expected {
+					t.Errorf("message %s phase = %q, want %q", msg.ID, actual, expected)
+				}
+			}
+			for _, msg := range resp.Messages {
+				assertMessagePhase(msg)
 			}
 			var assembled agent.Response
 			for _, update := range resp.ToUpdates() {
@@ -8612,6 +8632,7 @@ func TestResponsesAssistantPhaseReplay(t *testing.T) {
 				if msg.RawRepresentation != nil {
 					t.Fatal("serialized history retained raw representation")
 				}
+				assertMessagePhase(msg)
 			}
 			history = append(history, message.NewText("later"))
 			before, _ := json.Marshal(history)
