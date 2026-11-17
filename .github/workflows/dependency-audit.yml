@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   audit:
-    uses: microsoft/go-infra/.github/workflows/dependency-audit-target.yml@d567ad28b335b0be5ec1c85ca2eb0fee73cd4f5e
+    uses: microsoft/go-infra/.github/workflows/dependency-audit-target.yml@97443a0f1c62eaf6a5bc4eb2be16ae88aa34a473
     permissions:
       actions: read
       contents: read
