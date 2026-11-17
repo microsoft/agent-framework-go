@@ -8510,3 +8510,209 @@ func TestResponsesFunctionCallUsesToolCallsFinishReason_NonStreaming(t *testing.
 		t.Fatalf("FinishReason = %q, want tool_calls", resp.FinishReason)
 	}
 }
+
+// responsesPhaseOutput supplies fake Responses output through either public wire path.
+// Message deltas deliberately split identical text; done must not duplicate it.
+func responsesPhaseOutput(w http.ResponseWriter, stream bool, items []string, addedPhases map[string]string) {
+	output := `{"id":"resp_phase","object":"response","created_at":1,"status":"completed","model":"test-model","store":false,"output":[` + strings.Join(items, ",") + `]}`
+	if !stream {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, output)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	emit := func(event string, fields map[string]any) {
+		fields["type"] = event
+		data, _ := json.Marshal(fields)
+		_, _ = io.WriteString(w, "event: "+event+"\ndata: "+string(data)+"\n\n")
+	}
+	emit("response.created", map[string]any{"response": map[string]any{"id": "resp_phase", "status": "in_progress", "store": false}})
+	for i, raw := range items {
+		var item map[string]any
+		_ = json.Unmarshal([]byte(raw), &item)
+		var added map[string]any
+		_ = json.Unmarshal([]byte(raw), &added)
+		if item["type"] == "message" {
+			added["content"] = []any{}
+			delete(added, "phase")
+			if phase := addedPhases[item["id"].(string)]; phase != "" {
+				added["phase"] = phase
+			}
+		}
+		emit("response.output_item.added", map[string]any{"output_index": i, "item": added})
+		if item["type"] == "message" {
+			for _, delta := range []string{"sa", "me"} {
+				emit("response.output_text.delta", map[string]any{"item_id": item["id"], "output_index": i, "content_index": 0, "delta": delta})
+			}
+		}
+		emit("response.output_item.done", map[string]any{"output_index": i, "item": item})
+	}
+	emit("response.completed", map[string]any{"response": json.RawMessage(output)})
+}
+
+func TestResponsesAssistantPhaseReplay(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		name := "nonstreaming"
+		if stream {
+			name = "streaming"
+		}
+		t.Run(name, func(t *testing.T) {
+			items := []string{
+				`{"type":"message","id":"msg_comment","role":"assistant","status":"completed","phase":"commentary","content":[{"type":"output_text","text":"same","annotations":[]}]}`,
+				`{"type":"message","id":"msg_final","role":"assistant","status":"completed","phase":"final_answer","content":[{"type":"output_text","text":"same","annotations":[]}]}`,
+				`{"type":"message","id":"msg_absent","role":"assistant","status":"completed","content":[{"type":"output_text","text":"same","annotations":[]}]}`,
+				`{"type":"message","id":"msg_null","role":"assistant","status":"completed","phase":null,"content":[{"type":"output_text","text":"same","annotations":[]}]}`,
+				`{"type":"message","id":"msg_empty","role":"assistant","status":"completed","phase":"","content":[{"type":"output_text","text":"same","annotations":[]}]}`,
+				`{"type":"message","id":"msg_future","role":"assistant","status":"completed","phase":"future_phase","content":[{"type":"output_text","text":"same","annotations":[]}]}`,
+				`{"type":"message","id":"msg_added","role":"assistant","status":"completed","content":[{"type":"output_text","text":"same","annotations":[]}]}`,
+			}
+			requests := make(chan []byte, 2)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				requests <- body
+				responsesPhaseOutput(w, stream, items, map[string]string{"msg_final": "commentary", "msg_added": "commentary"})
+			}))
+			defer server.Close()
+			a := newTestResponsesClient(server, "test-model")
+			opts := []agent.Option{agent.Stream(stream), openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(false)})}
+			resp, err := a.RunText(t.Context(), "hello", opts...).Collect()
+			if err != nil {
+				t.Fatal(err)
+			}
+			<-requests
+			want := map[string]string{"msg_comment": "commentary", "msg_final": "final_answer", "msg_future": "future_phase"}
+			if stream {
+				want["msg_added"] = "commentary"
+			}
+			if len(resp.Messages) != len(items) {
+				t.Fatalf("messages = %d, want %d", len(resp.Messages), len(items))
+			}
+			if _, ok := resp.AdditionalProperties["phase"]; ok {
+				t.Error("phase leaked to response metadata")
+			}
+			for _, msg := range resp.Messages {
+				phase, _ := msg.AdditionalProperties["phase"].(string)
+				if phase != want[msg.ID] {
+					t.Errorf("message %s phase = %q, want %q", msg.ID, phase, want[msg.ID])
+				}
+			}
+			var assembled agent.Response
+			for _, update := range resp.ToUpdates() {
+				assembled.Update(update)
+			}
+			data, err := json.Marshal(assembled.Messages)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var history []*message.Message
+			if err := json.Unmarshal(data, &history); err != nil {
+				t.Fatal(err)
+			}
+			for _, msg := range history {
+				if msg.RawRepresentation != nil {
+					t.Fatal("serialized history retained raw representation")
+				}
+			}
+			history = append(history, message.NewText("later"))
+			before, _ := json.Marshal(history)
+			if _, err := a.Run(t.Context(), history, opts...).Collect(); err != nil {
+				t.Fatal(err)
+			}
+			after, _ := json.Marshal(history)
+			if string(before) != string(after) {
+				t.Error("replay mutated caller history")
+			}
+			var request struct {
+				Input []map[string]any `json:"input"`
+			}
+			if err := json.Unmarshal(<-requests, &request); err != nil {
+				t.Fatal(err)
+			}
+			if len(request.Input) != len(items)+1 {
+				t.Fatalf("input = %#v", request.Input)
+			}
+			for i, item := range request.Input {
+				id, _ := item["id"].(string)
+				phase, present := item["phase"]
+				if expected := want[id]; expected != "" {
+					if phase != expected {
+						t.Errorf("input %s phase = %#v, want %q", id, phase, expected)
+					}
+				} else if present {
+					t.Errorf("unexpected phase on input %d: %#v", i, item)
+				}
+				if i < len(items) {
+					content, _ := json.Marshal(item["content"])
+					responsesBodyEqual(t, string(content), `[{"type":"output_text","text":"same","annotations":[]}]`)
+				}
+			}
+		})
+	}
+}
+
+func TestResponsesAssistantPhaseNativeToolContinuation(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		name := "nonstreaming"
+		if stream {
+			name = "streaming"
+		}
+		t.Run(name, func(t *testing.T) {
+			const commentary = `{"type":"message","id":"msg_comment","role":"assistant","status":"completed","phase":"commentary","content":[{"type":"output_text","text":"same","annotations":[]}]}`
+			const reasoning = `{"type":"reasoning","id":"rs_phase","encrypted_content":"opaque+/=","summary":[]}`
+			const call = `{"type":"function_call","id":"fc_phase","call_id":"call_phase","name":"lookup","arguments":"{}"}`
+			const final = `{"type":"message","id":"msg_final","role":"assistant","status":"completed","phase":"final_answer","content":[{"type":"output_text","text":"same","annotations":[]}]}`
+			var calls, toolCalls atomic.Int32
+			requests := make(chan []byte, 3)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				requests <- body
+				if calls.Add(1) == 1 {
+					responsesPhaseOutput(w, stream, []string{commentary, reasoning, call}, nil)
+				} else {
+					responsesPhaseOutput(w, stream, []string{final}, nil)
+				}
+			}))
+			defer server.Close()
+			a := openaiprovider.NewResponsesAgent(openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("test")), openaiprovider.AgentConfig{
+				Model: "test-model", Config: agent.Config{Tools: []tool.Tool{functool.MustNew(functool.Config{Name: "lookup"},
+					func(context.Context, struct{}) (string, error) { toolCalls.Add(1); return "found", nil })}},
+			})
+			session, err := a.CreateSession(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := []agent.Option{agent.Stream(stream), agent.WithSession(session), openaiprovider.ResponsesNewParams(responses.ResponseNewParams{Store: openai.Bool(false)})}
+			if _, err := a.RunText(t.Context(), "lookup", opts...).Collect(); err != nil {
+				t.Fatal(err)
+			}
+			if calls.Load() != 2 || toolCalls.Load() != 1 {
+				t.Fatalf("requests = %d, tool calls = %d", calls.Load(), toolCalls.Load())
+			}
+			<-requests
+			assertInput := func(body []byte, later bool) {
+				t.Helper()
+				var request struct {
+					Input              json.RawMessage `json:"input"`
+					Store              bool            `json:"store"`
+					PreviousResponseID string          `json:"previous_response_id"`
+				}
+				if err := json.Unmarshal(body, &request); err != nil {
+					t.Fatal(err)
+				}
+				if request.Store || request.PreviousResponseID != "" {
+					t.Error("stateless request unexpectedly uses server history")
+				}
+				want := `[{"type":"message","role":"user","content":[{"type":"input_text","text":"lookup"}]},` + commentary + `,` + reasoning + `,{"type":"function_call","call_id":"call_phase","name":"lookup","arguments":"{}"},{"type":"function_call_output","call_id":"call_phase","output":"found"}`
+				if later {
+					want += `,` + final + `,{"type":"message","role":"user","content":[{"type":"input_text","text":"later"}]}`
+				}
+				responsesBodyEqual(t, string(request.Input), want+`]`)
+			}
+			assertInput(<-requests, false)
+			if _, err := a.RunText(t.Context(), "later", opts...).Collect(); err != nil {
+				t.Fatal(err)
+			}
+			assertInput(<-requests, true)
+		})
+	}
+}

@@ -35,6 +35,8 @@ import (
 
 const reasoningItemIDKey = "reasoningItemId"
 
+const assistantPhaseKey = "phase"
+
 // NewAgent creates an agent backed by the OpenAI API that best fits the Agent
 // Framework. The underlying OpenAI API is an implementation detail and can
 // change at any time. It currently uses [NewResponsesAgent].
@@ -666,7 +668,11 @@ func responsesBuildMessageParam(msg *message.Message, resp responses.ResponseInp
 			if id == "" || outputGroup > 0 {
 				id = fmt.Sprintf("msg_local_%d", len(resp))
 			}
-			resp = append(resp, responses.ResponseInputItemParamOfOutputMessage(outputContents, id, responses.ResponseOutputMessageStatusCompleted))
+			item := responses.ResponseInputItemParamOfOutputMessage(outputContents, id, responses.ResponseOutputMessageStatusCompleted)
+			if phase, ok := msg.AdditionalProperties[assistantPhaseKey].(string); ok && phase != "" {
+				item.OfOutputMessage.Phase = responses.ResponseOutputMessagePhase(phase)
+			}
+			resp = append(resp, item)
 			outputContents = nil
 			outputGroup++
 		}
@@ -1174,6 +1180,9 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 				currentUpdate.ContinuationToken = contToken
 			}
 			currentUpdate.RawRepresentation = out
+			if out.Phase != "" {
+				currentUpdate.AdditionalProperties = map[string]any{assistantPhaseKey: string(out.Phase)}
+			}
 			currentUpdate.Role = message.Role(out.Role)
 			currentUpdate.CreatedAt = time.Unix(int64(resp.CreatedAt), 0)
 			for _, c := range out.Content {
@@ -1528,6 +1537,9 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			state.role = message.RoleAssistant
 		}
 		u = createUpdate(message.RoleAssistant, nil)
+		if item, ok := event.Item.AsAny().(responses.ResponseOutputMessage); ok && item.Phase != "" {
+			u.AdditionalProperties = map[string]any{assistantPhaseKey: string(item.Phase)}
+		}
 		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
 			u.ContinuationToken = contToken
 		}
@@ -1683,6 +1695,9 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			state.role = message.Role(item.Role)
 			u.MessageID = state.messageID
 			u.Role = state.role
+			if item.Phase != "" {
+				u.AdditionalProperties = map[string]any{assistantPhaseKey: string(item.Phase)}
+			}
 			// For messages, only emit content if there are annotations that weren't in delta events
 			// Delta events handle the text itself, but annotations only appear in done events
 			hasAnnotations := false
