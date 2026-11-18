@@ -333,11 +333,25 @@ func (p *EnvironmentProvider) probeShellAndCWD(ctx context.Context, family Shell
 
 var toolNamePattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+// versionArguments maps tools whose version flag is not the conventional
+// --version. The Go toolchain in particular rejects "go --version" (exit
+// code 2), so probing it that way always reported Go as not installed.
+var versionArguments = map[string]string{
+	"go": "version",
+}
+
+func versionProbeCommand(name string) string {
+	if args, ok := versionArguments[strings.ToLower(name)]; ok {
+		return name + " " + args
+	}
+	return name + " --version"
+}
+
 func (p *EnvironmentProvider) probeToolVersion(ctx context.Context, name string) (ToolVersion, error) {
 	if name == "" || !toolNamePattern.MatchString(name) {
 		return ToolVersion{}, nil
 	}
-	result, ok, err := p.runProbe(ctx, name+" --version")
+	result, ok, err := p.runProbe(ctx, versionProbeCommand(name))
 	if err != nil || !ok || result.ExitCode != 0 {
 		return ToolVersion{}, err
 	}
