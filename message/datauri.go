@@ -49,6 +49,17 @@ func parseDataURI(uri string) (*dataURI, error) {
 	if strings.HasSuffix(strings.ToLower(metadata), ";base64") {
 		metadata = metadata[:len(metadata)-len(";base64")]
 		isBase64 = true
+		// RFC 2397 defines the payload as *urlchar, so a base64 payload may
+		// itself be percent-encoded (encoders commonly escape '+', '/' and
+		// the '=' padding). Decode the percent-encoding first, as the WHATWG
+		// data: URL processor does, then validate the base64.
+		if strings.ContainsRune(data, '%') {
+			unescaped, err := url.PathUnescape(data)
+			if err != nil {
+				return nil, fmt.Errorf("invalid data URI format: invalid percent-encoding in base64 data: %w", err)
+			}
+			data = unescaped
+		}
 		if !isValidBase64Data(data) {
 			return nil, fmt.Errorf("invalid data URI format: the data URI is base64-encoded, but the data is not a valid base64 string")
 		}
@@ -94,6 +105,8 @@ func DecodeDataURI(uri string) (data []byte, mediaType string, err error) {
 }
 
 // data returns the raw data portion of the data URI as a base64-encoded string.
+// parseDataURI has already percent-decoded base64 payloads and rejected invalid
+// percent-encoding in them, so the base64 branch returns the decoded payload.
 func (d *dataURI) data() string {
 	if d.IsBase64 {
 		return d.Data
