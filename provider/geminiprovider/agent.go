@@ -911,10 +911,30 @@ func toUsageDetails(u *genai.GenerateContentResponseUsageMetadata) message.Usage
 		CachedInputTokenCount: int64(u.CachedContentTokenCount),
 		ReasoningTokenCount:   int64(u.ThoughtsTokenCount),
 	}
-	if u.ToolUsePromptTokenCount != 0 {
-		details.AdditionalCounts = map[string]int64{
-			"ToolUsePromptTokenCount": int64(u.ToolUsePromptTokenCount),
+	add := func(key string, value int64) {
+		if value == 0 {
+			return
+		}
+		if details.AdditionalCounts == nil {
+			details.AdditionalCounts = make(map[string]int64)
+		}
+		details.AdditionalCounts[key] = value
+	}
+	add("ToolUsePromptTokenCount", int64(u.ToolUsePromptTokenCount))
+	// Surface the per-modality breakdowns like the OpenAI chat provider
+	// surfaces every reported detail count; multimodal billing differs per
+	// modality, so dropping them loses data the service reports.
+	addModalities := func(prefix string, counts []*genai.ModalityTokenCount) {
+		for _, count := range counts {
+			if count == nil {
+				continue
+			}
+			add(prefix+"."+string(count.Modality), int64(count.TokenCount))
 		}
 	}
+	addModalities("PromptTokensDetails", u.PromptTokensDetails)
+	addModalities("CandidatesTokensDetails", u.CandidatesTokensDetails)
+	addModalities("CacheTokensDetails", u.CacheTokensDetails)
+	addModalities("ToolUsePromptTokensDetails", u.ToolUsePromptTokensDetails)
 	return details
 }
