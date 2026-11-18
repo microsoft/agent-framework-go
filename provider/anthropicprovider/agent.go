@@ -279,6 +279,21 @@ func toUsageDetails(usage anthropic.Usage) message.UsageDetails {
 		}
 		details.AdditionalCounts["cache_creation_input_tokens"] = usage.CacheCreationInputTokens
 	}
+	// The TTL breakdown of cache writes is billing-relevant: 1-hour cache
+	// entries are billed at a higher rate than 5-minute entries, and the
+	// aggregate cache_creation_input_tokens cannot be split after the fact.
+	if usage.CacheCreation.Ephemeral5mInputTokens != 0 {
+		if details.AdditionalCounts == nil {
+			details.AdditionalCounts = make(map[string]int64)
+		}
+		details.AdditionalCounts["cache_creation.ephemeral_5m_input_tokens"] = usage.CacheCreation.Ephemeral5mInputTokens
+	}
+	if usage.CacheCreation.Ephemeral1hInputTokens != 0 {
+		if details.AdditionalCounts == nil {
+			details.AdditionalCounts = make(map[string]int64)
+		}
+		details.AdditionalCounts["cache_creation.ephemeral_1h_input_tokens"] = usage.CacheCreation.Ephemeral1hInputTokens
+	}
 	if usage.ServerToolUse.WebFetchRequests != 0 {
 		if details.AdditionalCounts == nil {
 			details.AdditionalCounts = make(map[string]int64)
