@@ -287,7 +287,13 @@ func cleanupMergedMessages(messages []*message.Message) []*message.Message {
 		}
 		keptContents := msg.Contents[:0]
 		for _, content := range msg.Contents {
-			if text, ok := content.(*message.TextContent); ok && strings.TrimSpace(text.Text) == "" {
+			// Whitespace-only text is dropped as noise — unless it carries
+			// annotations: providers emit annotation-only TextContents with
+			// empty text (for example, the Anthropic provider attaches
+			// streamed citation annotations that way), and dropping those
+			// would silently lose the citations.
+			if text, ok := content.(*message.TextContent); ok &&
+				strings.TrimSpace(text.Text) == "" && len(text.Annotations) == 0 {
 				continue
 			}
 			keptContents = append(keptContents, content)
