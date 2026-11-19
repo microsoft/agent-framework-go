@@ -123,7 +123,7 @@ func unmarshalRawContent(data json.RawMessage) (Content, error) {
 func (cs Contents) Text() string {
 	var sb strings.Builder
 	for _, c := range cs {
-		if textContent, ok := c.(*TextContent); ok {
+		if textContent, ok := c.(*TextContent); ok && textContent != nil {
 			sb.WriteString(textContent.Text)
 		}
 	}
@@ -134,11 +134,21 @@ func (cs Contents) Text() string {
 func (cs Contents) Usage() UsageDetails {
 	var usage UsageDetails
 	for _, c := range cs {
-		if usageContent, ok := c.(*UsageContent); ok {
+		if usageContent, ok := c.(*UsageContent); ok && usageContent != nil {
 			usage.Add(usageContent.Details)
 		}
 	}
 	return usage
+}
+
+// isNilContent reports whether c is nil or a typed-nil pointer stored in the
+// Content interface; walks that dereference an entry must skip both.
+func isNilContent(c Content) bool {
+	if c == nil {
+		return true
+	}
+	v := reflect.ValueOf(c)
+	return v.Kind() == reflect.Pointer && v.IsNil()
 }
 
 // TextContent represents plain text content.
@@ -1327,7 +1337,9 @@ func coalesce[T Content](contents Contents, mergeSingle bool, canMerge func(a, b
 	// Iterate through all of the items in the list looking for contiguous items that can be coalesced.
 	start := 0
 	tryAsCoalescable := func(c Content) (T, bool) {
-		if tc, ok := c.(T); ok && len(tc.Header().Annotations) == 0 {
+		// A typed-nil pointer satisfies the assertion but panics on
+		// tc.Header(); the dedicated coalescers guard it the same way.
+		if tc, ok := c.(T); ok && !isNilContent(c) && len(tc.Header().Annotations) == 0 {
 			return tc, true
 		}
 		var zero T
