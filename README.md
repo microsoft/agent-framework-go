@@ -215,7 +215,7 @@ Some packages and samples include optional OpenTelemetry instrumentation or conn
 
 ### Preview status
 
-The Agent Framework for Go is in public preview. Declarative agents, RAG, CodeAct, and functional workflows are not yet available. File issues on GitHub at https://github.com/microsoft/agent-framework-go/issues.
+The Agent Framework for Go is in public preview. Declarative agents, CodeAct, and functional workflows are not yet available. File issues on GitHub at https://github.com/microsoft/agent-framework-go/issues.
 
 ### Trademarks
 
