@@ -55,6 +55,25 @@ func ChatCompletionNewParams(params openai.ChatCompletionNewParams) agent.Option
 	return chatCompletionNewParamsOpt(params)
 }
 
+type chatReplayToolReasoningContentOpt bool
+
+func (o chatReplayToolReasoningContentOpt) MAFValue() any { return bool(o) }
+
+// ChatReplayToolReasoningContent enables replay of an endpoint's reasoning_content
+// on the immediately following matching automatic tool continuation of a
+// non-streaming [NewChatCompletionsAgent] run. It is off by default. Enable it
+// only for endpoints that accept this field on input; emitting it on a response
+// does not imply input support. It does not apply to later turns, runs resumed
+// after approval, or streaming requests.
+//
+// For example, with a Chat agent a and a registered lookup tool:
+//
+//	response, err := a.RunText(ctx, "Look up the order",
+//	    agent.Stream(false), openaiprovider.ChatReplayToolReasoningContent(true)).Collect()
+func ChatReplayToolReasoningContent(enabled bool) agent.Option {
+	return chatReplayToolReasoningContentOpt(enabled)
+}
+
 // AgentConfig contains configuration for an OpenAI-backed [agent.Agent].
 type AgentConfig struct {
 	agent.Config
@@ -95,7 +114,7 @@ func NewChatCompletionsAgent(oclient openai.Client, config AgentConfig) *agent.A
 	if config.ToolAutoCall != nil {
 		autoCall = *config.ToolAutoCall
 	}
-	providerMiddlewares := []agent.Middleware{toolautocall.New(autoCall)}
+	providerMiddlewares := []agent.Middleware{agent.MiddlewareFunc(withChatReasoningReplay), toolautocall.New(autoCall)}
 	return agent.New(agent.ProviderConfig{
 		ProviderName: cmp.Or(config.ProviderName, "openai"),
 		Run: modelcall.Wrap(c.run, func(options []agent.Option) string {
@@ -106,6 +125,105 @@ func NewChatCompletionsAgent(oclient openai.Client, config AgentConfig) *agent.A
 		Format:      c.formatOf,
 		Unmarshal:   c.unmarshal,
 	}, config.Config)
+}
+
+type chatReasoningKey struct{}
+
+type chatReasoningRun struct {
+	pending *chatReasoningReplay
+}
+
+type chatReasoningReplay struct {
+	model, messageID string
+	value            string
+	calls            []chatReasoningCall
+}
+
+type chatReasoningCall struct {
+	id, name, arguments string
+}
+
+// Keep the extension on the provider side of one automatic tool run. Nothing
+// is added to a message, session, or response update for later replay.
+func withChatReasoningReplay(next agent.RunFunc, ctx context.Context, messages []*message.Message, opts ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
+	enabled, _ := agent.GetOption(opts, ChatReplayToolReasoningContent)
+	stream, _ := agent.GetOption(opts, agent.Stream)
+	if !enabled || stream {
+		// A tool can start a nested Chat run with its parent's context. An
+		// unenabled child must neither read nor replace the parent's pending value.
+		if ctx.Value(chatReasoningKey{}) != nil {
+			ctx = context.WithValue(ctx, chatReasoningKey{}, (*chatReasoningRun)(nil))
+		}
+		return next(ctx, messages, opts...)
+	}
+	return func(yield func(*agent.ResponseUpdate, error) bool) {
+		state := new(chatReasoningRun)
+		defer func() { state.pending = nil }()
+		next(context.WithValue(ctx, chatReasoningKey{}, state), messages, opts...)(yield)
+	}
+}
+
+func (r *chatReasoningReplay) apply(messages []*message.Message, body *openai.ChatCompletionNewParams) {
+	if r == nil || body.Model != r.model {
+		return
+	}
+	// The originating assistant message must be followed only by the complete
+	// group of matching tool results at the very end of this request.
+	i := len(messages) - 1
+	for i >= 0 && messages[i].Role == message.RoleTool {
+		i--
+	}
+	if i < 0 || messages[i].Role != message.RoleAssistant || i == len(messages)-1 || messages[i].ID != r.messageID {
+		return
+	}
+	// Per-service-call history can recreate the content objects. The existing
+	// message ID survives that round trip, but must identify just this message.
+	if hasChatMessageID(messages[:i], r.messageID) || hasChatMessageID(messages[i+1:], r.messageID) {
+		return
+	}
+	var n int
+	for _, content := range messages[i].Contents {
+		if call, ok := content.(*message.FunctionCallContent); ok {
+			if n >= len(r.calls) || call.CallID != r.calls[n].id ||
+				call.Name != r.calls[n].name || call.Arguments != r.calls[n].arguments {
+				return
+			}
+			n++
+		}
+	}
+	if n != len(r.calls) {
+		return
+	}
+	remaining := make(map[string]struct{}, n)
+	for _, call := range r.calls {
+		if _, duplicate := remaining[call.id]; duplicate || call.id == "" {
+			return
+		}
+		remaining[call.id] = struct{}{}
+	}
+	for _, msg := range messages[i+1:] {
+		for _, content := range msg.Contents {
+			if result, ok := content.(*message.FunctionResultContent); ok {
+				if _, exists := remaining[result.CallID]; !exists {
+					return
+				}
+				delete(remaining, result.CallID)
+			}
+		}
+	}
+	if len(remaining) != 0 {
+		return
+	}
+	// The builder emits one assistant parameter and one tool parameter per
+	// result. Limit the extra field to that assistant parameter.
+	idx := len(body.Messages) - n - 1
+	if idx >= 0 && body.Messages[idx].OfAssistant != nil {
+		body.Messages[idx].OfAssistant.SetExtraFields(map[string]any{"reasoning_content": r.value})
+	}
+}
+
+func hasChatMessageID(messages []*message.Message, id string) bool {
+	return slices.ContainsFunc(messages, func(m *message.Message) bool { return m != nil && m.ID == id })
 }
 
 func (a *chatClient) formatOf(v any) (format.ResponseFormat, error) {
@@ -127,6 +245,12 @@ func (a *chatClient) unmarshal(format format.ResponseFormat, data []byte, v any)
 func (a *chatClient) run(ctx context.Context, messages []*message.Message, options ...agent.Option) iter.Seq2[*agent.ResponseUpdate, error] {
 	telemetry.MarkUsed(telemetry.FeatureOpenAI)
 	telemetryOption := telemetryRequestOption(a.config.ProviderName)
+	state, _ := ctx.Value(chatReasoningKey{}).(*chatReasoningRun)
+	var replay *chatReasoningReplay
+	if state != nil {
+		// Only the next provider step is eligible, even if it fails or differs.
+		replay, state.pending = state.pending, nil
+	}
 	body, err := buildCompletionParams(a.config.Model, messages, options)
 	if err != nil {
 		return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -134,6 +258,7 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 		}
 	}
 	if stream, _ := agent.GetOption(options, agent.Stream); !stream {
+		replay.apply(messages, &body)
 		resp, err := a.client.Chat.Completions.New(ctx, body, telemetryOption)
 		if err != nil {
 			return func(yield func(*agent.ResponseUpdate, error) bool) {
@@ -168,6 +293,23 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal, ErrorCode: "Refusal"})
 			}
 			finishReason = normalizeChatFinishReason(choice.FinishReason)
+			// Do not arm replay if the service omitted the message ID or reused
+			// one already in the request: neither would identify this response.
+			if state != nil && finishReason == "tool_calls" && len(choice.Message.ToolCalls) > 0 &&
+				resp.ID != "" && !hasChatMessageID(messages, resp.ID) {
+				// Treat absence, null and non-strings as absent; a real string,
+				// including an empty one, is sent back unchanged on a match.
+				var value *string
+				field := choice.Message.JSON.ExtraFields["reasoning_content"]
+				if json.Unmarshal([]byte(field.Raw()), &value) == nil && value != nil {
+					pending := &chatReasoningReplay{model: body.Model, messageID: resp.ID, value: *value}
+					for _, content := range contents[:len(choice.Message.ToolCalls)] {
+						call := content.(*message.FunctionCallContent)
+						pending.calls = append(pending.calls, chatReasoningCall{call.CallID, call.Name, call.Arguments})
+					}
+					state.pending = pending
+				}
+			}
 		}
 		if resp.JSON.Usage.Valid() {
 			contents = addUsage(contents, resp.Usage)

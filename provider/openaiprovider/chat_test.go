@@ -3,10 +3,12 @@
 package openaiprovider_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -28,6 +30,375 @@ import (
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
 )
+
+func TestChatReasoningToolContinuation(t *testing.T) {
+	const marker = "synthetic-private"
+	const value = "  synthetic-private\n\"quoted\" ☃  "
+	const result = "complete synthetic result\nfrom the local tool"
+	const extension = "reasoning_content"
+	for _, tc := range []struct {
+		name, field                                 string
+		replay                                      *string
+		inject                                      message.Role
+		responseOnly, explicitFalse, enabledDefault bool
+		jsonHistory                                 bool
+		historyChange                               string
+	}{
+		{name: "exact", field: `,"reasoning_content":"  synthetic-private\n\"quoted\" \u2603  "`, replay: new(value)},
+		{name: "json-history-exact", field: `,"reasoning_content":"  synthetic-private\n\"quoted\" \u2603  "`, replay: new(value), jsonHistory: true},
+		{name: "json-history-empty", field: `,"reasoning_content":""`, replay: new(""), jsonHistory: true},
+		{name: "json-history-default", field: `,"reasoning_content":"synthetic-private"`, responseOnly: true, jsonHistory: true},
+		{name: "json-history-false-overrides-default", field: `,"reasoning_content":"synthetic-private"`, responseOnly: true, explicitFalse: true, enabledDefault: true, jsonHistory: true},
+		{name: "json-history-reused-call-id", field: `,"reasoning_content":"synthetic-private"`, jsonHistory: true, historyChange: "other-message"},
+		{name: "json-history-duplicate-message-id", field: `,"reasoning_content":"synthetic-private"`, jsonHistory: true, historyChange: "duplicate-message-id"},
+		{name: "json-history-changed-arguments", field: `,"reasoning_content":"synthetic-private"`, jsonHistory: true, historyChange: "changed-arguments"},
+		{name: "json-history-missing-message-id", field: `,"reasoning_content":"synthetic-private"`, jsonHistory: true, historyChange: "missing-message-id"},
+		{name: "absent"},
+		{name: "empty", field: `,"reasoning_content":""`, replay: new("")},
+		{name: "null", field: `,"reasoning_content":null`},
+		{name: "not-a-string", field: `,"reasoning_content":{"text":"synthetic-private"}`},
+		{name: "intervening-user-message", field: `,"reasoning_content":"synthetic-private"`, inject: message.RoleUser},
+		{name: "foreign-tool-result", field: `,"reasoning_content":"synthetic-private"`, inject: message.RoleTool},
+		{name: "caller-reuses-call-id", field: `,"reasoning_content":"synthetic-private"`, inject: message.RoleAssistant},
+		{name: "response-only-default", field: `,"reasoning_content":"synthetic-private"`, responseOnly: true},
+		{name: "response-only-false", field: `,"reasoning_content":"synthetic-private"`, responseOnly: true, explicitFalse: true},
+		{name: "false-overrides-enabled-default", field: `,"reasoning_content":"synthetic-private"`, responseOnly: true, explicitFalse: true, enabledDefault: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls, reads atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				stage := calls.Add(1)
+				var body struct {
+					Messages []map[string]json.RawMessage `json:"messages"`
+				}
+				raw, err := io.ReadAll(r.Body)
+				if err != nil || json.Unmarshal(raw, &body) != nil {
+					t.Error("invalid request")
+					http.Error(w, "invalid request", http.StatusBadRequest)
+					return
+				}
+				text := func(raw json.RawMessage) string {
+					var s string
+					_ = json.Unmarshal(raw, &s)
+					return s
+				}
+				pair := -1
+				wantArgs := `{"card":"demo"}`
+				if stage == 2 && tc.historyChange == "changed-arguments" {
+					wantArgs = `{"card":"different"}`
+				}
+				if stage >= 2 {
+					for i, msg := range body.Messages {
+						if text(msg["role"]) != "assistant" || msg["tool_calls"] == nil {
+							continue
+						}
+						var wireCalls []struct {
+							ID, Type string
+							Function struct{ Name, Arguments string }
+						}
+						if json.Unmarshal(msg["tool_calls"], &wireCalls) != nil || len(wireCalls) != 1 ||
+							wireCalls[0].ID != "demo-call" || wireCalls[0].Type != "function" || wireCalls[0].Function.Name != "lookup" ||
+							wireCalls[0].Function.Arguments != wantArgs || text(msg["content"]) != "Looking it up." ||
+							i+1 >= len(body.Messages) || text(body.Messages[i+1]["role"]) != "tool" ||
+							text(body.Messages[i+1]["tool_call_id"]) != "demo-call" || text(body.Messages[i+1]["content"]) != result {
+							t.Error("tool call, visible preamble or complete result did not match")
+						}
+						pair = i
+					}
+					if pair < 0 {
+						t.Error("tool pair missing from wire history")
+					}
+				}
+				if tc.inject != "" && stage == 2 && len(body.Messages) != 0 {
+					last := body.Messages[len(body.Messages)-1]
+					switch tc.inject {
+					case message.RoleUser:
+						if text(last["content"]) != "Intervening user message" {
+							t.Error("unrelated message was not inserted")
+						}
+					case message.RoleTool:
+						if text(last["tool_call_id"]) != "different-id" {
+							t.Error("foreign result was not inserted")
+						}
+					case message.RoleAssistant:
+						if pair != len(body.Messages)-2 || len(body.Messages) != 5 {
+							t.Error("duplicate pair was not inserted")
+						}
+					}
+				}
+				wantCount := 0
+				if stage == 2 && tc.replay != nil {
+					wantCount = 1
+					if pair < 0 || body.Messages[pair][extension] == nil || text(body.Messages[pair][extension]) != *tc.replay {
+						t.Error("immediate assistant tool continuation lacks the exact reasoning_content")
+					}
+				}
+				wantMarkerCount := 0
+				if stage == 2 && tc.replay != nil && strings.Contains(*tc.replay, marker) {
+					wantMarkerCount = 1
+				}
+				if bytes.Count(raw, []byte(`"reasoning_content"`)) != wantCount || bytes.Count(raw, []byte(marker)) != wantMarkerCount {
+					t.Error("reasoning field or value has an unexpected occurrence on the wire")
+				}
+				if tc.responseOnly && bytes.Contains(raw, []byte(`"reasoning_content"`)) {
+					http.Error(w, "reasoning_content is response only", http.StatusBadRequest)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				var response string
+				switch stage {
+				case 1:
+					response = `{"id":"chat-first","object":"chat.completion","model":"test-model","choices":[{"index":0,"finish_reason":"tool_calls","message":{"role":"assistant","content":"Looking it up.","tool_calls":[{"id":"demo-call","type":"function","function":{"name":"lookup","arguments":"{\"card\":\"demo\"}"}}]` + tc.field + `}}]}`
+				case 2:
+					response = `{"id":"chat-second","object":"chat.completion","model":"test-model","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"Lookup complete."}}]}`
+				case 3, 4:
+					response = `{"id":"chat-later","object":"chat.completion","model":"test-model","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"Later answer."}}]}`
+				default:
+					t.Error("unexpected request")
+					http.Error(w, "unexpected request", http.StatusBadRequest)
+					return
+				}
+				if _, err := io.WriteString(w, response); err != nil {
+					t.Error("could not write synthetic completion")
+				}
+			}))
+			defer server.Close()
+			var logs bytes.Buffer
+			injector := &agent.MessageInjector{}
+			cfg := agent.Config{
+				Logger:           slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+				LogSensitiveData: true,
+			}
+			var stored [][]byte
+			var originalCall *message.FunctionCallContent
+			var reloadedCall bool
+			if tc.jsonHistory {
+				cfg.RequirePerServiceCallHistoryPersistence = true
+				cfg.HistoryProvider = agent.NewHistoryProvider(agent.HistoryProviderConfig{
+					SourceID: "test-json-history",
+					Store: func(_ context.Context, invoked agent.InvokedContext) error {
+						for _, msgs := range [][]*message.Message{invoked.RequestMessages, invoked.ResponseMessages} {
+							for _, msg := range msgs {
+								for _, content := range msg.Contents {
+									if call, ok := content.(*message.FunctionCallContent); ok {
+										originalCall = call
+									}
+								}
+								raw, err := json.Marshal(msg)
+								if err != nil {
+									return err
+								}
+								if bytes.Contains(raw, []byte(marker)) || bytes.Contains(raw, []byte(extension)) {
+									t.Error("private reasoning leaked into stored history")
+								}
+								stored = append(stored, raw)
+							}
+						}
+						return nil
+					},
+					Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, error) {
+						var msgs []*message.Message
+						for _, raw := range stored {
+							msg := new(message.Message)
+							if err := json.Unmarshal(raw, msg); err != nil {
+								return nil, err
+							}
+							if calls.Load() == 1 && msg.ID == "chat-first" {
+								for _, content := range msg.Contents {
+									if call, ok := content.(*message.FunctionCallContent); ok {
+										reloadedCall = originalCall != nil && call != originalCall && call.CallID == originalCall.CallID &&
+											call.Name == originalCall.Name && call.Arguments == originalCall.Arguments
+										if tc.historyChange == "changed-arguments" {
+											call.Arguments = `{"card":"different"}`
+										}
+									}
+								}
+								switch tc.historyChange {
+								case "other-message":
+									msg.ID = "other-assistant"
+								case "missing-message-id":
+									msg.ID = ""
+								}
+							}
+							if calls.Load() == 1 && msg.Role == message.RoleUser && tc.historyChange == "duplicate-message-id" {
+								msg.ID = "chat-first"
+							}
+							msgs = append(msgs, msg)
+						}
+						return msgs, nil
+					},
+				})
+			}
+			if tc.inject != "" {
+				cfg.MessageInjector = injector
+			}
+			if tc.enabledDefault {
+				cfg.RunOptions = []agent.Option{openaiprovider.ChatReplayToolReasoningContent(true)}
+			}
+			a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithAPIKey("synthetic-key"),
+				option.WithBaseURL(server.URL), option.WithMaxRetries(0)), openaiprovider.AgentConfig{Model: "test-model", Config: cfg})
+			session, err := a.CreateSession(t.Context())
+			if err != nil {
+				t.Fatal("could not create local session")
+			}
+			lookup := functool.MustNew(functool.Config{Name: "lookup"}, func(_ context.Context, in struct {
+				Card string `json:"card"`
+			},
+			) (string, error) {
+				reads.Add(1)
+				if in.Card != "demo" {
+					t.Error("unexpected lookup argument")
+				}
+				var injected []*message.Message
+				makeResult := func(id string) *message.Message {
+					return &message.Message{Role: message.RoleTool, Contents: message.Contents{&message.FunctionResultContent{CallID: id, Result: result}}}
+				}
+				switch tc.inject {
+				case message.RoleUser:
+					injected = []*message.Message{message.NewText("Intervening user message")}
+				case message.RoleTool:
+					injected = []*message.Message{makeResult("different-id")}
+				case message.RoleAssistant:
+					injected = []*message.Message{{Role: message.RoleAssistant, Contents: message.Contents{
+						&message.TextContent{Text: "Looking it up."},
+						&message.FunctionCallContent{CallID: "demo-call", Name: "lookup", Arguments: `{"card":"demo"}`, InformationalOnly: true},
+					}}, makeResult("demo-call")}
+				}
+				if len(injected) > 0 {
+					if err := injector.EnqueueMessages(session, injected...); err != nil {
+						t.Error("could not enqueue the test messages")
+					}
+				}
+				return result, nil
+			})
+			opts := []agent.Option{agent.WithSession(session), agent.WithTool(lookup), agent.Stream(false)}
+			if !tc.responseOnly || tc.explicitFalse {
+				opts = append(opts, openaiprovider.ChatReplayToolReasoningContent(!tc.explicitFalse))
+			}
+			first, err := a.RunText(t.Context(), "Look up demo", opts...).Collect()
+			if tc.jsonHistory && !reloadedCall {
+				t.Error("immediate continuation did not reload the originating call with a new pointer")
+			}
+			if err != nil || !strings.Contains(first.String(), "Lookup complete.") {
+				t.Fatal("ordinary tool journey did not finish")
+			}
+			outputs := []any{first, session}
+			var laterCount int32
+			for _, laterOpts := range [][]agent.Option{{openaiprovider.ChatReplayToolReasoningContent(true)}, nil} {
+				if tc.responseOnly {
+					break
+				}
+				later, err := a.RunText(t.Context(), "A new question", append(laterOpts, agent.WithSession(session), agent.Stream(false))...).Collect()
+				if err != nil || later.String() != "Later answer." {
+					t.Fatal("later answer did not finish")
+				}
+				outputs = append(outputs, later)
+				laterCount++
+			}
+			if calls.Load() != 2+laterCount || reads.Load() != 1 {
+				t.Fatal("unexpected request or tool count")
+			}
+			for _, output := range outputs {
+				data, err := json.Marshal(output)
+				if err != nil || bytes.Contains(data, []byte(marker)) || bytes.Contains(data, []byte(extension)) {
+					t.Error("private reasoning leaked into serialized output")
+				}
+			}
+			if strings.Contains(first.String(), marker) || logs.Len() == 0 || strings.Contains(logs.String(), marker) || strings.Contains(logs.String(), extension) {
+				t.Error("rendered output or framework logs did not preserve the private boundary")
+			}
+		})
+	}
+}
+
+func TestChatReasoningTwoToolRounds(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		t.Run(fmt.Sprintf("stream=%t", stream), func(t *testing.T) {
+			var requests, reads atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				stage := requests.Add(1)
+				var wire struct {
+					Stream   bool
+					Messages []struct {
+						Role, Content string
+						CallID        string                `json:"tool_call_id"`
+						Reasoning     json.RawMessage       `json:"reasoning_content"`
+						Calls         []struct{ ID string } `json:"tool_calls"`
+					}
+				}
+				if err := json.NewDecoder(r.Body).Decode(&wire); err != nil || wire.Stream != stream || stage > 3 {
+					t.Error("unexpected wire shape or request count")
+					http.Error(w, "unexpected request", http.StatusBadRequest)
+					return
+				}
+				var pairs int32
+				for i, m := range wire.Messages {
+					var want string
+					if m.Role == "assistant" && len(m.Calls) > 0 {
+						pairs++
+						id := fmt.Sprintf("call-%d", pairs)
+						if len(m.Calls) != 1 || m.Calls[0].ID != id || i+1 >= len(wire.Messages) || wire.Messages[i+1].Role != "tool" ||
+							wire.Messages[i+1].CallID != id || wire.Messages[i+1].Content != fmt.Sprintf("full result %d", pairs) {
+							t.Error("tool pair did not match")
+						}
+						if !stream && pairs == stage-1 {
+							want = fmt.Sprintf(`"private-round-%d"`, pairs)
+						}
+					}
+					if string(m.Reasoning) != want {
+						t.Error("unexpected immediate or stale reasoning field")
+					}
+				}
+				if pairs != stage-1 {
+					t.Error("missing retained tool pairs")
+				}
+				finish := "stop"
+				fields := `,"content":"Done."`
+				if stage <= 2 {
+					finish = "tool_calls"
+					index := ""
+					if stream {
+						index = `"index":0,`
+					}
+					fields = fmt.Sprintf(`,"tool_calls":[{%s"id":"call-%d","type":"function","function":{"name":"lookup","arguments":"{\"id\":%d}"}}],"reasoning_content":"private-round-%d"`, index, stage, stage, stage)
+				}
+				kind, member := "chat.completion", "message"
+				if stream {
+					kind, member = "chat.completion.chunk", "delta"
+				}
+				body := fmt.Sprintf(`{"id":"resp-%d","object":%q,"created":1,"model":"test-model","choices":[{"index":0,"finish_reason":%q,%q:{"role":"assistant"%s}}]}`, stage, kind, finish, member, fields)
+				if stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					body = "data: " + body + "\n\ndata: [DONE]\n\n"
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+				}
+				if _, err := io.WriteString(w, body); err != nil {
+					t.Error("could not write synthetic completion")
+				}
+			}))
+			defer server.Close()
+			a := openaiprovider.NewChatCompletionsAgent(openai.NewClient(option.WithBaseURL(server.URL), option.WithAPIKey("synthetic"), option.WithMaxRetries(0)), openaiprovider.AgentConfig{Model: "test-model"})
+			type input struct {
+				ID int32 `json:"id"`
+			}
+			lookup := functool.MustNew(functool.Config{Name: "lookup"}, func(_ context.Context, in input) (string, error) {
+				if reads.Add(1) != in.ID {
+					t.Error("unexpected lookup arguments")
+				}
+				return fmt.Sprintf("full result %d", in.ID), nil
+			})
+			r, err := a.RunText(t.Context(), "Look up both cards", agent.WithTool(lookup), agent.Stream(stream), openaiprovider.ChatReplayToolReasoningContent(true)).Collect()
+			if err != nil || r.String() != "Done." || requests.Load() != 3 || reads.Load() != 2 {
+				t.Fatal("two tool rounds did not finish")
+			}
+			serialized, err := json.Marshal(r)
+			if err != nil || bytes.Contains(serialized, []byte("private-round-")) {
+				t.Error("private reasoning appeared in serialized output")
+			}
+		})
+	}
+}
 
 func TestDeclarationOnlyToolsAreAdvertised(t *testing.T) {
 	for _, responsesAPI := range []bool{false, true} {
