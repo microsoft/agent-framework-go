@@ -2041,3 +2041,43 @@ func TestEnvironmentProvider_RefreshReprobesEachCall(t *testing.T) {
 		t.Fatalf("run count = %d, want greater than %d", fake.runCount, first)
 	}
 }
+
+func TestEnvironmentProvider_goProbeUsesGoVersionNotDashDashVersion(t *testing.T) {
+	// `go --version` is not a valid Go command (the toolchain exits with
+	// code 2), so probing go that way always reported it as not installed.
+	var commands []string
+	fake := &environmentTestExecutor{
+		run: func(_ context.Context, command string) (shelltool.Result, error) {
+			commands = append(commands, command)
+			if command == "go version" {
+				return shelltool.Result{Stdout: "go version go1.26.0 darwin/arm64\n", ExitCode: 0}, nil
+			}
+			if strings.HasPrefix(command, "go ") {
+				return shelltool.Result{Stderr: "flag provided but not defined: -version\n", ExitCode: 2}, nil
+			}
+			return shelltool.Result{Stdout: "VERSION=1.0\nCWD=/tmp\n", ExitCode: 0}, nil
+		},
+	}
+	env := shelltool.NewEnvironmentProvider(fake, shelltool.EnvironmentProviderConfig{
+		OverrideFamily: new(shelltool.ShellFamilyPOSIX),
+		ProbeTools:     []string{"go"},
+	})
+
+	snapshot, err := env.Refresh(t.Context())
+	if err != nil {
+		t.Fatalf("refresh shell environment: %v", err)
+	}
+	if !slices.Contains(commands, "go version") {
+		t.Fatalf("probe commands = %q, want a \"go version\" probe", commands)
+	}
+	if slices.Contains(commands, "go --version") {
+		t.Fatalf("probe commands = %q, must not run \"go --version\"", commands)
+	}
+	version, ok := snapshot.ToolVersions["go"]
+	if !ok || !version.Found {
+		t.Fatalf("go toolchain not detected: %#v", snapshot.ToolVersions)
+	}
+	if version.Version != "go version go1.26.0 darwin/arm64" {
+		t.Fatalf("go version = %q", version.Version)
+	}
+}
