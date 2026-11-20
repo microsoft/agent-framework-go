@@ -41,8 +41,18 @@ func TestChatReasoningToolContinuation(t *testing.T) {
 		replay                                      *string
 		inject                                      message.Role
 		responseOnly, explicitFalse, enabledDefault bool
+		jsonHistory                                 bool
+		historyChange                               string
 	}{
 		{name: "exact", field: `,"reasoning_content":"  synthetic-private\n\"quoted\" \u2603  "`, replay: new(value)},
+		{name: "json-history-exact", field: `,"reasoning_content":"  synthetic-private\n\"quoted\" \u2603  "`, replay: new(value), jsonHistory: true},
+		{name: "json-history-empty", field: `,"reasoning_content":""`, replay: new(""), jsonHistory: true},
+		{name: "json-history-default", field: `,"reasoning_content":"synthetic-private"`, responseOnly: true, jsonHistory: true},
+		{name: "json-history-false-overrides-default", field: `,"reasoning_content":"synthetic-private"`, responseOnly: true, explicitFalse: true, enabledDefault: true, jsonHistory: true},
+		{name: "json-history-reused-call-id", field: `,"reasoning_content":"synthetic-private"`, jsonHistory: true, historyChange: "other-message"},
+		{name: "json-history-duplicate-message-id", field: `,"reasoning_content":"synthetic-private"`, jsonHistory: true, historyChange: "duplicate-message-id"},
+		{name: "json-history-changed-arguments", field: `,"reasoning_content":"synthetic-private"`, jsonHistory: true, historyChange: "changed-arguments"},
+		{name: "json-history-missing-message-id", field: `,"reasoning_content":"synthetic-private"`, jsonHistory: true, historyChange: "missing-message-id"},
 		{name: "absent"},
 		{name: "empty", field: `,"reasoning_content":""`, replay: new("")},
 		{name: "null", field: `,"reasoning_content":null`},
@@ -73,6 +83,10 @@ func TestChatReasoningToolContinuation(t *testing.T) {
 					return s
 				}
 				pair := -1
+				wantArgs := `{"card":"demo"}`
+				if stage == 2 && tc.historyChange == "changed-arguments" {
+					wantArgs = `{"card":"different"}`
+				}
 				if stage >= 2 {
 					for i, msg := range body.Messages {
 						if text(msg["role"]) != "assistant" || msg["tool_calls"] == nil {
@@ -84,7 +98,7 @@ func TestChatReasoningToolContinuation(t *testing.T) {
 						}
 						if json.Unmarshal(msg["tool_calls"], &wireCalls) != nil || len(wireCalls) != 1 ||
 							wireCalls[0].ID != "demo-call" || wireCalls[0].Type != "function" || wireCalls[0].Function.Name != "lookup" ||
-							wireCalls[0].Function.Arguments != `{"card":"demo"}` || text(msg["content"]) != "Looking it up." ||
+							wireCalls[0].Function.Arguments != wantArgs || text(msg["content"]) != "Looking it up." ||
 							i+1 >= len(body.Messages) || text(body.Messages[i+1]["role"]) != "tool" ||
 							text(body.Messages[i+1]["tool_call_id"]) != "demo-call" || text(body.Messages[i+1]["content"]) != result {
 							t.Error("tool call, visible preamble or complete result did not match")
@@ -120,7 +134,7 @@ func TestChatReasoningToolContinuation(t *testing.T) {
 					}
 				}
 				wantMarkerCount := 0
-				if stage == 2 && tc.name == "exact" {
+				if stage == 2 && tc.replay != nil && strings.Contains(*tc.replay, marker) {
 					wantMarkerCount = 1
 				}
 				if bytes.Count(raw, []byte(`"reasoning_content"`)) != wantCount || bytes.Count(raw, []byte(marker)) != wantMarkerCount {
@@ -154,6 +168,66 @@ func TestChatReasoningToolContinuation(t *testing.T) {
 			cfg := agent.Config{
 				Logger:           slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
 				LogSensitiveData: true,
+			}
+			var stored [][]byte
+			var originalCall *message.FunctionCallContent
+			var reloadedCall bool
+			if tc.jsonHistory {
+				cfg.RequirePerServiceCallHistoryPersistence = true
+				cfg.HistoryProvider = agent.NewHistoryProvider(agent.HistoryProviderConfig{
+					SourceID: "test-json-history",
+					Store: func(_ context.Context, invoked agent.InvokedContext) error {
+						for _, msgs := range [][]*message.Message{invoked.RequestMessages, invoked.ResponseMessages} {
+							for _, msg := range msgs {
+								for _, content := range msg.Contents {
+									if call, ok := content.(*message.FunctionCallContent); ok {
+										originalCall = call
+									}
+								}
+								raw, err := json.Marshal(msg)
+								if err != nil {
+									return err
+								}
+								if bytes.Contains(raw, []byte(marker)) || bytes.Contains(raw, []byte(extension)) {
+									t.Error("private reasoning leaked into stored history")
+								}
+								stored = append(stored, raw)
+							}
+						}
+						return nil
+					},
+					Provide: func(_ context.Context, _ agent.InvokingContext) ([]*message.Message, error) {
+						var msgs []*message.Message
+						for _, raw := range stored {
+							msg := new(message.Message)
+							if err := json.Unmarshal(raw, msg); err != nil {
+								return nil, err
+							}
+							if calls.Load() == 1 && msg.ID == "chat-first" {
+								for _, content := range msg.Contents {
+									if call, ok := content.(*message.FunctionCallContent); ok {
+										reloadedCall = originalCall != nil && call != originalCall && call.CallID == originalCall.CallID &&
+											call.Name == originalCall.Name && call.Arguments == originalCall.Arguments
+										if tc.historyChange == "changed-arguments" {
+											call.Arguments = `{"card":"different"}`
+										}
+									}
+								}
+								switch tc.historyChange {
+								case "other-message":
+									msg.ID = "other-assistant"
+								case "missing-message-id":
+									msg.ID = ""
+								}
+							}
+							if calls.Load() == 1 && msg.Role == message.RoleUser && tc.historyChange == "duplicate-message-id" {
+								msg.ID = "chat-first"
+							}
+							msgs = append(msgs, msg)
+						}
+						return msgs, nil
+					},
+				})
 			}
 			if tc.inject != "" {
 				cfg.MessageInjector = injector
@@ -202,6 +276,9 @@ func TestChatReasoningToolContinuation(t *testing.T) {
 				opts = append(opts, openaiprovider.ChatReplayToolReasoningContent(!tc.explicitFalse))
 			}
 			first, err := a.RunText(t.Context(), "Look up demo", opts...).Collect()
+			if tc.jsonHistory && !reloadedCall {
+				t.Error("immediate continuation did not reload the originating call with a new pointer")
+			}
 			if err != nil || !strings.Contains(first.String(), "Lookup complete.") {
 				t.Fatal("ordinary tool journey did not finish")
 			}

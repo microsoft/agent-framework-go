@@ -134,13 +134,12 @@ type chatReasoningRun struct {
 }
 
 type chatReasoningReplay struct {
-	model string
-	value string
-	calls []chatReasoningCall
+	model, messageID string
+	value            string
+	calls            []chatReasoningCall
 }
 
 type chatReasoningCall struct {
-	origin              *message.FunctionCallContent
 	id, name, arguments string
 }
 
@@ -174,13 +173,18 @@ func (r *chatReasoningReplay) apply(messages []*message.Message, body *openai.Ch
 	for i >= 0 && messages[i].Role == message.RoleTool {
 		i--
 	}
-	if i < 0 || messages[i].Role != message.RoleAssistant || i == len(messages)-1 {
+	if i < 0 || messages[i].Role != message.RoleAssistant || i == len(messages)-1 || messages[i].ID != r.messageID {
+		return
+	}
+	// Per-service-call history can recreate the content objects. The existing
+	// message ID survives that round trip, but must identify just this message.
+	if hasChatMessageID(messages[:i], r.messageID) || hasChatMessageID(messages[i+1:], r.messageID) {
 		return
 	}
 	var n int
 	for _, content := range messages[i].Contents {
 		if call, ok := content.(*message.FunctionCallContent); ok {
-			if n >= len(r.calls) || call != r.calls[n].origin || call.CallID != r.calls[n].id ||
+			if n >= len(r.calls) || call.CallID != r.calls[n].id ||
 				call.Name != r.calls[n].name || call.Arguments != r.calls[n].arguments {
 				return
 			}
@@ -216,6 +220,10 @@ func (r *chatReasoningReplay) apply(messages []*message.Message, body *openai.Ch
 	if idx >= 0 && body.Messages[idx].OfAssistant != nil {
 		body.Messages[idx].OfAssistant.SetExtraFields(map[string]any{"reasoning_content": r.value})
 	}
+}
+
+func hasChatMessageID(messages []*message.Message, id string) bool {
+	return slices.ContainsFunc(messages, func(m *message.Message) bool { return m != nil && m.ID == id })
 }
 
 func (a *chatClient) formatOf(v any) (format.ResponseFormat, error) {
@@ -285,16 +293,19 @@ func (a *chatClient) run(ctx context.Context, messages []*message.Message, optio
 				contents = append(contents, &message.ErrorContent{Message: choice.Message.Refusal, ErrorCode: "Refusal"})
 			}
 			finishReason = normalizeChatFinishReason(choice.FinishReason)
-			if state != nil && finishReason == "tool_calls" && len(choice.Message.ToolCalls) > 0 {
+			// Do not arm replay if the service omitted the message ID or reused
+			// one already in the request: neither would identify this response.
+			if state != nil && finishReason == "tool_calls" && len(choice.Message.ToolCalls) > 0 &&
+				resp.ID != "" && !hasChatMessageID(messages, resp.ID) {
 				// Treat absence, null and non-strings as absent; a real string,
 				// including an empty one, is sent back unchanged on a match.
 				var value *string
 				field := choice.Message.JSON.ExtraFields["reasoning_content"]
 				if json.Unmarshal([]byte(field.Raw()), &value) == nil && value != nil {
-					pending := &chatReasoningReplay{model: body.Model, value: *value}
+					pending := &chatReasoningReplay{model: body.Model, messageID: resp.ID, value: *value}
 					for _, content := range contents[:len(choice.Message.ToolCalls)] {
 						call := content.(*message.FunctionCallContent)
-						pending.calls = append(pending.calls, chatReasoningCall{call, call.CallID, call.Name, call.Arguments})
+						pending.calls = append(pending.calls, chatReasoningCall{call.CallID, call.Name, call.Arguments})
 					}
 					state.pending = pending
 				}
