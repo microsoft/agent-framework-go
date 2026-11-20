@@ -531,16 +531,14 @@ func (a *Agent) setAuthor(update *ResponseUpdate) {
 }
 
 func withoutContinuationToken(options []Option) []Option {
-	if !slices.ContainsFunc(options, func(opt Option) bool {
+	isToken := func(opt Option) bool {
 		_, ok := opt.(continuationTokenOpt)
 		return ok
-	}) {
+	}
+	if !slices.ContainsFunc(options, isToken) {
 		return options
 	}
-	return slices.DeleteFunc(slices.Clone(options), func(opt Option) bool {
-		_, ok := opt.(continuationTokenOpt)
-		return ok
-	})
+	return slices.DeleteFunc(slices.Clone(options), isToken)
 }
 
 func (a *Agent) historyProviderForRun(session *Session, options []Option, continuationToken string, noSession bool) HistoryProvider {
