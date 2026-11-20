@@ -2322,3 +2322,34 @@ func TestBuildMessageParam_DataURIImageForwardedAsBase64(t *testing.T) {
 		t.Fatalf("expected data: URIContent image forwarded as a base64 image source, got: %s", body)
 	}
 }
+
+func TestUsageCacheCreationTTLBreakdownSurfaced(t *testing.T) {
+	// The API splits cache writes by TTL (1-hour entries bill at a higher
+	// rate than 5-minute entries); the breakdown must reach
+	// AdditionalCounts alongside the aggregate, which cannot be split
+	// after the fact.
+	body := `{"id":"m1","type":"message","role":"assistant","model":"claude-3-5-sonnet-20241022",` +
+		`"content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn",` +
+		`"usage":{"input_tokens":10,"output_tokens":2,"cache_creation_input_tokens":30,"cache_read_input_tokens":0,` +
+		`"cache_creation":{"ephemeral_5m_input_tokens":12,"ephemeral_1h_input_tokens":18}}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	}))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	usage := resp.Usage()
+	if got := usage.AdditionalCounts["cache_creation_input_tokens"]; got != 30 {
+		t.Errorf("cache_creation_input_tokens = %d, want 30", got)
+	}
+	if got := usage.AdditionalCounts["cache_creation.ephemeral_5m_input_tokens"]; got != 12 {
+		t.Errorf("ephemeral_5m_input_tokens = %d, want 12 (all: %#v)", got, usage.AdditionalCounts)
+	}
+	if got := usage.AdditionalCounts["cache_creation.ephemeral_1h_input_tokens"]; got != 18 {
+		t.Errorf("ephemeral_1h_input_tokens = %d, want 18 (all: %#v)", got, usage.AdditionalCounts)
+	}
+}
