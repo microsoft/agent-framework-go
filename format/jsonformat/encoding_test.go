@@ -46,6 +46,16 @@ func TestFromResponseFormat_RejectsTypedNilSchema(t *testing.T) {
 	}
 }
 
+func TestFromResponseFormatPreservesStrict(t *testing.T) {
+	responseFormat := jsonformat.MustFor[Struct]()
+	responseFormat.Strict = false
+
+	format := requireFormat(t, responseFormat)
+	if format.Strict {
+		t.Fatal("FromResponseFormat() enabled strict mode for a non-strict format")
+	}
+}
+
 func TestEncodingRoundtrip(t *testing.T) {
 	tests := []struct {
 		name string
