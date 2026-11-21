@@ -632,6 +632,7 @@ type SwitchBuilder struct {
 	// defaultIndices are the target indexes to dispatch to when no case
 	// predicate matches.
 	defaultIndices []int
+	defaultSeen    map[int]struct{}
 }
 
 type switchCase struct {
@@ -648,6 +649,7 @@ func (wb *Builder) AddSwitch(source ExecutorBinding) *SwitchBuilder {
 		source:          source,
 		sourceSet:       true,
 		targetIndexByID: map[string]int{},
+		defaultSeen:     map[int]struct{}{},
 	}
 }
 
@@ -657,20 +659,19 @@ func (s *SwitchBuilder) AddCase(predicate func(msg any) bool, targets ...Executo
 	if predicate == nil {
 		panic("workflow: switch case predicate cannot be nil")
 	}
-	indices := s.collectTargets(targets)
+	indices := s.appendTargets(nil, make(map[int]struct{}, len(targets)), targets)
 	s.cases = append(s.cases, switchCase{predicate: predicate, indices: indices})
 	return s
 }
 
-// WithDefault sets the targets to dispatch to when no case matches.
+// WithDefault adds targets to dispatch to when no case matches.
+// Across all calls, each distinct default target receives the message once.
 func (s *SwitchBuilder) WithDefault(targets ...ExecutorBinding) *SwitchBuilder {
-	s.defaultIndices = s.collectTargets(targets)
+	s.defaultIndices = s.appendTargets(s.defaultIndices, s.defaultSeen, targets)
 	return s
 }
 
-func (s *SwitchBuilder) collectTargets(targets []ExecutorBinding) []int {
-	out := make([]int, 0, len(targets))
-	seen := make(map[int]struct{}, len(targets))
+func (s *SwitchBuilder) appendTargets(indices []int, seen map[int]struct{}, targets []ExecutorBinding) []int {
 	for _, t := range targets {
 		idx, ok := s.targetIndexByID[t.ID]
 		if !ok {
@@ -679,15 +680,12 @@ func (s *SwitchBuilder) collectTargets(targets []ExecutorBinding) []int {
 			s.targetIndexByID[t.ID] = idx
 		}
 		if _, dup := seen[idx]; dup {
-			// Skip repeated targets within a single case/default so a message
-			// is delivered at most once per target, matching .NET's
-			// HashSet<int> semantics.
 			continue
 		}
 		seen[idx] = struct{}{}
-		out = append(out, idx)
+		indices = append(indices, idx)
 	}
-	return out
+	return indices
 }
 
 // AddToBuilder commits the configured switch onto wb as a fan-out edge with
