@@ -265,6 +265,12 @@ func (p *Provider) saveSessionState(session *agent.Session, s *state) {
 	session.Set(stateKey, *s)
 }
 
+// StateKeys returns the session-state keys owned by the provider.
+// The returned slice belongs to the caller.
+func (p *Provider) StateKeys() []string {
+	return []string{stateKey}
+}
+
 func (p *Provider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 	return p.provider.Invoking(ctx, invoking)
 }

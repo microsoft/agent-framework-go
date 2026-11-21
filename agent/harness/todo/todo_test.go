@@ -1112,3 +1112,23 @@ func TestTodo_ConcurrentSessionAccess_NoDataRace(t *testing.T) {
 		}
 	}
 }
+
+func TestStateKeys(t *testing.T) {
+	p := todo.New(nil)
+	opts := sessionOpts()
+	session := mustSession(t, opts)
+	_, outOpts, err := invokeProvider(p, t.Context(), newMessages("hi"), opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	callTool(t, outOpts, "todos_add", `{"todos":[{"title":"Buy milk"}]}`)
+
+	keys := p.StateKeys()
+	if len(keys) != 1 || keys[0] != "todoProviderState" {
+		t.Fatalf("StateKeys() = %v, want [todoProviderState]", keys)
+	}
+	keys[0] = "changed"
+	if !session.Delete(p.StateKeys()[0]) {
+		t.Fatal("reported key did not identify the provider's stored state")
+	}
+}

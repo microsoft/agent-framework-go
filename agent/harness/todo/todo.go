@@ -118,6 +118,12 @@ func New(opts *Options) *Provider {
 	return p
 }
 
+// StateKeys returns the session-state keys owned by the provider.
+// The returned slice belongs to the caller.
+func (p *Provider) StateKeys() []string {
+	return []string{stateKey}
+}
+
 // Invoking implements agent.ContextProvider by delegating to the wrapped provider, applying this provider's context/instructions to the invocation.
 func (p *Provider) Invoking(ctx context.Context, invoking agent.InvokingContext) ([]*message.Message, []agent.Option, error) {
 	return p.provider.Invoking(ctx, invoking)
