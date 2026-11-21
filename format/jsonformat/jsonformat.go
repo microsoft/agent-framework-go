@@ -58,7 +58,9 @@ func FromResponseFormat(format format.ResponseFormat) (*Format, error) {
 	if schema == nil {
 		return nil, fmt.Errorf("response format schema cannot be nil")
 	}
-	return newFormat(format.Name, format.Description, schema), nil
+	f := newFormat(format.Name, format.Description, schema)
+	f.Strict = format.Strict
+	return f, nil
 }
 
 // Any returns a ResponseFormat representing the any type (no schema constraints).
