@@ -773,33 +773,39 @@ func TestAddSwitch_DeduplicatesRepeatedTargetsWithinCase(t *testing.T) {
 	}
 }
 
-func TestAddSwitch_DeduplicatesRepeatedDefaultTargets(t *testing.T) {
-	var trace []string
-	src := recordingBinding("src", &trace)
-	def := recordingBinding("def", &trace)
+func TestAddSwitch_AccumulatesDistinctDefaultTargets(t *testing.T) {
+	for _, tc := range []struct {
+		message string
+		want    [3]int
+	}{
+		{"no-match", [3]int{1, 1, 1}},
+		{"match", [3]int{0, 1, 0}},
+	} {
+		t.Run(tc.message, func(t *testing.T) {
+			src := recordingBinding("src", new([]string))
+			var first, shared, last []string
+			a := recordingBinding("a", &first)
+			b := recordingBinding("b", &shared)
+			c := recordingBinding("c", &last)
 
-	bld := workflow.NewBuilder(src)
-	bld.AddSwitch(src).
-		AddCase(func(msg any) bool { return msg == "match" }, recordingBinding("branch", &trace)).
-		WithDefault(def, def).
-		AddToBuilder(bld)
-	wf, err := bld.Build()
-	if err != nil {
-		t.Fatalf("Build: %v", err)
-	}
-
-	if _, err := inproc.Default.Run(context.Background(), wf, "no-match"); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-
-	var deliveries int
-	for _, ent := range trace {
-		if ent == "def:no-match" {
-			deliveries++
-		}
-	}
-	if deliveries != 1 {
-		t.Errorf("expected duplicated default target to be delivered exactly once, got %d; trace=%v", deliveries, trace)
+			bld := workflow.NewBuilder(src)
+			bld.AddSwitch(src).
+				AddCase(func(msg any) bool { return msg == "match" }, b).
+				WithDefault(a, b, b).
+				WithDefault(b, c).
+				WithDefault().
+				AddToBuilder(bld)
+			wf, err := bld.Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := inproc.Default.Run(t.Context(), wf, tc.message); err != nil {
+				t.Fatal(err)
+			}
+			if got := [3]int{len(first), len(shared), len(last)}; got != tc.want {
+				t.Errorf("delivery counts for [a b c] = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
