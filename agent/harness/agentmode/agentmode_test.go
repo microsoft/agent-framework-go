@@ -1147,3 +1147,20 @@ func TestDefaultInstructions_ExecuteModeDescription(t *testing.T) {
 		t.Error("expected execute-mode instructions to no longer contain 'carrying out approved plans'")
 	}
 }
+
+func TestStateKeys(t *testing.T) {
+	p := agentmode.New(agentmode.Config{})
+	session := agenttest.CreateSession()
+	if err := p.SetMode(session, "execute", false); err != nil {
+		t.Fatal(err)
+	}
+
+	keys := p.StateKeys()
+	if len(keys) != 1 || keys[0] != "agentModeState" {
+		t.Fatalf("StateKeys() = %v, want [agentModeState]", keys)
+	}
+	keys[0] = "changed"
+	if !session.Delete(p.StateKeys()[0]) {
+		t.Fatal("reported key did not identify the provider's stored state")
+	}
+}
