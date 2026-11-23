@@ -221,11 +221,7 @@ func (resp *Response) Update(update *ResponseUpdate) {
 	}
 	resp.FinishReason = cmp.Or(update.FinishReason, resp.FinishReason)
 	resp.RawRepresentation = appendRawRepresentation(resp.RawRepresentation, update.RawRepresentation)
-	if update.ContinuationToken == "" {
-		resp.ContinuationToken = ""
-	} else {
-		resp.ContinuationToken = update.ContinuationToken
-	}
+	resp.ContinuationToken = update.ContinuationToken
 	if !isValidCreatedAt(resp.CreatedAt) && isValidCreatedAt(update.CreatedAt) {
 		resp.CreatedAt = update.CreatedAt
 	}

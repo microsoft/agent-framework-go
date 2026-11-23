@@ -29,6 +29,7 @@ import (
 	"github.com/microsoft/agent-framework-go/tool/hostedtool"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/packages/param"
+	"github.com/openai/openai-go/v3/packages/ssestream"
 	"github.com/openai/openai-go/v3/responses"
 	"github.com/openai/openai-go/v3/shared"
 )
@@ -133,141 +134,81 @@ func (a *responsesClient) run(ctx context.Context, messages []*message.Message, 
 			yield(nil, err)
 			return
 		}
-		requestConversationID := ""
-		if body.Conversation.OfConversationObject != nil {
-			requestConversationID = body.Conversation.OfConversationObject.ID
-		} else {
-			requestConversationID = body.Conversation.OfString.Or("")
+		request := responsesRequest{
+			conversationID: body.Conversation.OfString.Or(""),
+			storeDisabled:  !body.Store.Or(true),
 		}
-		disableStoreOutput := responsesDisableStoreOutput(a.config, options)
-
-		// Handle continuation token for resuming background responses
-		if token, ok := agent.GetOption(options, agent.WithContinuationToken); ok && token != "" {
+		if conv := body.Conversation.OfConversationObject; conv != nil {
+			request.conversationID = conv.ID
+		}
+		var ct continuationToken
+		var resp *responses.Response
+		if token, _ := agent.GetOption(options, agent.WithContinuationToken); token != "" {
 			if len(messages) > 0 {
 				yield(nil, errors.New("messages are not allowed when continuing a background response using a continuation token"))
 				return
 			}
-			var ct continuationToken
 			if err := json.Unmarshal([]byte(token), &ct); err != nil {
 				yield(nil, fmt.Errorf("failed to parse continuation token: %w", err))
 				return
 			}
-
+			request.resumeID = ct.ResponseID
 			if stream {
-				// Get streaming response
-				streamResp := a.client.Responses.GetStreaming(ctx, ct.ResponseID, responses.ResponseGetParams{
+				events := a.client.Responses.GetStreaming(ctx, ct.ResponseID, responses.ResponseGetParams{
 					StartingAfter: openai.Int(ct.SequenceNumber),
 				}, telemetryOption)
-				defer func() { _ = streamResp.Close() }()
-				streamState := &responsesStreamState{}
-				storeDisabled := disableStoreOutput
-				var conversationID *string
-				if !storeDisabled {
-					conversationID = new(cmp.Or(requestConversationID, ct.ResponseID))
-				}
-				for streamResp.Next() {
-					event := streamResp.Current()
-					update, err := responsesProcessStreamingUpdate(event, ct.ResponseID, true, streamState)
-					if err != nil {
-						yield(nil, err)
-						return
-					}
-					if resp := responsesEventResponse(event); resp != nil {
-						modelcall.RecordResponse(ctx, resp.Model, resp.ID)
-						storeDisabled = storeDisabled || resp.JSON.ExtraFields["store"].Raw() == "false"
-						conversationID = responsesConversationID(resp, requestConversationID, storeDisabled)
-					}
-					if update != nil {
-						update.ConversationID = conversationID
-						if !yield(update, nil) {
-							return
-						}
-					}
-				}
-				if streamResp.Err() != nil {
-					yield(nil, streamResp.Err())
-				}
-			} else {
-				// Get complete response
-				resp, err := a.client.Responses.Get(ctx, ct.ResponseID, responses.ResponseGetParams{}, telemetryOption)
-				if err != nil {
-					yield(nil, err)
-					return
-				}
-				modelcall.RecordResponse(ctx, resp.Model, resp.ID)
-				conversationID := responsesConversationID(resp, requestConversationID, disableStoreOutput)
-				responsesProcessResponse(resp, ct.SequenceNumber, func(update *agent.ResponseUpdate, err error) bool {
-					if update != nil {
-						update.ConversationID = conversationID
-					}
-					return yield(update, err)
-				})
-			}
-			return
-		}
-
-		if stream {
-			// Create streaming response
-			streamResp := a.client.Responses.NewStreaming(ctx, body, telemetryOption)
-			defer func() { _ = streamResp.Close() }()
-			responseID := ""
-			createdAt := time.Time{}
-			isBackground, _ := agent.GetOption(options, agent.AllowBackgroundResponses)
-			streamState := &responsesStreamState{}
-			storeDisabled := disableStoreOutput
-			var conversationID *string
-			for streamResp.Next() {
-				event := streamResp.Current()
-				update, err := responsesProcessStreamingUpdate(event, responseID, isBackground, streamState)
-				if err != nil {
-					yield(nil, err)
-					return
-				}
-				if resp := responsesEventResponse(event); resp != nil {
-					modelcall.RecordResponse(ctx, resp.Model, resp.ID)
-					storeDisabled = storeDisabled || resp.JSON.ExtraFields["store"].Raw() == "false"
-					conversationID = responsesConversationID(resp, requestConversationID, storeDisabled)
-				}
-				if update != nil {
-					// Capture responseID and createdAt from the first event
-					if responseID == "" && update.ResponseID != "" {
-						responseID = update.ResponseID
-					}
-					update.ConversationID = conversationID
-					if createdAt.IsZero() && !update.CreatedAt.IsZero() {
-						createdAt = update.CreatedAt
-					}
-					// Ensure all updates have responseID and createdAt set
-					if update.ResponseID == "" {
-						update.ResponseID = responseID
-					}
-					if update.CreatedAt.IsZero() {
-						update.CreatedAt = createdAt
-					}
-					if !yield(update, nil) {
-						return
-					}
-				}
-			}
-			if streamResp.Err() != nil {
-				yield(nil, streamResp.Err())
-			}
-		} else {
-			// Create complete response
-			resp, err := a.client.Responses.New(ctx, body, telemetryOption)
-			if err != nil {
-				yield(nil, err)
+				request.readStream(ctx, events, true, yield)
 				return
 			}
-			modelcall.RecordResponse(ctx, resp.Model, resp.ID)
-			conversationID := responsesConversationID(resp, requestConversationID, disableStoreOutput)
-			responsesProcessResponse(resp, 0, func(update *agent.ResponseUpdate, err error) bool {
-				if update != nil {
-					update.ConversationID = conversationID
-				}
-				return yield(update, err)
-			})
+			resp, err = a.client.Responses.Get(ctx, ct.ResponseID, responses.ResponseGetParams{}, telemetryOption)
+		} else {
+			if stream {
+				background, _ := agent.GetOption(options, agent.AllowBackgroundResponses)
+				events := a.client.Responses.NewStreaming(ctx, body, telemetryOption)
+				request.readStream(ctx, events, background, yield)
+				return
+			}
+			resp, err = a.client.Responses.New(ctx, body, telemetryOption)
 		}
+		if err != nil {
+			yield(nil, err)
+			return
+		}
+		responsesProcessResponse(resp, ct.SequenceNumber, request.recordResponse(ctx, resp), yield)
+	}
+}
+
+type responsesRequest struct {
+	resumeID       string
+	conversationID string
+	storeDisabled  bool
+}
+
+func (r *responsesRequest) recordResponse(ctx context.Context, resp *responses.Response) *string {
+	modelcall.RecordResponse(ctx, resp.Model, resp.ID)
+	r.storeDisabled = r.storeDisabled || resp.JSON.ExtraFields["store"].Raw() == "false"
+	if !r.storeDisabled {
+		if id := cmp.Or(r.conversationID, resp.Conversation.ID, resp.ID); id != "" {
+			return &id
+		}
+	}
+	return nil
+}
+
+func (r *responsesRequest) readStream(ctx context.Context, events *ssestream.Stream[responses.ResponseStreamEventUnion], background bool, yield func(*agent.ResponseUpdate, error) bool) {
+	defer func() { _ = events.Close() }()
+	state := responsesStreamState{responseID: r.resumeID}
+	if r.resumeID != "" && !r.storeDisabled {
+		// A resumed stream may start with a delta rather than a lifecycle event.
+		state.conversationID = new(cmp.Or(r.conversationID, r.resumeID))
+	}
+	for events.Next() {
+		if !yield(r.streamUpdate(ctx, &state, events.Current(), background), nil) {
+			return
+		}
+	}
+	if err := events.Err(); err != nil {
+		yield(nil, err)
 	}
 }
 
@@ -280,10 +221,10 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 		params.Tools = slices.Clone(params.Tools)
 		params.Input.OfInputItemList = slices.Clone(params.Input.OfInputItemList)
 	}
-	if responsesDisableStoreOutput(config, opts) {
-		if param.IsOmitted(params.Store) {
-			params.Store = openai.Bool(false)
-		}
+	if config.DisableStoreOutput && param.IsOmitted(params.Store) {
+		params.Store = openai.Bool(false)
+	}
+	if !params.Store.Or(true) {
 		if include, ok := agent.GetOption(opts, ResponsesIncludeReasoningEncryptedContent); (!ok || include) &&
 			!slices.Contains(params.Include, responses.ResponseIncludableReasoningEncryptedContent) {
 			params.Include = append(params.Include, responses.ResponseIncludableReasoningEncryptedContent)
@@ -498,13 +439,6 @@ func responsesBuildCompletionParams(config AgentConfig, messages []*message.Mess
 	return params, nil
 }
 
-func responsesDisableStoreOutput(config AgentConfig, opts []agent.Option) bool {
-	if p, ok := agent.GetOption(opts, ResponsesNewParams); ok && !param.IsOmitted(p.Store) {
-		return !p.Store.Or(true)
-	}
-	return config.DisableStoreOutput
-}
-
 func responsesServiceID(opts []agent.Option) string {
 	if id, ok := agent.GetOption(opts, agent.WithServiceID); ok {
 		return id
@@ -513,35 +447,6 @@ func responsesServiceID(opts []agent.Option) string {
 		return session.ServiceID()
 	}
 	return ""
-}
-
-func responsesConversationID(resp *responses.Response, requestConversationID string, storeDisabled bool) *string {
-	if storeDisabled || resp.JSON.ExtraFields["store"].Raw() == "false" {
-		return nil
-	}
-	id := cmp.Or(requestConversationID, resp.Conversation.ID, resp.ID)
-	if id == "" {
-		return nil
-	}
-	return &id
-}
-
-func responsesEventResponse(event responses.ResponseStreamEventUnion) *responses.Response {
-	switch event := event.AsAny().(type) {
-	case responses.ResponseCreatedEvent:
-		return &event.Response
-	case responses.ResponseQueuedEvent:
-		return &event.Response
-	case responses.ResponseInProgressEvent:
-		return &event.Response
-	case responses.ResponseCompletedEvent:
-		return &event.Response
-	case responses.ResponseIncompleteEvent:
-		return &event.Response
-	case responses.ResponseFailedEvent:
-		return &event.Response
-	}
-	return nil
 }
 
 func responseInputItemParamOfFunctionCallOutput[T string | responses.ResponseFunctionCallOutputItemListParam](callID string, output T) responses.ResponseInputItemUnionParam {
@@ -1118,23 +1023,10 @@ func schemaToMap(schema any) (map[string]any, error) {
 	return schemaMap, nil
 }
 
-func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func(*agent.ResponseUpdate, error) bool) {
+func responsesProcessResponse(resp *responses.Response, seqNum int64, conversationID *string, yield func(*agent.ResponseUpdate, error) bool) {
 	var contToken string
-	if resp.Background {
-		// Returns a continuation token for in-progress or queued responses as they are not yet complete.
-		switch resp.Status {
-		case responses.ResponseStatusInProgress, responses.ResponseStatusQueued:
-			ct := continuationToken{
-				ResponseID:     resp.ID,
-				SequenceNumber: seqNum,
-			}
-			data, err := json.Marshal(ct)
-			if err != nil {
-				yield(nil, fmt.Errorf("failed to marshal continuation token: %w", err))
-				return
-			}
-			contToken = string(data)
-		}
+	if resp.Status == responses.ResponseStatusInProgress || resp.Status == responses.ResponseStatusQueued {
+		contToken = createContinuationToken(resp.ID, seqNum, resp.Status, resp.Background)
 	}
 
 	// The Responses API reports status "completed" even for turns that only
@@ -1151,16 +1043,15 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 		}
 	}
 
-	currentUpdate := &agent.ResponseUpdate{
-		ResponseID:   resp.ID,
-		FinishReason: finishReason,
-		CreatedAt:    time.Unix(int64(resp.CreatedAt), 0),
-		Role:         message.RoleAssistant,
+	base := agent.ResponseUpdate{
+		ResponseID:        resp.ID,
+		ConversationID:    conversationID,
+		CreatedAt:         time.Unix(int64(resp.CreatedAt), 0),
+		ContinuationToken: contToken,
 	}
-	// Only set ContinuationToken if it's not empty
-	if contToken != "" {
-		currentUpdate.ContinuationToken = contToken
-	}
+	currentUpdate := new(base)
+	currentUpdate.Role = message.RoleAssistant
+	currentUpdate.FinishReason = finishReason
 
 	mcpApprovalRequests := make(map[string]*message.ToolApprovalRequestContent)
 	for _, out := range resp.Output {
@@ -1170,21 +1061,15 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 				if !yield(currentUpdate, nil) {
 					return
 				}
-				currentUpdate = &agent.ResponseUpdate{}
+				currentUpdate = new(base)
 			}
 			currentUpdate.MessageID = out.ID
-			currentUpdate.ResponseID = resp.ID
 			currentUpdate.FinishReason = finishReason
-			// Only set ContinuationToken if it's not empty
-			if contToken != "" {
-				currentUpdate.ContinuationToken = contToken
-			}
 			currentUpdate.RawRepresentation = out
 			if out.Phase != "" {
 				currentUpdate.AdditionalProperties = map[string]any{assistantPhaseKey: string(out.Phase)}
 			}
 			currentUpdate.Role = message.Role(out.Role)
-			currentUpdate.CreatedAt = time.Unix(int64(resp.CreatedAt), 0)
 			for _, c := range out.Content {
 				switch c := c.AsAny().(type) {
 				case responses.ResponseOutputText:
@@ -1305,11 +1190,7 @@ func responsesProcessResponse(resp *responses.Response, seqNum int64, yield func
 				return
 			}
 			// Response properties must not inherit the last output message's ID.
-			currentUpdate = &agent.ResponseUpdate{
-				ResponseID:        resp.ID,
-				ContinuationToken: contToken,
-				CreatedAt:         time.Unix(int64(resp.CreatedAt), 0),
-			}
+			currentUpdate = new(base)
 		}
 		currentUpdate.AdditionalProperties = properties
 	}
@@ -1464,6 +1345,9 @@ func responsesErrorContent(msg string, code string, details string) *message.Err
 }
 
 type responsesStreamState struct {
+	responseID          string
+	conversationID      *string
+	createdAt           time.Time
 	mcpApprovalRequests map[string]*message.ToolApprovalRequestContent
 	messageID           string
 	role                message.Role
@@ -1474,151 +1358,70 @@ type responsesStreamState struct {
 	imagePartialsSeen map[string]bool
 }
 
-// responsesProcessStreamingUpdate processes a streaming update from the Responses API.
-func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, responseID string, isBackground bool, state *responsesStreamState) (*agent.ResponseUpdate, error) {
-	createUpdate := func(role message.Role, contents []message.Content) *agent.ResponseUpdate {
-		if state.role != "" {
-			role = state.role
-		}
-		u := &agent.ResponseUpdate{
-			Role:              role,
-			Contents:          contents,
-			MessageID:         state.messageID,
-			ResponseID:        responseID,
-			RawRepresentation: update,
-		}
-		return u
+func (r *responsesRequest) streamUpdate(ctx context.Context, state *responsesStreamState, update responses.ResponseStreamEventUnion, background bool) *agent.ResponseUpdate {
+	u := &agent.ResponseUpdate{
+		Role:              cmp.Or(state.role, message.RoleAssistant),
+		MessageID:         state.messageID,
+		ResponseID:        state.responseID,
+		RawRepresentation: update,
 	}
-
-	// Lifecycle metadata belongs to the response, not the active message.
-	// Omit its MessageID without resetting the state used by content updates.
-	var u *agent.ResponseUpdate
+	var resp *responses.Response
+	status := responses.ResponseStatusInProgress
 	switch event := update.AsAny().(type) {
-	case responses.ResponseCreatedEvent:
-		u = createUpdate(message.RoleAssistant, nil)
-		u.MessageID = ""
-		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
-		u.ResponseID = event.Response.ID
-		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
-		if contToken := createContinuationToken(event.Response.ID, event.SequenceNumber, event.Response.Status, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
+	case responses.ResponseCreatedEvent, responses.ResponseQueuedEvent, responses.ResponseInProgressEvent:
+		resp = &update.Response
+		status = resp.Status
+	case responses.ResponseCompletedEvent:
+		resp = &event.Response
+		status = responses.ResponseStatusCompleted
+		u.FinishReason = responsesFinishReason(resp)
+		if state.anyFunctions && u.FinishReason == "stop" {
+			u.FinishReason = "tool_calls"
 		}
-
-	case responses.ResponseQueuedEvent:
-		u = createUpdate(message.RoleAssistant, nil)
-		u.MessageID = ""
-		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
-		u.ResponseID = event.Response.ID
-		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
-		if contToken := createContinuationToken(event.Response.ID, event.SequenceNumber, event.Response.Status, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
+		if usage := responsesUsageToContent(resp.Usage); usage != nil {
+			u.Contents = []message.Content{usage}
 		}
-
-	case responses.ResponseInProgressEvent:
-		u = createUpdate(message.RoleAssistant, nil)
-		u.MessageID = ""
-		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
-		u.ResponseID = event.Response.ID
-		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
-		if contToken := createContinuationToken(event.Response.ID, event.SequenceNumber, event.Response.Status, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
+	case responses.ResponseIncompleteEvent:
+		resp = &event.Response
+		status = resp.Status
+		u.FinishReason = responsesFinishReason(resp)
+	case responses.ResponseFailedEvent:
+		resp = &event.Response
+		status = responses.ResponseStatusFailed
+		if failure := responsesFailureContent(resp); failure != nil {
+			u.Contents = []message.Content{failure}
 		}
-
 	case responses.ResponseOutputItemAddedEvent:
 		switch item := event.Item.AsAny().(type) {
 		case responses.ResponseOutputMessage:
 			state.messageID = item.ID
-			state.role = message.Role(item.Role)
-			if state.role == "" {
-				state.role = message.RoleAssistant
+			state.role = cmp.Or(message.Role(item.Role), message.RoleAssistant)
+			u.MessageID, u.Role = state.messageID, state.role
+			if item.Phase != "" {
+				u.AdditionalProperties = map[string]any{assistantPhaseKey: string(item.Phase)}
 			}
 		case responses.ResponseFunctionToolCall:
 			state.anyFunctions = true
 			state.role = message.RoleAssistant
+			u.Role = state.role
 		}
-		u = createUpdate(message.RoleAssistant, nil)
-		if item, ok := event.Item.AsAny().(responses.ResponseOutputMessage); ok && item.Phase != "" {
-			u.AdditionalProperties = map[string]any{assistantPhaseKey: string(item.Phase)}
-		}
-		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
-		}
-
-	case responses.ResponseCompletedEvent:
-		u = createUpdate(message.RoleAssistant, nil)
-		u.MessageID = ""
-		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
-		u.ResponseID = event.Response.ID
-		u.FinishReason = responsesFinishReason(&event.Response)
-		if state.anyFunctions && u.FinishReason == "stop" {
-			u.FinishReason = "tool_calls"
-		}
-		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
-		// Add usage if present
-		if usage := responsesUsageToContent(event.Response.Usage); usage != nil {
-			u.Contents = []message.Content{usage}
-		}
-
-	case responses.ResponseIncompleteEvent:
-		u = createUpdate(message.RoleAssistant, nil)
-		u.MessageID = ""
-		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
-		u.ResponseID = event.Response.ID
-		u.FinishReason = responsesFinishReason(&event.Response)
-		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
-		if contToken := createContinuationToken(event.Response.ID, event.SequenceNumber, event.Response.Status, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
-		}
-
-	case responses.ResponseFailedEvent:
-		u = createUpdate(message.RoleAssistant, nil)
-		u.MessageID = ""
-		u.CreatedAt = time.Unix(int64(event.Response.CreatedAt), 0)
-		u.ResponseID = event.Response.ID
-		u.AdditionalProperties = responsesPopulateAdditionalProperties(&event.Response)
-		if failure := responsesFailureContent(&event.Response); failure != nil {
-			u.Contents = []message.Content{failure}
-		}
-
 	case responses.ResponseTextDeltaEvent:
 		if event.ItemID != "" {
 			state.messageID = event.ItemID
+			u.MessageID = event.ItemID
 		}
-		u = createUpdate(message.RoleAssistant, []message.Content{
-			&message.TextContent{Text: event.Delta},
-		})
-		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
-		}
-
-	case responses.ResponseReasoningTextDeltaEvent:
-		u = createUpdate(message.RoleAssistant, []message.Content{
+		u.Contents = []message.Content{&message.TextContent{Text: event.Delta}}
+	case responses.ResponseReasoningTextDeltaEvent, responses.ResponseReasoningSummaryTextDeltaEvent:
+		u.Contents = []message.Content{
 			&message.TextReasoningContent{
 				ContentHeader: message.ContentHeader{AdditionalProperties: map[string]any{
-					reasoningItemIDKey: event.ItemID,
+					reasoningItemIDKey: update.ItemID,
 				}},
-				Text: event.Delta,
+				Text: update.Delta,
 			},
-		})
-		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
 		}
-
-	case responses.ResponseReasoningSummaryTextDeltaEvent:
-		u = createUpdate(message.RoleAssistant, []message.Content{
-			&message.TextReasoningContent{
-				ContentHeader: message.ContentHeader{AdditionalProperties: map[string]any{
-					reasoningItemIDKey: event.ItemID,
-				}},
-				Text: event.Delta,
-			},
-		})
-		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
-		}
-
 	case responses.ResponseCodeInterpreterCallCodeDeltaEvent:
-		u = createUpdate(message.RoleAssistant, []message.Content{
+		u.Contents = []message.Content{
 			&message.CodeInterpreterToolCallContent{
 				ContentHeader: message.ContentHeader{RawRepresentation: event},
 				CallID:        event.ItemID,
@@ -1629,33 +1432,21 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 					},
 				},
 			},
-		})
-		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
 		}
-
 	case responses.ResponseRefusalDoneEvent:
-		u = createUpdate(message.RoleAssistant, []message.Content{
+		u.Contents = []message.Content{
 			&message.ErrorContent{
 				Message:   event.Refusal,
 				ErrorCode: "Refusal",
 			},
-		})
-		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
 		}
-
 	case responses.ResponseImageGenCallInProgressEvent:
-		u = createUpdate(message.RoleAssistant, []message.Content{
+		u.Contents = []message.Content{
 			&message.ImageGenerationToolCallContent{
 				ContentHeader: message.ContentHeader{RawRepresentation: event},
 				CallID:        event.ItemID,
 			},
-		})
-		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
 		}
-
 	case responses.ResponseImageGenCallPartialImageEvent:
 		if state.imagePartialsSeen == nil {
 			state.imagePartialsSeen = map[string]bool{}
@@ -1667,28 +1458,15 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			"OutputIndex":       event.OutputIndex,
 			"PartialImageIndex": event.PartialImageIndex,
 		}
-		u = createUpdate(message.RoleAssistant, []message.Content{result})
-		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
-		}
-
+		u.Contents = []message.Content{result}
 	case responses.ResponseWebSearchCallInProgressEvent:
-		u = createUpdate(message.RoleAssistant, []message.Content{
+		u.Contents = []message.Content{
 			&message.WebSearchToolCallContent{
 				ContentHeader: message.ContentHeader{RawRepresentation: event},
 				CallID:        event.ItemID,
 			},
-		})
-		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
 		}
-
 	case responses.ResponseOutputItemDoneEvent:
-		// Create update for all output item done events
-		u = createUpdate(message.RoleAssistant, nil)
-		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
-		}
 		switch item := event.Item.AsAny().(type) {
 		case responses.ResponseOutputMessage:
 			state.messageID = item.ID
@@ -1789,20 +1567,29 @@ func responsesProcessStreamingUpdate(update responses.ResponseStreamEventUnion, 
 			}}
 		}
 	case responses.ResponseErrorEvent:
-		u = createUpdate(message.RoleAssistant, []message.Content{
-			responsesErrorContent(event.Message, event.Code, event.Param),
-		})
-		if contToken := createContinuationToken(responseID, event.SequenceNumber, responses.ResponseStatusFailed, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
-		}
-	default:
-		u = createUpdate(message.RoleAssistant, nil)
-		if contToken := createContinuationToken(responseID, update.SequenceNumber, responses.ResponseStatusInProgress, isBackground); contToken != "" {
-			u.ContinuationToken = contToken
-		}
+		u.Contents = []message.Content{responsesErrorContent(event.Message, event.Code, event.Param)}
+		status = responses.ResponseStatusFailed
 	}
 
-	return u, nil
+	if resp != nil {
+		state.conversationID = r.recordResponse(ctx, resp)
+		u.ResponseID = resp.ID
+		u.MessageID = "" // Lifecycle metadata belongs to the response, not the active message.
+		u.CreatedAt = time.Unix(int64(resp.CreatedAt), 0)
+		u.AdditionalProperties = responsesPopulateAdditionalProperties(resp)
+	}
+	u.ContinuationToken = createContinuationToken(u.ResponseID, update.SequenceNumber, status, background)
+	if r.resumeID == "" {
+		state.responseID = cmp.Or(state.responseID, u.ResponseID)
+		u.ResponseID = cmp.Or(u.ResponseID, state.responseID)
+		if state.createdAt.IsZero() {
+			state.createdAt = u.CreatedAt
+		} else if u.CreatedAt.IsZero() {
+			u.CreatedAt = state.createdAt
+		}
+	}
+	u.ConversationID = state.conversationID
+	return u
 }
 
 // fileSearchToolCallContents surfaces a file_search_call output item as message
