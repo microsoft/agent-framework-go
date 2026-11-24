@@ -20,7 +20,7 @@ func TestResponseUpdate_ConstructorPropsDefaulted(t *testing.T) {
 
 	if update.AuthorName != "" || update.Role != "" || update.String() != "" ||
 		len(update.Contents) != 0 || update.RawRepresentation != nil || update.AdditionalProperties != nil ||
-		update.ResponseID != "" || update.MessageID != "" || !update.CreatedAt.IsZero() ||
+		update.ResponseID != "" || update.ModelID != "" || update.MessageID != "" || !update.CreatedAt.IsZero() ||
 		update.ContinuationToken != "" || update.FinishReason != "" {
 		t.Fatalf("default update = %+v, want zero properties and empty text", update)
 	}
@@ -63,7 +63,7 @@ func TestResponse_JsonSerializationRoundtrips(t *testing.T) {
 				&message.UsageContent{Details: message.UsageDetails{}},
 			},
 		}},
-		AgentID: "agentId", ID: "id", CreatedAt: createdAt,
+		AgentID: "agentId", ID: "id", ModelID: "model-1", CreatedAt: createdAt,
 		RawRepresentation: new(int), AdditionalProperties: map[string]any{"key": "value"},
 		ContinuationToken: "AQID",
 	}
@@ -84,7 +84,7 @@ func TestResponse_JsonSerializationRoundtrips(t *testing.T) {
 	if msg.Role != message.RoleAssistant || msg.String() != "the message" {
 		t.Fatalf("message = %+v, want assistant text the message", msg)
 	}
-	if result.AgentID != "agentId" || result.ID != "id" || !result.CreatedAt.Equal(createdAt) {
+	if result.AgentID != "agentId" || result.ID != "id" || result.ModelID != "model-1" || !result.CreatedAt.Equal(createdAt) {
 		t.Fatalf("response metadata = %+v", result)
 	}
 	if len(msg.Contents) != 2 {
@@ -140,6 +140,7 @@ func TestResponseUpdate_JsonSerializationRoundtrips(t *testing.T) {
 		},
 		RawRepresentation:    new(int),
 		ResponseID:           "id",
+		ModelID:              "model-1",
 		MessageID:            "messageid",
 		CreatedAt:            createdAt,
 		AdditionalProperties: map[string]any{"key": "value"},
@@ -172,7 +173,7 @@ func TestResponseUpdate_JsonSerializationRoundtrips(t *testing.T) {
 		t.Fatalf("fifth content = %T, want text", result.Contents[4])
 	}
 	if result.AuthorName != "author" || result.Role != message.RoleAssistant ||
-		result.ResponseID != "id" || result.MessageID != "messageid" ||
+		result.ResponseID != "id" || result.ModelID != "model-1" || result.MessageID != "messageid" ||
 		!result.CreatedAt.Equal(createdAt) || result.AdditionalProperties["key"] != "value" ||
 		result.ContinuationToken != "AQID" {
 		t.Fatalf("roundtripped metadata = %+v", result)
@@ -614,6 +615,31 @@ func TestResponse_ConversationIDTracksLatestProviderResponse(t *testing.T) {
 	}
 	if collected.ConversationID == nil || *collected.ConversationID != "conversation-3" {
 		t.Fatalf("collected conversation ID = %v, want conversation-3", collected.ConversationID)
+	}
+}
+
+func TestResponse_ModelIDTracksLatestProviderResponse(t *testing.T) {
+	var resp agent.Response
+	resp.Update(&agent.ResponseUpdate{ResponseID: "response-1", ModelID: "model-1"})
+	resp.Update(&agent.ResponseUpdate{ResponseID: "response-1", Contents: message.Contents{&message.TextContent{Text: "first"}}})
+	if resp.ModelID != "model-1" {
+		t.Fatalf("model ID after first response = %q, want model-1", resp.ModelID)
+	}
+
+	resp.Update(&agent.ResponseUpdate{ResponseID: "response-2", ModelID: "model-2"})
+	if resp.ModelID != "model-2" {
+		t.Fatalf("model ID after second response = %q, want model-2", resp.ModelID)
+	}
+
+	var collected agent.Response
+	for _, update := range resp.ToUpdates() {
+		if update.ModelID != "model-2" {
+			t.Fatalf("response-to-update model ID = %q, want model-2", update.ModelID)
+		}
+		collected.Update(update)
+	}
+	if collected.ModelID != "model-2" {
+		t.Fatalf("collected model ID = %q, want model-2", collected.ModelID)
 	}
 }
 

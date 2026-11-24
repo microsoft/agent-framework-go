@@ -45,6 +45,9 @@ type Response struct {
 	// ID identifies this response.
 	ID string `json:",omitzero"`
 
+	// ModelID identifies the provider model that produced this response.
+	ModelID string `json:",omitzero"`
+
 	// ConversationID identifies conversation history retained after this response
 	// by the service or per-service-call history persistence. When nil, the response
 	// does not claim that its messages can be recovered from a retained conversation.
@@ -160,6 +163,7 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 			AgentID:              resp.AgentID,
 			MessageID:            msg.ID,
 			ResponseID:           resp.ID,
+			ModelID:              resp.ModelID,
 			ConversationID:       resp.ConversationID,
 			FinishReason:         resp.FinishReason,
 			AuthorName:           msg.AuthorName,
@@ -174,6 +178,7 @@ func (resp *Response) ToUpdates() []*ResponseUpdate {
 			AdditionalProperties: resp.AdditionalProperties,
 			AgentID:              resp.AgentID,
 			ResponseID:           resp.ID,
+			ModelID:              resp.ModelID,
 			ConversationID:       resp.ConversationID,
 			ContinuationToken:    resp.ContinuationToken,
 			CreatedAt:            resp.CreatedAt,
@@ -216,6 +221,7 @@ func (resp *Response) Update(update *ResponseUpdate) {
 	// clear values already received for the response.
 	resp.AgentID = cmp.Or(update.AgentID, resp.AgentID)
 	resp.ID = cmp.Or(update.ResponseID, resp.ID)
+	resp.ModelID = cmp.Or(update.ModelID, resp.ModelID)
 	if update.ConversationID != nil {
 		resp.ConversationID = update.ConversationID
 	}
@@ -308,6 +314,9 @@ type ResponseUpdate struct {
 
 	// ResponseID identifies the response of which this update is a part.
 	ResponseID string
+
+	// ModelID identifies the provider model that produced this update.
+	ModelID string `json:",omitzero"`
 
 	// ConversationID identifies history retained by the service or per-service-call
 	// history persistence. Providers set it only when later requests can refer to that
