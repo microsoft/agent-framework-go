@@ -17,14 +17,14 @@ func bindingCall(name, args string) *message.FunctionCallContent {
 
 func recordBindingRequest(t *testing.T, session *agent.Session, call *message.FunctionCallContent) {
 	t.Helper()
-	if err := recordPendingApprovalRequests(session, message.Contents{&message.ToolApprovalRequestContent{RequestID: bindingRequestID, ToolCall: call}}, make(map[string]struct{})); err != nil {
+	if err := recordPendingApprovalRequests(session, message.Contents{&message.ToolApprovalRequestContent{RequestID: bindingRequestID, ToolCall: call}}, make(map[string]struct{}), 0); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func bindForPort(t *testing.T, session *agent.Session, messages ...*message.Message) []*message.Message {
 	t.Helper()
-	bound, _, err := bindApprovalResponses(session, messages)
+	bound, _, _, err := bindApprovalResponses(session, messages)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,7 +165,7 @@ func TestApprovalBinding_GetResponseAsync_DifferentCallsSurfacedUnderSameRequest
 	first, second := bindingCall("toolA", ""), bindingCall("transfer_funds", "")
 	ambiguous := make(map[string]struct{})
 	for _, call := range []*message.FunctionCallContent{first, second} {
-		if err := recordPendingApprovalRequests(session, message.Contents{&message.ToolApprovalRequestContent{RequestID: bindingRequestID, ToolCall: call}}, ambiguous); err != nil {
+		if err := recordPendingApprovalRequests(session, message.Contents{&message.ToolApprovalRequestContent{RequestID: bindingRequestID, ToolCall: call}}, ambiguous, 0); err != nil {
 			t.Fatal(err)
 		}
 	}
