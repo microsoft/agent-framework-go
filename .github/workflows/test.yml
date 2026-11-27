@@ -82,7 +82,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: go test -count=1 -v ./provider/copilotprovider -run '^TestE2E_'
 
-  conclusion:
+  tests-conclusion:
     needs: [test, copilot-integration]
     runs-on: ubuntu-latest
     if: ${{ always() }}
