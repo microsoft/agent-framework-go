@@ -4,7 +4,9 @@ package main
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestVerifyDeterministicOutput(t *testing.T) {
@@ -31,5 +33,21 @@ func TestVerifyRequiresAIAgentForSemanticChecks(t *testing.T) {
 	}
 	if len(result.Failures) != 1 {
 		t.Fatalf("Failures = %#v, want one", result.Failures)
+	}
+}
+
+func TestTruncateDoesNotSplitRunes(t *testing.T) {
+	// "°" occupies bytes 1-2 (0xC2 0xB0); a 2-byte cut lands mid-rune, so the
+	// truncation must back off to the boundary after "a".
+	got := truncate("a°cdef", 2)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncate produced invalid UTF-8: %q", got)
+	}
+	if !strings.HasPrefix(got, "a") || strings.ContainsRune(got, '�') {
+		t.Fatalf("truncate = %q, want a clean rune-boundary cut", got)
+	}
+	// Short input is returned unchanged.
+	if truncate("ok", 10) != "ok" {
+		t.Fatalf("short input was modified")
 	}
 }
