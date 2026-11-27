@@ -52,7 +52,8 @@ func (f ShellFamily) String() string {
 }
 
 // ToolVersion reports whether a CLI was found and, when available, the first
-// non-empty line from its --version output.
+// non-empty line from its version command's output (--version for most tools,
+// "go version" for Go).
 type ToolVersion struct {
 	Version string
 	Found   bool
@@ -80,7 +81,8 @@ type EnvironmentProviderConfig struct {
 	// Defaults to "shell_environment".
 	SourceID string
 
-	// ProbeTools lists CLI tools whose --version output should be probed.
+	// ProbeTools lists CLI tools whose version command output should be probed
+	// (--version for most tools, "go version" for Go).
 	// Nil uses a small default list; an empty non-nil slice disables tool probes.
 	ProbeTools []string
 
