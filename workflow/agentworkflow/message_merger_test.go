@@ -594,3 +594,56 @@ func assertTextContent(t *testing.T, content message.Content, want string) {
 		t.Fatalf("text = %q, want %q", text.Text, want)
 	}
 }
+
+func TestMessageMerger_KeepsAnnotationOnlyTextContent(t *testing.T) {
+	// Providers emit annotation-only TextContents with empty text — the
+	// Anthropic provider attaches streamed citation annotations that way —
+	// and the whitespace cleanup must not drop them (losing the citations).
+	merger := newMessageMerger()
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: "response", MessageID: "message", Role: message.RoleAssistant,
+		Contents: message.Contents{&message.TextContent{Text: "Cited answer."}},
+	})
+	merger.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: "response", MessageID: "message", Role: message.RoleAssistant,
+		Contents: message.Contents{&message.TextContent{
+			ContentHeader: message.ContentHeader{
+				Annotations: message.Annotations{
+					&message.CitationAnnotation{Title: "Source Doc", URL: "https://example.com/doc"},
+				},
+			},
+		}},
+	})
+
+	response := merger.ComputeMerged("response", "", "")
+	if len(response.Messages) != 1 {
+		t.Fatalf("messages = %v, want one", response.Messages)
+	}
+	var found bool
+	for _, content := range response.Messages[0].Contents {
+		text, ok := content.(*message.TextContent)
+		if ok && len(text.Annotations) > 0 {
+			found = true
+			if citation, ok := text.Annotations[0].(*message.CitationAnnotation); !ok || citation.URL != "https://example.com/doc" {
+				t.Fatalf("annotation = %#v, want the citation", text.Annotations[0])
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("citation-carrying TextContent was dropped: %#v", response.Messages[0].Contents)
+	}
+
+	// Whitespace-only text without annotations is still cleaned up.
+	merger2 := newMessageMerger()
+	merger2.AddUpdate(&agent.ResponseUpdate{
+		ResponseID: "response", MessageID: "message", Role: message.RoleAssistant,
+		Contents: message.Contents{
+			&message.TextContent{Text: "Real text"},
+			&message.TextContent{Text: "   "},
+		},
+	})
+	response2 := merger2.ComputeMerged("response", "", "")
+	if len(response2.Messages) != 1 || len(response2.Messages[0].Contents) != 1 {
+		t.Fatalf("whitespace-only text without annotations must still be dropped: %#v", response2.Messages)
+	}
+}
