@@ -3086,3 +3086,48 @@ func TestHostedTools_FileSearchInvalidTopK(t *testing.T) {
 		}
 	}
 }
+
+func TestUsageModalityDetailsSurfaced(t *testing.T) {
+	// The service reports per-modality token breakdowns; they must land in
+	// AdditionalCounts like the OpenAI chat provider surfaces every detail
+	// count, instead of being dropped.
+	response := map[string]any{
+		"candidates": []any{map[string]any{
+			"content":      map[string]any{"role": "model", "parts": []any{map[string]any{"text": "ok"}}},
+			"finishReason": "STOP",
+		}},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     120,
+			"candidatesTokenCount": 10,
+			"totalTokenCount":      130,
+			"promptTokensDetails": []any{
+				map[string]any{"modality": "TEXT", "tokenCount": 20},
+				map[string]any{"modality": "IMAGE", "tokenCount": 100},
+			},
+			"candidatesTokensDetails": []any{
+				map[string]any{"modality": "TEXT", "tokenCount": 10},
+			},
+		},
+	}
+	body, _ := json.Marshal(response)
+	server := httptest.NewServer(captureAndRespond(t, make(chan []byte, 1), "application/json", string(body)))
+	defer server.Close()
+
+	resp, err := newTestClient(t, server).RunText(t.Context(), "hi").Collect()
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := resp.Usage()
+	if usage.InputTokenCount != 120 || usage.OutputTokenCount != 10 {
+		t.Fatalf("usage = %#v", usage)
+	}
+	for key, want := range map[string]int64{
+		"PromptTokensDetails.TEXT":     20,
+		"PromptTokensDetails.IMAGE":    100,
+		"CandidatesTokensDetails.TEXT": 10,
+	} {
+		if got := usage.AdditionalCounts[key]; got != want {
+			t.Errorf("AdditionalCounts[%q] = %d, want %d (all: %#v)", key, got, want, usage.AdditionalCounts)
+		}
+	}
+}
